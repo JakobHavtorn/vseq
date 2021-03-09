@@ -1,0 +1,24 @@
+black
+gpustat
+ipdb
+ipython
+jupyter
+jupyterlab-git
+nbstripout
+numpy
+pandas
+pylint
+pytest
+pytest-cov
+pytest-html
+scikit-learn
+seaborn
+tensorboard
+torch==1.8.0+cu111  # -f https://download.pytorch.org/whl/torch_stable.html 
+torchaudio==0.8.0
+torchvision==0.9.0+cu111
+torchtext
+tqdm
+clearml
+clearml-agent
+wandb
