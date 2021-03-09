@@ -128,4 +128,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Data folder
 data/
+
+# VS Code settings
+settings.json
