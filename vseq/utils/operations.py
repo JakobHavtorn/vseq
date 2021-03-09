@@ -78,50 +78,22 @@ def log_sum_exp(tensor, axis=-1, dim=None, sum_op=torch.mean):
     return torch.log(sum_op(torch.exp(tensor - maximum), axis=axis, keepdim=False) + 1e-8) + maximum
 
 
-def first_nonnegative(tensor, axis=0):
-    """Returns the index of the first nonnegative element in the tensor and if any elements where nonnegative.
-
-    An element is the first nonzero element if it is nonzero and the cumulative sum of a nonzero indicator is 1.
-
-    If there are no nonnegative elements, this method returns value_for_all_nonnegative (-1 by default).
-
-    Example:
-        x = torch.randn(5, 7)
-        x[3, 3] = 0
-        any_nonneg, idx_first_nonneg = first_nonnegative(x)
-
-    Args:
-        x (torch.Tensor): Tensor of some shape
-        axis (int): The axis along which to operate
-
-    Returns:
-        any_nonneg (torch.Tensor): Boolean array `True` where at least one element was nonnegative.
-        idx_first_nonneg (torch.Tensor): Integer array of indices where the first nonnegative element is.
-                                         Equal to -1 where no nonnegative elements where found.
-    """
-    nonneg = tensor > 0
-    any_nonneg, idx_first_nonneg = ((nonneg.cumsum(axis) == 1) & nonneg).max(axis)
-    idx_first_nonneg[~any_nonneg] = -1
-    return any_nonneg, idx_first_nonneg
-
-
 def detach(x):
-    """detach a tensor from the computational graph"""
-    if x is not None:
-        if isinstance(x, torch.Tensor):
-            return x.detach()
-        else:
-            return x
-    else:
+    """Detach a tensor from the computational graph"""
+    if x is None:
         return None
+    if isinstance(x, torch.Tensor):
+        return x.detach()
+
+    return x
 
 
 def detach_to_device(x, device):
-    """detach a tensor from the computational graph, clone and place it on the given device"""
-    if x is not None:
-        if isinstance(x, torch.Tensor):
-            return x.detach().clone().to(device)
-        else:
-            return torch.tensor(x, device=device, dtype=torch.float)
-    else:
+    """Detach a tensor from the computational graph, clone and place it on the given device"""
+    if x is None:
         return None
+
+    if isinstance(x, torch.Tensor):
+        return x.detach().clone().to(device)
+
+    return torch.tensor(x, device=device, dtype=torch.float)
