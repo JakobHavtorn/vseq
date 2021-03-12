@@ -1,30 +1,68 @@
-import torch
-import numpy
+import os
 
+from typing import List, Tuple, Callable, Any
+from vseq.data.load import MetaData, load_text
+
+from torch import Tensor
 from torch.utils.data import Dataset
+
+from .transforms import Transform
+from .load import extensions_to_load
+from .datapaths import DATAPATHS_MAPPING
 
 
 class BaseDataset(Dataset):
-    _repr_attributes = []
-
-    def __init__(self):
+    def __init__(self, source, modalities: List[Tuple[str, Callable, Transform]], sort: bool = True):
         super().__init__()
+        self.source = source
+        self.extensions, self.transforms, self.collaters = zip(*modalities)
+        self.sort = sort
+
+        self.source_file = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
+        self.unique_extensions = set(self.extensions)
+        self.examples = self.load_examples(self.source_file)
+
+    @staticmethod
+    def load_examples(source):
+        with open(source, "r") as source_file:
+            lines = source_file.readlines()
+        examples = [l.split()[0] for l in lines]
+        return examples
 
     def __getitem__(self, idx):
-        raise NotImplementedError()
+        example_path = self.examples[idx]
+
+        input_data = dict()
+        unique_metadata = dict()
+        for ext in self.unique_extensions:
+            input_data[ext], unique_metadata[ext] = extensions_to_load[ext](example_path + f".{ext}")
+
+        data = []
+        metadata = []
+        for ext, transform in zip(self.extensions, self.transforms):
+            x = input_data[ext]
+            y = transform(x)
+
+            data.append(y)
+            metadata.append(unique_metadata[ext])
+
+        return tuple(data), tuple(metadata)
+
+    def collate(self, batch: List[Tuple[Tuple[Any], Tuple[MetaData]]]):
+        """Arrange a list of outputs from `__getitem__` into a batch via the collater function of each transform"""
+        if self.sort:
+            batch = sorted(batch, key=lambda x: x[1][0].length)
+
+        data, metadata = zip(*batch)
+        data = zip(*data)  # [[audio] * batch_size, [text] * batch_size]
+        metadata = zip(*metadata)
+
+        outputs = []
+        for collater, modality_data in zip(self.collaters, data):
+            o = collater(modality_data)
+            outputs.append(o)
+
+        return outputs, metadata
 
     def __len__(self):
-        if not hasattr(self, "examples"):
-            raise NotImplementedError()
         return len(self.examples)
-
-    @property
-    def size(self):
-        x, y = self[0]
-        y_size = y.shape if hasattr(y, "shape") else tuple()
-        return x.shape, y_size
- 
-    def __repr__(self):
-        s = f"{self.__class__.__name__}("
-        s += ", ".join([f"{attr}={getattr(self, attr)}" for attr in self._repr_attributes])
-        return s + ")"
