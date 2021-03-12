@@ -90,7 +90,18 @@ class BaseModule(nn.Module):
         model.load_state_dict(state_dict)
         return model
 
-    def get_grad_norm(self):
+    def get_parameter_vector(self):
+        parameters = [p.flatten() for p in self.parameters()]
+        parameters = torch.cat(parameters)
+        return parameters
+
+    def get_gradient_vector(self):
+        gradient = [p.grad.flatten() for p in self.gradient()]
+        gradient = torch.cat(gradient)
+        return gradient
+
+    def get_gradient_norm(self):
+        total_norm = 0
         for p in self.parameters():
             param_norm = p.grad.data.norm(2)
             total_norm += param_norm.item() ** 2
