@@ -96,7 +96,7 @@ class BaseModule(nn.Module):
         return parameters
 
     def get_gradient_vector(self):
-        gradient = [p.grad.flatten() for p in self.gradient()]
+        gradient = [p.grad.flatten() for p in self.parameters()]
         gradient = torch.cat(gradient)
         return gradient
 
