@@ -68,13 +68,3 @@ class BaseDataset(Dataset):
 
     def __len__(self):
         return len(self.examples)
-
-
-class LibriSpeech(BaseDataset):
-    def __init__(self, source, modalities: List[Tuple[str, Callable, Transform]], sort: bool = True):
-        assert source in LIBRISPEECH_SOURCES
-
-    @staticmethod
-    def load_examples(source):
-        download_librispeech()
-        return super().load_examples(source)
