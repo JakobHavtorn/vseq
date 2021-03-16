@@ -1,10 +1,10 @@
-from typing import List, Any
+from typing import Callable, List, Any
 from vseq.data.collate import collate_spectrogram
 
 import numpy as np
 import torch
 import torch.nn as nn
-import torchaudio
+import torchaudio, torchvision
 
 
 # TODO Where do we place the `collate` function?
@@ -21,33 +21,52 @@ class Transform(nn.Module):
         raise NotImplementedError()
 
 
-# class Compose(Transform):
-#     def __init__(self, *transforms):
-#         self.transforms = transforms
-#         self.collate = self.get_collate(transforms)
+class Compose:
+    def __init__(self, *transforms):
+        self.transforms = transforms
 
-#     def forward(self, x):
-#         for transform in self.transforms:
-#             x = transform(x)
-#         return x
+    def __call__(self, x):
+        return self.forward(x)
 
-#     def get_collate(self, transforms):
-#         for transform in reversed(transforms):
-#             if hasattr(transform, 'collate'):
-#                 return transform.collate
+    def forward(self, x):
+        for transform in self.transforms:
+            x = transform(x)
+        return x
 
-#         raise AttributeError('No given transforms have the required `collate` function.')
+    def __repr__(self):
+        format_string = self.__class__.__name__ + '('
+        for t in self.transforms:
+            format_string += '\n'
+            format_string += '    {0}'.format(t)
+        format_string += '\n)'
+        return format_string
 
 
-# class MelSpectrogram(Transform, torchaudio.transforms.MelSpectrogram):
-#     def collate(self, batch):
-#         return collate_spectrogram
+class TextCleaner(Transform):
+    def __init__(self, cleaner_fcn: Callable):
+        super().__init__()
+        self.cleaner_fcn = cleaner_fcn
 
+    def forward(self, x):
+        return self.cleaner_fcn(x)
 
 
 class EncodeInteger(Transform):
-    def __init__(self):
-        pass
+    def __init__(self, tokenizer, token_map):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.token_map = token_map
+ 
+    def forward(self, x: str):
+        x = self.tokenizer(x)
+        x = self.token_map.encode(x)
+        return x
 
-    def forward(self, x):
-        pass
+import torchvision
+torchvision.transforms.Resize
+
+
+class DecodeInteger(Transform):
+    def __init__(self):
+        super().__init__()
+        raise NotImplementedError()

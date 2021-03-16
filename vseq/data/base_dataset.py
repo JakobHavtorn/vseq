@@ -26,7 +26,7 @@ class BaseDataset(Dataset):
     def load_examples(source):
         with open(source, "r") as source_file:
             lines = source_file.readlines()
-        examples = [l.split()[0] for l in lines]
+        examples = [l.split(',')[0] for l in lines]
         return examples
 
     def __getitem__(self, idx):
@@ -46,6 +46,8 @@ class BaseDataset(Dataset):
             data.append(y)
             metadata.append(unique_metadata[ext])
 
+        if len(data) == 1:
+            return data[0], metadata[0]
         return tuple(data), tuple(metadata)
 
     def collate(self, batch: List[Tuple[Tuple[Any], Tuple[MetaData]]]):
@@ -55,7 +57,7 @@ class BaseDataset(Dataset):
 
         data, metadata = zip(*batch)
         data = zip(*data)  # [[audio] * batch_size, [text] * batch_size]
-        metadata = zip(*metadata)
+        metadata = list(zip(*metadata))
 
         outputs = []
         for collater, modality_data in zip(self.collaters, data):
@@ -66,3 +68,13 @@ class BaseDataset(Dataset):
 
     def __len__(self):
         return len(self.examples)
+
+
+class LibriSpeech(BaseDataset):
+    def __init__(self, source, modalities: List[Tuple[str, Callable, Transform]], sort: bool = True):
+        assert source in LIBRISPEECH_SOURCES
+
+    @staticmethod
+    def load_examples(source):
+        download_librispeech()
+        return super().load_examples(source)

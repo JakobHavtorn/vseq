@@ -2,20 +2,28 @@ import argparse
 import logging
 
 import torch
+import torchvision
 
+from torch.utils.data import DataLoader
 from torchaudio.transforms import MelSpectrogram
 
 import vseq
 import vseq.data
+from vseq.data import collate
 import vseq.models
 import vseq.training
 import vseq.utils
 import vseq.utils.device
 
+from vseq.data import transforms
 from vseq.data import DataModule, BaseDataset
 from vseq.data.collate import collate_spectrogram, collate_text
-from vseq.data.transforms import EncodeInteger
-from vseq.data.datapaths import LIBRISPEECH_TRAIN
+from vseq.data.transforms import EncodeInteger, Compose
+from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
+from vseq.data.text_cleaners import clean_librispeech
+from vseq.data.tokens import LIBRISPEECH_TOKENS
+from vseq.data.tokenizers import char_tokenizer
+from vseq.data.token_map import TokenMap
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -37,16 +45,51 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 model = vseq.models.VAE()
 
+
+LibrispeecTextTransform = transforms.Compose(
+    transforms.TextCleaner(clean_librispeech),
+    EncodeInteger(
+        token_map=TokenMap(tokens=LIBRISPEECH_TOKENS),
+        tokenizer=char_tokenizer
+    ),
+)
+
 modalities = [
-    ('wav', MelSpectrogram(), collate_spectrogram),
-    ('txt', EncodeInteger(), collate_text)
+    ('flac', MelSpectrogram(), collate_spectrogram),
+    ('txt', LibrispeecTextTransform, collate_text)
 ]
 
 
 train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
+    source=LIBRISPEECH_DEV_CLEAN,
     modalities=modalities,
 )
 
-import IPython; IPython.embed()
 
+batch = [train_dataset[i] for i in range(32)]
+
+outputs, metadata = train_dataset.collate(batch)
+
+import IPython; IPython.embed(using=False)
+
+dataloader = DataLoader(
+    dataset=train_dataset,
+    collate_fn=train_dataset.collate,
+    batch_size=64,
+    num_workers=4,
+    shuffle=True,
+    sampler=None
+)
+
+
+
+import time
+import tqdm
+
+t_start = time.time()
+for ((x, x_sl), (y, y_sl)), (m_x, m_y) in tqdm.tqdm(dataloader, total=len(dataloader)):
+    pass
+
+print(time.time() - t_start)
+
+import IPython; IPython.embed(using=False)

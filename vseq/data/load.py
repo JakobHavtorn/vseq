@@ -24,10 +24,14 @@ class TextMetaData(MetaData):
     pass
 
 
-def load_audio(filepath):
+def load_audio(filepath, sum_channels: bool = True):
     """Load an audio file returning the audio and sample rate in metadata. Supports same filetypes as torchadio.load"""
     metadata = torchaudio.info(filepath)
     audio, _ = torchaudio.load(filepath)
+
+    if sum_channels:
+        audio = audio.sum(axis=0)
+
     metadata = AudioMetaData(
         sample_rate=metadata.sample_rate,
         channels=metadata.num_channels,
