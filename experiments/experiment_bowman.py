@@ -24,6 +24,7 @@ from vseq.data.text_cleaners import clean_librispeech
 from vseq.data.tokens import LIBRISPEECH_TOKENS
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
+from vseq.data.samplers import FrameSampler
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -66,19 +67,20 @@ train_dataset = BaseDataset(
 )
 
 
-batch = [train_dataset[i] for i in range(32)]
+# batch = [train_dataset[i] for i in range(32)]
 
-outputs, metadata = train_dataset.collate(batch)
+# outputs, metadata = train_dataset.collate(batch)
 
-import IPython; IPython.embed(using=False)
+# import IPython; IPython.embed(using=False)
 
+sampler = FrameSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
 dataloader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
-    batch_size=64,
+    #batch_size=64,
     num_workers=4,
-    shuffle=True,
-    sampler=None
+    #shuffle=True,
+    batch_sampler=sampler
 )
 
 
@@ -88,7 +90,7 @@ import tqdm
 
 t_start = time.time()
 for ((x, x_sl), (y, y_sl)), (m_x, m_y) in tqdm.tqdm(dataloader, total=len(dataloader)):
-    pass
+    print(x.shape)
 
 print(time.time() - t_start)
 

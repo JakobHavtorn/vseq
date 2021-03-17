@@ -12,20 +12,20 @@ from .datapaths import DATAPATHS_MAPPING
 
 
 class BaseDataset(Dataset):
-    def __init__(self, source, modalities: List[Tuple[str, Callable, Transform]], sort: bool = True):
+    def __init__(self, source: str, modalities: List[Tuple[str, Callable, Transform]], sort: bool = True):
         super().__init__()
         self.source = source
         self.extensions, self.transforms, self.collaters = zip(*modalities)
         self.sort = sort
 
-        self.source_file = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
+        self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.unique_extensions = set(self.extensions)
-        self.examples = self.load_examples(self.source_file)
+        self.examples = self.load_examples(self.source_filepath)
 
     @staticmethod
-    def load_examples(source):
-        with open(source, "r") as source_file:
-            lines = source_file.readlines()
+    def load_examples(source_filepath):
+        with open(source_filepath, "r") as source_file_buffer:
+            lines = source_file_buffer.readlines()
         examples = [l.split(',')[0] for l in lines]
         return examples
 
