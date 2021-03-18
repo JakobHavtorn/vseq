@@ -73,7 +73,8 @@ train_dataset = BaseDataset(
 
 # import IPython; IPython.embed(using=False)
 
-sampler = FrameSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
+
+sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=320)
 dataloader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
@@ -82,7 +83,6 @@ dataloader = DataLoader(
     #shuffle=True,
     batch_sampler=sampler
 )
-
 
 
 import time
