@@ -41,6 +41,7 @@ class FrameSampler(Sampler):
         self.max_pool_difference = max_pool_difference
         self.min_pool_size = min_pool_size
         self.num_batches = num_batches
+        self.buffer = [] # only used when num_batches is not None
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
@@ -86,17 +87,22 @@ class FrameSampler(Sampler):
         Sample batches from the pools.
         """
 
+        if self.num_batches is not None:
+            if len(self.buffer) >= self.num_batches:
+                batches = self.buffer[:self.num_batches]
+                self.buffer = self.buffer[self.num_batches:]
+                return batches
+
         ordered_idxs = np.concatenate([random.sample(p, k=len(p)) for p in self.pools])  # shuffle each pool internally
         batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_seconds).astype(int)
-        num_batches = batch_idxs.max() + 1
-        batches = [ordered_idxs[batch_idxs == idx].tolist() for idx in range(num_batches)]
+        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
+        batches = np.array_split(ordered_idxs, split_points)
+        batches = list(map(lambda x: x.tolist(), batches))
         random.shuffle(batches)  # shuffle the order of batches
 
         if self.num_batches is not None:
-            if len(batches) > self.num_batches:
-                batches = random.sample(batches, k=self.num_batches)
-            else:
-                batches = random.choices(batches, k=self.num_batches)
+            self.buffer += batches
+            return self.sample_batches()
 
         return batches
 
@@ -154,8 +160,9 @@ class EvalSampler(Sampler):
 
         sorted_idxs = np.argsort(self.lengths)
         batch_idxs = (self.lengths[sorted_idxs].cumsum() // self.max_seconds).astype(int)
-        num_batches = batch_idxs.max() + 1
-        batches = [sorted_idxs[batch_idxs == idx].tolist() for idx in range(num_batches)]
+        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
+        batches = np.array_split(sorted_idxs, split_points)
+        batches = list(map(lambda x: x.tolist(), batches))
         return batches
     
     def __iter__(self):
