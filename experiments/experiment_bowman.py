@@ -74,7 +74,7 @@ train_dataset = BaseDataset(
 # import IPython; IPython.embed(using=False)
 
 
-sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=320)
+sampler = FrameSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
 dataloader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
@@ -89,9 +89,11 @@ import time
 import tqdm
 
 t_start = time.time()
+n = 0
 for ((x, x_sl), (y, y_sl)), (m_x, m_y) in tqdm.tqdm(dataloader, total=len(dataloader)):
     print(x.shape)
-
+    n += x.shape[0]
+assert n == len(train_dataset)
 print(time.time() - t_start)
 
 import IPython; IPython.embed(using=False)
