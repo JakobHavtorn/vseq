@@ -1,5 +1,6 @@
 import argparse
 import logging
+import tqdm
 
 import torch
 import torchvision
@@ -9,7 +10,6 @@ from torchaudio.transforms import MelSpectrogram
 
 import vseq
 import vseq.data
-from vseq.data import collate
 import vseq.models
 import vseq.training
 import vseq.utils
@@ -24,7 +24,7 @@ from vseq.data.text_cleaners import clean_librispeech
 from vseq.data.tokens import LIBRISPEECH_TOKENS
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
-from vseq.data.samplers import FrameSampler
+from vseq.data.samplers import EvalSampler, FrameSampler
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -44,56 +44,65 @@ args, _ = parser.parse_known_args()
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
-model = vseq.models.VAE()
-
-
+token_map = TokenMap(tokens=LIBRISPEECH_TOKENS)
 LibrispeecTextTransform = transforms.Compose(
     transforms.TextCleaner(clean_librispeech),
     EncodeInteger(
-        token_map=TokenMap(tokens=LIBRISPEECH_TOKENS),
+        token_map=token_map,
         tokenizer=char_tokenizer
     ),
 )
 
 modalities = [
-    ('flac', MelSpectrogram(), collate_spectrogram),
+    # ('flac', MelSpectrogram(), collate_spectrogram),
     ('txt', LibrispeecTextTransform, collate_text)
 ]
 
 
 train_dataset = BaseDataset(
+    source=LIBRISPEECH_TRAIN,
+    modalities=modalities,
+)
+val_dataset = BaseDataset(
     source=LIBRISPEECH_DEV_CLEAN,
     modalities=modalities,
 )
 
+train_sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=320)
+val_sampler = EvalSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
 
-# batch = [train_dataset[i] for i in range(32)]
-
-# outputs, metadata = train_dataset.collate(batch)
-
-# import IPython; IPython.embed(using=False)
-
-
-sampler = FrameSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
-dataloader = DataLoader(
+train_loader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
-    #batch_size=64,
     num_workers=4,
-    #shuffle=True,
-    batch_sampler=sampler
+    batch_sampler=train_sampler
+)
+val_loader = DataLoader(
+    dataset=val_dataset,
+    collate_fn=val_dataset.collate,
+    num_workers=4,
+    batch_sampler=val_sampler
 )
 
+model = vseq.models.Bowman(num_embeddings=len(token_map), embedding_dim=16, hidden_size=64)
+model = model.to(device)
 
-import time
-import tqdm
+criterion = lambda *x: x
 
-t_start = time.time()
-n = 0
-for ((x, x_sl), (y, y_sl)), (m_x, m_y) in tqdm.tqdm(dataloader, total=len(dataloader)):
-    print(x.shape)
-    n += x.shape[0]
-assert n == len(train_dataset)
-print(time.time() - t_start)
 
-import IPython; IPython.embed(using=False)
+
+for epoch in range(args.epochs):
+    for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
+        # import IPython; IPython.embed()
+
+        x = x.to(device)
+
+        x_hat = model(x, x_sl)
+
+        loss = criterion(x, x_hat, x_sl)
+
+        # loss.backward()
+
+
+
+
