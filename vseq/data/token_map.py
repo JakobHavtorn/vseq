@@ -12,3 +12,6 @@ class TokenMap:
 
     def decode(self, indices: Iterable[int]):
         return [self.index2token[i] for i in indices]
+
+    def __len__(self):
+        return len(self.tokens)
