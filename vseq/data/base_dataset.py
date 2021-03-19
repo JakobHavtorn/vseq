@@ -18,6 +18,8 @@ class BaseDataset(Dataset):
         self.extensions, self.transforms, self.collaters = zip(*modalities)
         self.sort = sort
 
+        self.num_modalities = len(modalities)
+
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.unique_extensions = set(self.extensions)
         self.examples = self.load_examples(self.source_filepath)
@@ -53,9 +55,13 @@ class BaseDataset(Dataset):
     def collate(self, batch: List[Tuple[Tuple[Any], Tuple[MetaData]]]):
         """Arrange a list of outputs from `__getitem__` into a batch via the collater function of each transform"""
         if self.sort:
-            batch = sorted(batch, key=lambda x: x[1][0].length)
+            sort_key = (lambda x: x[1][0].length) if self.num_modalities > 1 else (lambda x: x[1].length)
+            batch = sorted(batch, key=sort_key)
 
         data, metadata = zip(*batch)
+        if self.num_modalities == 1:
+            return self.collaters[0](data), metadata
+
         data = zip(*data)  # [[audio] * batch_size, [text] * batch_size]
         metadata = list(zip(*metadata))
 
