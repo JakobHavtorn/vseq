@@ -23,8 +23,8 @@ class FrameSampler(Sampler):
     ):
         """
         The sampler groups the source into sample pools of examples with similar length meeting criterias defined by
-        'max_pool_difference' and 'min_pool_size'. Batches of up to 'seconds' are constructed by sampling from
-        one pool at the time.
+        'max_pool_difference' and 'min_pool_size'. Batches of close to, but never more than, 'max_seconds', are
+        constructed by first sampling a pool and then sampling each batch from from within that pool.
 
         Args:
             source (object): Dataset for which the sampler will be used.
