@@ -56,7 +56,7 @@ class BaseDataset(Dataset):
         """Arrange a list of outputs from `__getitem__` into a batch via the collater function of each transform"""
         if self.sort:
             sort_key = (lambda x: x[1][0].length) if self.num_modalities > 1 else (lambda x: x[1].length)
-            batch = sorted(batch, key=sort_key)
+            batch = sorted(batch, key=sort_key, reverse=True)
 
         data, metadata = zip(*batch)
         if self.num_modalities == 1:

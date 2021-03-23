@@ -2,6 +2,8 @@ from typing import List
 
 import torch
 
+from vseq.constants import PADDING_VALUE
+
 
 def collate_audio(batch: List[torch.Tensor]):
     """Zero pad batch of audio waveforms to maximum temporal length and concatenate"""
@@ -32,7 +34,7 @@ def collate_spectrogram(batch: List[torch.Tensor]):
     return padded_batch, sequence_lengths
 
 
-def collate_text(batch: List[int], pad_value=-1):
+def collate_text(batch: List[int], pad_value=PADDING_VALUE):
     """Pad batch of int (encoded text) to maximum temporal length and return LongTensors"""
     sequence_lengths = [len(text) for text in batch]
 
@@ -40,6 +42,6 @@ def collate_text(batch: List[int], pad_value=-1):
 
     padded_batch = []
     for t, text in zip(sequence_lengths, batch):
-        padded_batch.append(text + [-1] * (T - t))
+        padded_batch.append(text + [pad_value] * (T - t))
 
     return torch.LongTensor(padded_batch), torch.LongTensor(sequence_lengths)
