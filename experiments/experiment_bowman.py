@@ -21,7 +21,7 @@ from vseq.data.collate import collate_spectrogram, collate_text
 from vseq.data.transforms import EncodeInteger, Compose
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.text_cleaners import clean_librispeech
-from vseq.data.tokens import LIBRISPEECH_TOKENS
+from vseq.data.tokens import LIBRISPEECH_TOKENS_DELIMITER, DELIMITER_TOKEN
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
@@ -44,12 +44,13 @@ args, _ = parser.parse_known_args()
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
-token_map = TokenMap(tokens=LIBRISPEECH_TOKENS)
+token_map = TokenMap(tokens=LIBRISPEECH_TOKENS_DELIMITER)
 LibrispeecTextTransform = transforms.Compose(
     transforms.TextCleaner(clean_librispeech),
     EncodeInteger(
         token_map=token_map,
-        tokenizer=char_tokenizer
+        tokenizer=char_tokenizer,
+        delimit=True
     ),
 )
 
@@ -84,7 +85,13 @@ val_loader = DataLoader(
     batch_sampler=val_sampler
 )
 
-model = vseq.models.Bowman(num_embeddings=len(token_map), embedding_dim=16, hidden_size=64)
+delimiter_token_idx = LIBRISPEECH_TOKENS_DELIMITER.index(DELIMITER_TOKEN)
+model = vseq.models.Bowman(
+    num_embeddings=len(token_map),
+    embedding_dim=16,
+    hidden_size=64,
+    delimiter_token_idx=delimiter_token_idx
+)
 model = model.to(device)
 
 criterion = lambda *x: x
@@ -98,8 +105,10 @@ for epoch in range(args.epochs):
         x = x.to(device)
 
         x_hat = model(x, x_sl)
+        break
+    break
 
-        loss = criterion(x, x_hat, x_sl)
+        #loss = criterion(x, x_hat, x_sl)
 
         # loss.backward()
 

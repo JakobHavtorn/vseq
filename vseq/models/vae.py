@@ -14,7 +14,7 @@ from .base_module import BaseModule
 
 
 class Bowman(BaseModule):
-    def __init__(self, num_embeddings: int, embedding_dim: int, hidden_size: int, start_token_idx: int):
+    def __init__(self, num_embeddings: int, embedding_dim: int, hidden_size: int, delimiter_token_idx: int):
         super().__init__()
 
         self.num_embeddings = num_embeddings
@@ -24,7 +24,7 @@ class Bowman(BaseModule):
         self.std_activation = nn.Softplus(beta=np.log(2))
         self.std_activation_inverse = vseq.modules.activations.InverseSoftplus(beta=np.log(2))
 
-        self.start_token_idx = start_token_idx
+        self.delimiter_token_idx = delimiter_token_idx
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
@@ -74,9 +74,8 @@ class Bowman(BaseModule):
         z = q_z.rsample()
         return z, q_z
 
-    def generate(self, z=None, x=None, x_sl=None, word_dropout_rate: float = 0.75, batch_size: int = 1):
+    def generate(self, z=None, x=None, x_sl=None, num_samples=None, word_dropout_rate: float = 0.75, batch_size: int = 1):
         """Sample from prior if z is None, evaluate likelihood if x is not None"""
-        import IPython; IPython.embed(using=False)
 
         # if z is not None:
         #     h_0 = z
@@ -85,28 +84,30 @@ class Bowman(BaseModule):
         #         h_0 = self.prior.rsample()
         #     else:
         #         h_0 = self.prior.rsample(x.size)
-        h_0 = z
+        h_0 = z if z is not None else self.prior.rsample() # labo: is rsample necessary here?
         c_0 = torch.zeros_like(h_0)
 
         if x is not None:
+            targets = x[:, 1:].T.clone().detach() # Remove start token, batch_first=False and prevent from being masked
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
+            mask[:, 0] = False # We never mask the start token - or do we?
             x[mask] = self.unknown_token_idx
-
             x = self.embedding(x)
-            x = torch.nn.utils.rnn.pack_padded_sequence(x, x_sl - 1, batch_first=True)  # Remove end token
 
+            x = torch.nn.utils.rnn.pack_padded_sequence(x, x_sl - 1, batch_first=True)  # Remove end token
             h, (h_n, c_n) = self.lstm_decode(x, (h_0, c_0))
 
             # p(x|z)
-            p_logits = self.output(h)
+            h, _ = torch.nn.utils.rnn.pad_packed_sequence(h)
+            p_logits = self.output(h) # labo: we could use our word embedding matrix here
             p = D.Categorical(logits=p_logits)
-            log_prob = p.log_prob(x)
+            log_prob = p.log_prob(targets) # labo: maybe we should mask this tensor?
         else:
             batch_size = z.shape[0] if z is not None else batch_size
-            next_idx = torch.full(batch_size, self.start_token_idx)
+            next_idx = torch.full(batch_size, self.delimiter_token_idx)
             for x_t in x:
                 x_t = self.embedding(next_idx)
-                (h_n, c_n) = lstm_step(x_t)
+                (h_n, c_n) = self.lstm_decode(x_t)
                 p_logits = self.output(h_n)
                 p = D.Categorical(logits=p_logits)
                 next_idx = p.sample()
@@ -119,7 +120,7 @@ class Bowman(BaseModule):
 
         z, q_z = self.infer(x, x_sl)
         kl_divergence = self.compute_kl(z, q_z)
-        import IPython; IPython.embed(using=False)
+        #import IPython; IPython.embed(using=False)
         p, log_prob = self.generate(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
         return p, log_prob, kl_divergence
 

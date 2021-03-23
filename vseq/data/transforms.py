@@ -52,14 +52,15 @@ class TextCleaner(Transform):
 
 
 class EncodeInteger(Transform):
-    def __init__(self, tokenizer, token_map):
+    def __init__(self, tokenizer, token_map, delimit=False):
         super().__init__()
         self.tokenizer = tokenizer
         self.token_map = token_map
+        self.delimit = delimit
  
     def forward(self, x: str):
         x = self.tokenizer(x)
-        x = self.token_map.encode(x)
+        x = self.token_map.encode(x, delimit=self.delimit)
         return x
 
 import torchvision
