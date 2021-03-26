@@ -1,3 +1,6 @@
+from collections import namedtuple
+from typing import Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,8 +13,12 @@ import vseq.modules
 import vseq.modules.activations
 from vseq.utils.operations import sequence_mask
 from vseq.data.tokens import START_TOKEN
+from vseq.utils.variational import kl_divergence_mc
 
 from .base_module import BaseModule
+
+
+Output = namedtuple('Output', ["elbo", "ll", "kl", "p_x", "q_z", "p_z", "z"])
 
 
 class Bowman(BaseModule):
@@ -49,15 +56,33 @@ class Bowman(BaseModule):
         # TODO Likelihood as module
         # TODO Stochastic layer as module (incl. reparameterization (and KL?))
 
-    @property
     def prior(self):
         """Return the prior distribution without a batch dimension"""
         mu, sigma = self.prior_logits.chunk(2, dim=0)
         return D.Normal(mu, sigma)
 
-    def compute_kl(self, z, q_z):
-        """Compute KL divergence from approximate posterior to prior by MC sampling"""
-        return q_z.log_prob(z) - self.prior.log_prob(z)
+    def compute_elbo(self, log_prob, kl):
+        import IPython; IPython.embed()
+        raise NotImplementedError
+
+    def forward(self, x, x_sl, word_dropout_rate: float = 0.75) -> Tuple[torch.Tensor, Output]:
+        """Perform inference and generative passes on input x of shape (B, T)"""
+        z, q_z = self.infer(x, x_sl)
+        p_z = self.prior()
+        kl = kl_divergence_mc(q_z, p_z)
+        log_prob, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
+        
+        elbo = self.compute_elbo(log_prob, kl)
+        output = Output(
+             elbo=elbo,
+             ll=log_prob,
+             kl=kl,
+             p_x=p_x,
+             q_z=q_z,
+             p_z=p_z,
+             z=z
+        )
+        return -elbo, output
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
         # import IPython; IPython.embed(using=False)
@@ -150,13 +175,6 @@ class Bowman(BaseModule):
         log_prob = torch.cat(log_prob) * seq_mask.to(float)
 
         return x, log_prob
-            
-    def forward(self, x, x_sl, word_dropout_rate: float = 0.75):
-        """Perform inference and generative passes on input x of shape (B, T)"""
-        z, q = self.infer(x, x_sl)
-        kl_divergence = self.compute_kl(z, q)
-        log_prob, p = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
-        return log_prob, kl_divergence, p
 
 
 class WordDropout(nn.Module):

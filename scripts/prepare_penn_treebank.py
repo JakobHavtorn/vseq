@@ -1,11 +1,12 @@
 import os
-import sys
 
 import wget
+
 from tqdm import tqdm
 
-DATA_DESTINATION = "/data/research/" #sys.argv[1]
-SOURCEFILE_DESTINATION = "/home/labo/repos/vseq/data/" #sys.argv[2]
+
+DATA_DESTINATION = "/data/research/"  # sys.argv[1]
+SOURCEFILE_DESTINATION = "/home/labo/repos/vseq/data/"  # sys.argv[2]
 
 SUBSETS = ["train", "test", "valid"]
 
@@ -31,19 +32,19 @@ for subset in SUBSETS:
     download_filepath = os.path.join(ptb_data_dir, f"ptb.{subset}.txt")
     with open(download_filepath, "r") as download_file_buffer:
         lines = download_file_buffer.readlines()
-    
+
     subset_dir = os.path.join(ptb_data_dir, subset)
     os.mkdir(subset_dir)
 
     # create individual example files
     source_file_content = []
     for idx, line in tqdm(enumerate(lines)):
-        example_id = (5 - len(str(idx))) * "0" + str(idx) 
+        example_id = (5 - len(str(idx))) * "0" + str(idx)
         example_filename = f"{subset}_{example_id}.txt"
         example_file_path = os.path.join(subset_dir, example_filename)
         with open(example_file_path, "w") as example_file_buffer:
             example_file_buffer.write(line.strip())
-        
+
         example_base_path = os.path.splitext(example_file_path)[0]
         source_file_content.append(example_base_path)
 

@@ -21,7 +21,7 @@ from vseq.data.collate import collate_spectrogram, collate_text
 from vseq.data.transforms import EncodeInteger, Compose
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.text_cleaners import clean_librispeech
-from vseq.data.tokens import LIBRISPEECH_TOKENS_DELIMITER, DELIMITER_TOKEN
+from vseq.data.tokens import ENGLISH_STANDARD, DELIMITER_TOKEN
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
@@ -44,20 +44,18 @@ args, _ = parser.parse_known_args()
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
-token_map = TokenMap(tokens=LIBRISPEECH_TOKENS_DELIMITER)
-LibrispeecTextTransform = transforms.Compose(
+token_map = TokenMap(tokens=ENGLISH_STANDARD, add_start=False, add_end=False, add_delimit=True)
+PennTreebankTransform = transforms.Compose(
     transforms.TextCleaner(clean_librispeech),
     EncodeInteger(
         token_map=token_map,
         tokenizer=char_tokenizer,
-        prefix=DELIMITER_TOKEN,
-        suffix=DELIMITER_TOKEN
     ),
 )
 
 modalities = [
     # ('flac', MelSpectrogram(), collate_spectrogram),
-    ('txt', LibrispeecTextTransform, collate_text)
+    ("txt", PennTreebankTransform, collate_text)
 ]
 
 
@@ -79,7 +77,7 @@ train_loader = DataLoader(
     num_workers=16,
     # shuffle=True,
     # batch_size=16
-    batch_sampler=train_sampler
+    batch_sampler=train_sampler,
 )
 val_loader = DataLoader(
     dataset=val_dataset,
@@ -87,31 +85,96 @@ val_loader = DataLoader(
     num_workers=16,
     # shuffle=False,
     # batch_size=16
-    batch_sampler=val_sampler
+    batch_sampler=val_sampler,
 )
 
-delimiter_token_idx = LIBRISPEECH_TOKENS_DELIMITER.index(DELIMITER_TOKEN)
+delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.Bowman(
-    num_embeddings=len(token_map),
-    embedding_dim=256,
-    hidden_size=256,
-    delimiter_token_idx=delimiter_token_idx
+    num_embeddings=len(token_map), embedding_dim=256, hidden_size=256, delimiter_token_idx=delimiter_token_idx
 )
 
 model = model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
-criterion = lambda *x: x
 
+# model.summary(train_dataset[0][0].shape)
+
+
+class Metric:
+    def __init__(self,  name=None) -> None:
+        self.name = name
+
+
+class LLMetric(Metric):
+    def __init__(self) -> None:
+        pass
+
+
+class Aggregator:
+    def __init__(self, *metrics: Iterable[Metric]) -> None:
+        self.metrics = metrics
+        self.names = 2
+
+    def log(self):
+        pass
+
+
+metric_ll = LLMetric(name='p(x|z)')
+metric_kl = KLMetric(name='')
+metric_elbo = ELBOMetric()
+metric_perplexity = PerplexityMetric()
+
+aggregator = Aggregator(metric_ll, metric_kl, metric_elbo, metric_perplexity)
 
 
 for epoch in range(args.epochs):
+
+    aggregator.set(train_dataset.source)
+    for (x, x_sl), metadata in train_loader:
+        x = x.to(device)
+
+        loss, output = model(x, x_sl, word_dropout_rate=0.0)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        metric_ll.update(output.ll)
+        metric_kl.update(output.kl)
+        metric_elbo.update(output.elbo)
+
+        aggregator.log()
+
+    aggregator.set(val_dataset.source)
+    for (x, x_sl), metadata in train_loader:
+        x = x.to(device)
+
+        loss, output = model(x, x_sl, word_dropout_rate=0.0)
+
+        metric_ll.update(output.ll)
+        metric_kl.update(output.kl)
+        metric_elbo.update(output.elbo)
+
+        aggregator.log()
+
+
+
+
+
+
+
+
+
+
+
+
+
     step, log = 0, ""
-    #for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
+    # for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
     mean_log_prob, mean_kl, mean_loss = 0, 0, 0
     for (x, x_sl), metadata in train_loader:
         # import IPython; IPython.embed()
-        
+
         step += 1
         x = x.to(device)
 
@@ -125,19 +188,13 @@ for epoch in range(args.epochs):
         mean_kl = mean_kl * ((step - 1) / step) + kl_divergence_reduced.item() / step
         mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
 
-
         print(len(log) * " ", end="\r")
-        log = (f"Loss={mean_loss:.3f}, "
-               f"KL={mean_kl:.3f}, "
-               f"log-prob={mean_log_prob:.3f}, "
-               f"({step}/{100})")
+        log = f"Loss={mean_loss:.3f}, " f"KL={mean_kl:.3f}, " f"log-prob={mean_log_prob:.3f}, " f"({step}/{100})"
         print(log, end="\r")
-        
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-
 
         if step == 100:
             sl = x_sl.numpy() - 1
@@ -151,14 +208,9 @@ for epoch in range(args.epochs):
             print("\nREF #2:", refs[1])
             print("HYP #2:", hyps[1])
             break
-        #model.generate(n_samples=4)
-        #break
+        # model.generate(n_samples=4)
+        # break
 
-
-        #loss = criterion(x, x_hat, x_sl)
+        # loss = criterion(x, x_hat, x_sl)
 
         # loss.backward()
-
-
-
-

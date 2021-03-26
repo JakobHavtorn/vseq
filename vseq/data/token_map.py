@@ -1,29 +1,74 @@
-from typing import Iterable, List
-from vseq.data.tokens import DELIMITER_TOKEN, START_TOKEN, END_TOKEN
+from functools import partial
+
+from typing import Iterable, List, Optional
+
+from torch.utils.data.dataset import IterableDataset
+from vseq.data.tokens import BLANK_TOKEN, DELIMITER_TOKEN, START_TOKEN, END_TOKEN, UNKNOWN_TOKEN
+
+
+def get_with_fallback(dictionary, key):
+    return dictionary.get(key, dictionary[UNKNOWN_TOKEN])
+
+
+def get(dictionary, key):
+    return dictionary[key]
 
 
 class TokenMap:
-    def __init__(self, tokens: List) -> None:
+    def __init__(self, tokens: List, add_start: bool = True, add_end: bool = True, add_delimit: bool = False, add_unknown: bool = False, add_blank: bool = False) -> None:
+        
+        assert add_delimit != add_end and add_delimit != add_start, 'Cannot use start, end and delimiter tokens at once'
+
+        self.add_start = add_start
+        self.add_end = add_end
+        self.add_delimit = add_delimit
+        self.add_unknown = add_unknown
+        self.add_blank = add_blank
+
+        if add_start:
+            tokens.append(START_TOKEN)
+            self.prefix = START_TOKEN
+        if add_end:
+            tokens.append(END_TOKEN)
+            self.suffix = END_TOKEN
+        if add_delimit:
+            tokens.append(DELIMITER_TOKEN)
+            self.prefix = DELIMITER_TOKEN
+            self.suffix = DELIMITER_TOKEN
+        if add_unknown:
+            tokens.append(UNKNOWN_TOKEN)
+        if add_blank:
+            tokens.insert(BLANK_TOKEN, 0)  # Blank token always at index 0
+
         self.tokens = tokens
+
         self.token2index = {t: i for i, t in enumerate(tokens)}
         self.index2token = {i: t for i, t in enumerate(tokens)}
 
-    def encode(self, tokens: Iterable[list], prefix: str="", suffix: str=""):
-        if prefix or suffix:
-            tokens = list(prefix) + tokens + list(suffix)
-        return [self.token2index[t] for t in tokens]
+        self.get_index = partial(get_with_fallback, self.token2index) if add_unknown else partial(get, self.token2index)
+        self.get_token = partial(get, self.index2token)
 
-    def decode(self, indices: Iterable[int], separator: str = ""):
-        return separator.join([self.index2token[i] for i in indices])
+    def encode(self, tokens: Iterable[list]):
+        tokens = list(self.prefix) + tokens + list(self.suffix)
+        return [self.get_index(t) for t in tokens]
 
-    def decode_batch(self, indices_batch, sl, separator: str = ""):
+    def decode(self, indices: Iterable[int], join_separator: Optional[str] = None):
+        if join_separator is None:
+            return [self.index2token[i] for i in indices]
+        return join_separator.join([self.index2token[i] for i in indices])
+
+    def decode_batch(
+        self,
+        indices_batch: Iterable[Iterable[int]],
+        sl: Iterable[int],
+        join_separator: Optional[str] = None
+    ):
         batch = []
         N = len(sl)
         for n in range(N):
-            indices = indices_batch[n][:sl[n]]
-            batch.append(self.decode(indices, separator=separator))
+            indices = indices_batch[n][: sl[n]]
+            batch.append(self.decode(indices, join_separator=join_separator))
         return batch
-
 
     def __len__(self):
         return len(self.tokens)
