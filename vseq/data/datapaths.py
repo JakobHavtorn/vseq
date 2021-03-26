@@ -12,6 +12,10 @@ LIBRISPEECH_DEV_OTHER = 'libri_dev_other'
 LIBRISPEECH_TEST_CLEAN = 'libri_test_clean'
 LIBRISPEECH_TEST_OTHER = 'libri_test_other'
 
+PENN_TREEBANK_TRAIN = 'ptb_train'
+PENN_TREEBANK_VALID = 'ptb_valid'
+PENN_TREEBANK_TEST = 'ptb_test'
+
 
 DATAPATHS_MAPPING = {
     LIBRISPEECH_TRAIN: os.path.join(vseq.settings.DATA_DIRECTORY, 'librispeech', 'train.txt'),
@@ -22,4 +26,7 @@ DATAPATHS_MAPPING = {
     LIBRISPEECH_DEV_OTHER: os.path.join(vseq.settings.DATA_DIRECTORY, 'librispeech', 'dev-other.txt'),
     LIBRISPEECH_TEST_CLEAN: os.path.join(vseq.settings.DATA_DIRECTORY, 'librispeech', 'test-clean.txt'),
     LIBRISPEECH_TEST_OTHER: os.path.join(vseq.settings.DATA_DIRECTORY, 'librispeech', 'test-other.txt'),
+    PENN_TREEBANK_TRAIN: os.path.join(vseq.settings.DATA_DIRECTORY, 'penn_treebank', 'train.txt'),
+    PENN_TREEBANK_VALID: os.path.join(vseq.settings.DATA_DIRECTORY, 'penn_treebank', 'valid.txt'),
+    PENN_TREEBANK_TEST: os.path.join(vseq.settings.DATA_DIRECTORY, 'penn_treebank', 'test.txt'),
 }

@@ -8,8 +8,7 @@ from pathlib import Path
 
 import wget
 import torchaudio
-
-from progressbar import ProgressBar
+from tqdm import tqdm
 
 
 DATA_DESTINATION = sys.argv[1]
@@ -56,7 +55,7 @@ for subset in SUBSETS:
     new_subset_dir = os.path.join(librispeech_data_dir, subset)
     Path(subset_dir).rename(new_subset_dir)
 
-    # move metadat files if not already done
+    # move metadata files if not already done
     if not metadata_copied:    
         for metadata_filepath in glob(f"{download_dir}/*.TXT"):
             new_metadata_filepath = metadata_filepath.replace("LibriSpeech/", "")
@@ -69,10 +68,9 @@ for subset in SUBSETS:
 
     # split transcript files into single utterances
     print(f"\n\nSplitting transcript files - {subset}:")
-    bar = ProgressBar()
     transcript_filepaths = glob(os.path.join(new_subset_dir, "*/*/*.trans.txt"))
     source_file_content = []
-    for transcript_filepath in bar(transcript_filepaths):
+    for transcript_filepath in tqdm(transcript_filepaths):
         with open(transcript_filepath, "r") as transcript_file_buffer:
             lines = transcript_file_buffer.readlines()
         

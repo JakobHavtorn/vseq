@@ -26,7 +26,7 @@ from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
 
-
+torch.autograd.set_detect_anomaly(True)
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
@@ -50,7 +50,8 @@ LibrispeecTextTransform = transforms.Compose(
     EncodeInteger(
         token_map=token_map,
         tokenizer=char_tokenizer,
-        delimit=True
+        prefix=DELIMITER_TOKEN,
+        suffix=DELIMITER_TOKEN
     ),
 )
 
@@ -69,44 +70,90 @@ val_dataset = BaseDataset(
     modalities=modalities,
 )
 
-train_sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=320)
-val_sampler = EvalSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=320)
+train_sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=960)
+val_sampler = EvalSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=960)
 
 train_loader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
-    num_workers=4,
+    num_workers=16,
+    # shuffle=True,
+    # batch_size=16
     batch_sampler=train_sampler
 )
 val_loader = DataLoader(
     dataset=val_dataset,
     collate_fn=val_dataset.collate,
-    num_workers=4,
+    num_workers=16,
+    # shuffle=False,
+    # batch_size=16
     batch_sampler=val_sampler
 )
 
 delimiter_token_idx = LIBRISPEECH_TOKENS_DELIMITER.index(DELIMITER_TOKEN)
 model = vseq.models.Bowman(
     num_embeddings=len(token_map),
-    embedding_dim=16,
-    hidden_size=64,
+    embedding_dim=256,
+    hidden_size=256,
     delimiter_token_idx=delimiter_token_idx
 )
+
 model = model.to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
 criterion = lambda *x: x
 
 
 
 for epoch in range(args.epochs):
-    for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
+    step, log = 0, ""
+    #for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
+    mean_log_prob, mean_kl, mean_loss = 0, 0, 0
+    for (x, x_sl), metadata in train_loader:
         # import IPython; IPython.embed()
-
+        
+        step += 1
         x = x.to(device)
 
-        x_hat = model(x, x_sl)
-        break
-    break
+        log_prob, kl_divergence, p = model(x, x_sl, word_dropout_rate=0.0)
+
+        log_prob_reduced = log_prob.sum() / (x_sl - 1).sum()
+        kl_divergence_reduced = kl_divergence.sum()
+        loss = kl_divergence_reduced - log_prob_reduced
+
+        mean_log_prob = mean_log_prob * ((step - 1) / step) + log_prob_reduced.item() / step
+        mean_kl = mean_kl * ((step - 1) / step) + kl_divergence_reduced.item() / step
+        mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
+
+
+        print(len(log) * " ", end="\r")
+        log = (f"Loss={mean_loss:.3f}, "
+               f"KL={mean_kl:.3f}, "
+               f"log-prob={mean_log_prob:.3f}, "
+               f"({step}/{100})")
+        print(log, end="\r")
+        
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+
+
+        if step == 100:
+            sl = x_sl.numpy() - 1
+            refs_encoded = x[:, 1:].cpu().numpy()
+            hyps_encoded = p.logits.argmax(dim=-1).T.cpu().numpy()
+            refs = token_map.decode_batch(refs_encoded[:2], sl[:2])
+            hyps = token_map.decode_batch(hyps_encoded[:2], sl[:2])
+
+            print("\n\nREF #1:", refs[0])
+            print("HYP #1:", hyps[0])
+            print("\nREF #2:", refs[1])
+            print("HYP #2:", hyps[1])
+            break
+        #model.generate(n_samples=4)
+        #break
+
 
         #loss = criterion(x, x_hat, x_sl)
 

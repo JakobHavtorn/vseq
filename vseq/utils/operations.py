@@ -49,7 +49,7 @@ def reduce_to_batch(tensor, batch_dim=0, reduction=torch.sum):
 
 
 def reduce_to_latent(tensor, batch_dim=0, latent_dim=1, reduction=torch.sum):
-    """Assuming that the batch and latent dimensions are 0 and 1, respectively, reduce all others by sumnmation.
+    """Assuming that the batch and latent dimensions are 0 and 1, respectively, reduce all others by summation.
 
     Given shape (B, L, D*) returns (B, L).
     """
@@ -97,3 +97,22 @@ def detach_to_device(x, device):
         return x.detach().clone().to(device)
 
     return torch.tensor(x, device=device, dtype=torch.float)
+
+
+def sequence_mask(seq_lens, max_len=None, dtype=torch.bool, device=None):
+    """
+    Creates a binary sequence mask where all entries up to seq_lens are 1 and the remaining are 0.
+
+    Args:
+        seq_lens (Tensor): The sequence lengths from which to construct the mask. Should be shape N with dtype == int64.
+        max_len (int): The temporal dimension of the sequence mask. If None, will use max of seq_lens.
+        dtype (torch.dtype): The type of the mask. Default is torch.bool.
+
+    Returns:
+        Tensor: The sequence mask of shape NT.
+    """
+    device = device if device is not None else seq_lens.device
+    N = seq_lens.size(0)
+    T = max_len or seq_lens.max()
+    seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat((N, 1)) < seq_lens.unsqueeze(1)
+    return seq_mask.to(dtype)

@@ -8,24 +8,22 @@ class TokenMap:
         self.token2index = {t: i for i, t in enumerate(tokens)}
         self.index2token = {i: t for i, t in enumerate(tokens)}
 
-    def encode(self, tokens: Iterable[list], delimit: bool=False):
-        if delimit:
-            tokens = self.delimit(tokens)
+    def encode(self, tokens: Iterable[list], prefix: str="", suffix: str=""):
+        if prefix or suffix:
+            tokens = list(prefix) + tokens + list(suffix)
         return [self.token2index[t] for t in tokens]
 
-    def delimit(self, tokens: Iterable[list]):
-        if DELIMITER_TOKEN in self.tokens:
-            tokens.insert(0, DELIMITER_TOKEN)
-            tokens.insert(-1, DELIMITER_TOKEN)
-        elif all(token in self.tokens for token in [START_TOKEN, END_TOKEN]):
-            tokens.insert(0, START_TOKEN)
-            tokens.insert(-1, END_TOKEN)
-        else:
-            raise ValueError("The TokenMap doesn't contain the required delimiters tokens.")
-        return tokens
+    def decode(self, indices: Iterable[int], separator: str = ""):
+        return separator.join([self.index2token[i] for i in indices])
 
-    def decode(self, indices: Iterable[int]):
-        return [self.index2token[i] for i in indices]
+    def decode_batch(self, indices_batch, sl, separator: str = ""):
+        batch = []
+        N = len(sl)
+        for n in range(N):
+            indices = indices_batch[n][:sl[n]]
+            batch.append(self.decode(indices, separator=separator))
+        return batch
+
 
     def __len__(self):
         return len(self.tokens)
