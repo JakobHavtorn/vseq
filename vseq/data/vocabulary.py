@@ -6,6 +6,7 @@ from tqdm import tqdm
 from .tokenizers import word_tokenizer
 from .datapaths import DATAPATHS_MAPPING
 
+
 def _get_vocab_filepath(source_filepath, create_vocab_dir=False):
     """
     Forms, and possibly creates, the target path from the source file path as:
@@ -14,14 +15,15 @@ def _get_vocab_filepath(source_filepath, create_vocab_dir=False):
     source_dir, source_filename = os.path.split(source_filepath)
     vocab_dir = os.path.join(source_dir, "vocab")
     if not os.path.exists(vocab_dir) and create_vocab_dir:
-        os.mkdir(target_dir)
+        os.mkdir(vocab_dir)
     vocab_filepath = os.path.join(vocab_dir, source_filename)
     return vocab_filepath
+
 
 def build_voabulary(source, cleaner_fcn=None):
     """
     Builds a vocabulary file with word-count pairs on each line.
-    
+
     The file will use the same name as the source with '_vocab' suffix.
 
     A directorry 'vocab' is created at the source location.
@@ -31,7 +33,7 @@ def build_voabulary(source, cleaner_fcn=None):
     source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
     with open(source_filepath, "r") as source_file_buffer:
         lines = source_file_buffer.readlines()
-    examples = [l.split(',')[0] for l in lines]
+    examples = [l.split(",")[0].strip() for l in lines]
 
     word_counts = Counter()
     for example in tqdm(examples):
@@ -56,7 +58,8 @@ def load_vocabualry(source, max_size=None, min_count=None):
 
     Args:
         source (str): A constant from vseq.data.datapaths or a path. Used to infer the vocab file.
-        max_size (int): The 
+        max_size (int): Maximum number of words to keep in the vocabulary.
+        min_count (int): Minimum number of occurences in source data of any word included in the vocabulary.
     """
     source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
     vocab_filepath = _get_vocab_filepath(source_filepath, create_vocab_dir=True)
