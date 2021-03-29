@@ -3,10 +3,8 @@ import logging
 import tqdm
 
 import torch
-import torchvision
 
 from torch.utils.data import DataLoader
-from torchaudio.transforms import MelSpectrogram
 
 import vseq
 import vseq.data
@@ -17,7 +15,7 @@ import vseq.utils.device
 
 from vseq.data import transforms
 from vseq.data import DataModule, BaseDataset
-from vseq.data.collate import collate_spectrogram, collate_text
+from vseq.data.collate import collate_text
 from vseq.data.transforms import EncodeInteger, Compose
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.text_cleaners import clean_librispeech
@@ -25,6 +23,7 @@ from vseq.data.tokens import ENGLISH_STANDARD, DELIMITER_TOKEN
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
+from vseq.utils.rand import set_seed
 
 torch.autograd.set_detect_anomaly(True)
 LOGGER = logging.getLogger(name=__file__)
@@ -41,6 +40,7 @@ parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
 
+set_seed(args.seed)
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
