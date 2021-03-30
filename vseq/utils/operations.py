@@ -1,3 +1,5 @@
+from collections import Iterable
+
 import torch
 
 from .shape import elevate_sample_dim
@@ -112,6 +114,9 @@ def sequence_mask(seq_lens, max_len=None, dtype=torch.bool, device=None):
         Tensor: The sequence mask of shape NT.
     """
     device = device if device is not None else seq_lens.device
+    if isinstance(seq_lens, Iterable):
+        seq_lens = torch.LongTensor(seq_lens) if device == torch.device('cpu') else torch.cuda.LongTensor(seq_lens)
+
     N = seq_lens.size(0)
     T = max_len or seq_lens.max()
     seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat((N, 1)) < seq_lens.unsqueeze(1)

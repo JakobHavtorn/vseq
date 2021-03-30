@@ -69,8 +69,8 @@ def get_number_of_elements(shape):
     return np.prod(shape)
 
 
-def time_forward_pass(forward, inputs):
-    timer = timeit.Timer("forward(*inputs)", globals={"forward": forward, "inputs": inputs})
+def time_forward_pass(forward, inputs, **forward_kwargs):
+    timer = timeit.Timer("forward(*inputs, **kwargs)", globals={"forward": forward, "inputs": inputs, "kwargs": forward_kwargs})
     number, time_per_repeat = timer.autorange()
     try:
         timings = timer.repeat(repeat=10, number=number)
@@ -256,7 +256,7 @@ def summary(
         h.remove()
 
     # time the forward pass
-    _, timing_stats = time_forward_pass(model.forward, x)
+    _, timing_stats = time_forward_pass(model.forward, x, **model_forward_kwargs)
 
     # TODO Return and print this as a pandas dataframe
     s, header, lines, extra = summary_to_string(summary, input_size, batch_size, gradient_factor, timing_stats)

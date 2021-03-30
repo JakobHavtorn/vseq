@@ -1,0 +1,1 @@
+from vseq.models.wavenet.model import WaveNet

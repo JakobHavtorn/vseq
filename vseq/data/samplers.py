@@ -47,7 +47,7 @@ class FrameSampler(Sampler):
         self.lengths = self.load_lengths(self.source_filepath)
         self.pools = self.create_sample_pools(max_pool_difference, min_pool_size)
         self.batches = self.sample_batches()
-        
+
         assert self.lengths.max() < self.max_seconds, "One or more examples are longer than the maximum number of seconds per batch."
 
     def load_lengths(self, source_filepath):

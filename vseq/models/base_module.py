@@ -7,7 +7,7 @@ import torch.nn as nn
 
 import vseq.models
 
-from vseq.utils import summary
+from vseq.utils.summary import summary
 
 
 LOGGER = logging.getLogger(name=__file__)

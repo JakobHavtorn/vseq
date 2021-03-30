@@ -25,6 +25,7 @@ from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
 from vseq.utils.rand import set_seed
 
+
 torch.autograd.set_detect_anomaly(True)
 LOGGER = logging.getLogger(name=__file__)
 
@@ -99,6 +100,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
 # model.summary(train_dataset[0][0].shape)
 
+
+from typing import Iterable
 
 class Metric:
     def __init__(self,  name=None) -> None:

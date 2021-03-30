@@ -34,16 +34,18 @@ class BaseDataset(Dataset):
     def __getitem__(self, idx):
         example_path = self.examples[idx]
 
+        # Load data for each modality
         input_data = dict()
         unique_metadata = dict()
         for ext in self.unique_extensions:
             input_data[ext], unique_metadata[ext] = extensions_to_load[ext](example_path + f".{ext}")
 
+        # Transform modalities according to transforms
         data = []
         metadata = []
         for ext, transform in zip(self.extensions, self.transforms):
             x = input_data[ext]
-            y = transform(x)
+            y = transform(x) if transform else x
 
             data.append(y)
             metadata.append(unique_metadata[ext])
