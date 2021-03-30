@@ -18,7 +18,7 @@ from vseq.utils.variational import kl_divergence_mc
 from .base_module import BaseModule
 
 
-Output = namedtuple("Output", ["elbo", "ll", "kl", "p_x", "q_z", "p_z", "z"])
+Output = namedtuple("Output", ["elbo", "ll", "kl", "kl_dwise", "p_x", "q_z", "p_z", "z"])
 
 
 class Bowman(BaseModule):
@@ -36,7 +36,7 @@ class Bowman(BaseModule):
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
-        self.unknown_token_idx = num_embeddings
+        self.mask_token_idx = num_embeddings
 
         self.lstm_encode = nn.LSTM(
             input_size=embedding_dim,
@@ -74,21 +74,25 @@ class Bowman(BaseModule):
         mu, sigma = self.prior_logits.chunk(2, dim=0)
         return D.Normal(mu, sigma)
 
-    def compute_elbo(self, log_prob, kl):
-        import IPython
-
-        IPython.embed()
-        raise NotImplementedError
+    def compute_elbo(self, log_prob_twise, kl_dwise):
+        kl = kl_dwise.sum(2)
+        log_prob = log_prob_twise.sum(1)
+        elbo = log_prob.sum(1) - kl.squeeze()
+        return elbo, log_prob, kl
 
     def forward(self, x, x_sl, word_dropout_rate: float = 0.75) -> Tuple[torch.Tensor, Output]:
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
-        kl = kl_divergence_mc(q_z, p_z, z)
-        log_prob, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
+        kl_dwise, _, _ = kl_divergence_mc(q_z, p_z, z)
 
-        elbo = self.compute_elbo(log_prob, kl)
-        output = Output(elbo=elbo, ll=log_prob, kl=kl, p_x=p_x, q_z=q_z, p_z=p_z, z=z)
+        import IPython; IPython.embed()
+        log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
+
+        elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise)
+        output = Output(
+            elbo=elbo, ll=log_prob, ll_twise=log_prob_twise, kl=kl, kl_dwise=kl_dwise, p_x=p_x, q_z=q_z, p_z=p_z, z=z
+        )
         return -elbo, output
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
@@ -97,6 +101,7 @@ class Bowman(BaseModule):
         e = self.embedding(x)
         e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_t, c_t) = self.lstm_encode(e)
+        h_t = h_t.transpose(0, 1)  # (T, B, D) --> (B, T, D)
 
         # Compute and sample from q(z|x)
         q_logits = self.h_to_q(h_t)
@@ -104,32 +109,34 @@ class Bowman(BaseModule):
         sigma = self.std_activation(log_sigma)
         q = D.Normal(mu, sigma)
         z = q.rsample()
-        return z, q
+        return z, q  # (B, T, D)
 
     def reconstruct(self, z: torch.Tensor, x: torch.Tensor, x_sl: torch.Tensor, word_dropout_rate: float = 0.75):
         """
         Computes log-likelihood for x under p(x|z).
         """
         # Prepare decoder initial states
-        h_0 = z
+        h_0 = z.transpose(0, 1)  # (B, T, D) -> (T, B, D)
         c_0 = torch.zeros_like(h_0)
 
         # Prepare inputs (x) and targets (y)
-        y = x[:, 1:].T.clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         if self.training:
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
             mask[:, 0] = False  # We never mask the start token - or do we?
             x = x.clone()  # We can't modify x in-place
-            x[mask] = self.unknown_token_idx
+            x[mask] = self.mask_token_idx
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        x = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
-        h, (h_n, c_n) = self.lstm_decode(x, (h_0, c_0))
-        h, _ = torch.nn.utils.rnn.pad_packed_sequence(h)
+        e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
+        h, (h_n, c_n) = self.lstm_decode(e, (h_0, c_0))
+
+        h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
         p = D.Categorical(logits=p_logits)
-        seq_mask = sequence_mask(x_sl - 1, dtype=float).T.to(self.device)
+        seq_mask = sequence_mask(x_sl - 1, dtype=float).to(self.device)
+        y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         log_prob = p.log_prob(y) * seq_mask
 
         return log_prob, p
@@ -184,7 +191,7 @@ class WordDropout(nn.Module):
         self.keep_rate = 1 - self.dropout_rate
 
     def forward(self, x: torch.Tensor):
-        """Dropout entire timesteps in x of shape (T, N, 1)"""
+        """Dropout entire timesteps in x of shape (T, B, 1)"""
         mask = torch.bernoulli(torch.ones(x.shape[0]) * self.keep_rate)
         x *= mask
         return x

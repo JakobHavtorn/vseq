@@ -2,6 +2,8 @@ from functools import partial
 
 from typing import Iterable, List, Optional
 
+import torch
+
 from torch.utils.data.dataset import IterableDataset
 from vseq.data.tokens import BLANK_TOKEN, DELIMITER_TOKEN, START_TOKEN, END_TOKEN, UNKNOWN_TOKEN
 
@@ -15,9 +17,17 @@ def get(dictionary, key):
 
 
 class TokenMap:
-    def __init__(self, tokens: List, add_start: bool = True, add_end: bool = True, add_delimit: bool = False, add_unknown: bool = False, add_blank: bool = False) -> None:
-        
-        assert add_delimit != add_end and add_delimit != add_start, 'Cannot use start, end and delimiter tokens at once'
+    def __init__(
+        self,
+        tokens: List,
+        add_start: bool = True,
+        add_end: bool = True,
+        add_delimit: bool = False,
+        add_unknown: bool = False,
+        add_blank: bool = False,
+    ) -> None:
+
+        assert add_delimit != add_end and add_delimit != add_start, "Cannot use start, end and delimiter tokens at once"
 
         self.add_start = add_start
         self.add_end = add_end
@@ -53,16 +63,19 @@ class TokenMap:
         return [self.get_index(t) for t in tokens]
 
     def decode(self, indices: Iterable[int], join_separator: Optional[str] = None):
+        if isinstance(indices, torch.Tensor):
+            indices = indices.tolist()
+
         if join_separator is None:
             return [self.index2token[i] for i in indices]
         return join_separator.join([self.index2token[i] for i in indices])
 
     def decode_batch(
-        self,
-        indices_batch: Iterable[Iterable[int]],
-        sl: Iterable[int],
-        join_separator: Optional[str] = None
+        self, indices_batch: Iterable[Iterable[int]], sl: Iterable[int], join_separator: Optional[str] = None
     ):
+        if isinstance(indices_batch, torch.Tensor):
+            indices_batch = indices_batch.tolist()
+
         batch = []
         N = len(sl)
         for n in range(N):

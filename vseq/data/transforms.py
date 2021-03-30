@@ -1,5 +1,4 @@
 from typing import Callable, List, Any
-from vseq.data.collate import collate_spectrogram
 
 import numpy as np
 import torch

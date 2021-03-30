@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 import vseq.data
 
 from vseq.utils.device import get_device
-from vseq.constants import TRAIN_SPLIT, VAL_SPLIT, TEST_SPLIT
+# from vseq.constants import TRAIN_SPLIT, VAL_SPLIT, TEST_SPLIT
 from vseq.utils.argparsing import json_file_or_json_unique_keys
 
 

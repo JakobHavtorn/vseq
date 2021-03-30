@@ -52,7 +52,7 @@ def build_voabulary(source, cleaner_fcn=None):
         vocab_file_buffer.write(vocab_file_content)
 
 
-def load_vocabualry(source, max_size=None, min_count=None):
+def load_vocabulary(source, max_size=None, min_count=None):
     """
     Load vocabulary file corresponding to source.
 

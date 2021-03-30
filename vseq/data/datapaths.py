@@ -1,6 +1,6 @@
 import os
 
-import vseq
+import vseq.settings
 
 
 LIBRISPEECH_TRAIN = 'libri_train'

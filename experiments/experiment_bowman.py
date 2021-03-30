@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 import vseq
 import vseq.data
+from vseq.data import text_cleaners
 import vseq.models
 import vseq.training
 import vseq.utils
@@ -15,15 +16,16 @@ import vseq.utils.device
 
 from vseq.data import transforms
 from vseq.data import DataModule, BaseDataset
-from vseq.data.collate import collate_text
+from vseq.data.batcher import TextBatcher
 from vseq.data.transforms import EncodeInteger, Compose
-from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
+from vseq.data.datapaths import PENN_TREEBANK_VALID, PENN_TREEBANK_TRAIN, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.text_cleaners import clean_librispeech
 from vseq.data.tokens import ENGLISH_STANDARD, DELIMITER_TOKEN
-from vseq.data.tokenizers import char_tokenizer
+from vseq.data.tokenizers import char_tokenizer, word_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.samplers import EvalSampler, FrameSampler
 from vseq.utils.rand import set_seed
+from vseq.data.vocabulary import load_vocabulary
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -32,7 +34,9 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default="VAE", help="model type (vae | lvae | biva)")
 parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
-parser.add_argument("--lr", default=2e-3, type=float, help="base learning rate")
+parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
+parser.add_argument("--batch_size", default=32, type=int, help="batch size")
+parser.add_argument("--num_workers", default=16, type=int, help="number of dataloader workers")
 parser.add_argument("--test_every", default=1, type=int, help="test every x epochs")
 parser.add_argument("--seed", default=42, type=int, help="random seed")
 parser.add_argument("--task_name", default="", type=str, help="run task_name suffix")
@@ -45,86 +49,123 @@ set_seed(args.seed)
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
-token_map = TokenMap(tokens=ENGLISH_STANDARD, add_start=False, add_end=False, add_delimit=True)
-PennTreebankTransform = transforms.Compose(
-    transforms.TextCleaner(clean_librispeech),
-    EncodeInteger(
-        token_map=token_map,
-        tokenizer=char_tokenizer,
-    ),
+vocab = load_vocabulary(PENN_TREEBANK_TRAIN)
+token_map = TokenMap(tokens=vocab, add_start=False, add_end=False, add_delimit=True)
+penn_treebank_transform = EncodeInteger(
+    token_map=token_map,
+    tokenizer=word_tokenizer,
 )
+batcher = TextBatcher()
 
 modalities = [
-    # ('flac', MelSpectrogram(), collate_spectrogram),
-    ("txt", PennTreebankTransform, collate_text)
+    ("txt", penn_treebank_transform, batcher)
 ]
 
-
 train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
+    source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
 )
 val_dataset = BaseDataset(
-    source=LIBRISPEECH_DEV_CLEAN,
+    source=PENN_TREEBANK_VALID,
     modalities=modalities,
 )
-
-train_sampler = FrameSampler(source=LIBRISPEECH_TRAIN, sample_rate=16000, max_seconds=960)
-val_sampler = EvalSampler(source=LIBRISPEECH_DEV_CLEAN, sample_rate=16000, max_seconds=960)
 
 train_loader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
-    num_workers=16,
-    # shuffle=True,
-    # batch_size=16
-    batch_sampler=train_sampler,
+    num_workers=args.num_workers,
+    shuffle=True,
+    batch_size=args.batch_size
 )
 val_loader = DataLoader(
     dataset=val_dataset,
     collate_fn=val_dataset.collate,
-    num_workers=16,
-    # shuffle=False,
-    # batch_size=16
-    batch_sampler=val_sampler,
+    num_workers=args.num_workers,
+    shuffle=False,
+    batch_size=args.batch_size
 )
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.Bowman(
-    num_embeddings=len(token_map), embedding_dim=256, hidden_size=256, delimiter_token_idx=delimiter_token_idx
+    num_embeddings=len(token_map),
+    embedding_dim=256,
+    hidden_size=256,
+    delimiter_token_idx=delimiter_token_idx
 )
 
 model = model.to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 
-# model.summary(train_dataset[0][0].shape)
+# x, x_sl = next(iter(train_loader))[0]
+# x = x.to(device)
+# x_sl = x_sl.to(device)
+# model.summary(x.shape, batch_size=1, x_sl=x_sl)
 
 
 from typing import Iterable
 
+
 class Metric:
-    def __init__(self,  name=None) -> None:
+    base_tags = set()
+
+    def __init__(self, name=None, tags=None) -> None:
         self.name = name
+        self.tags = tags | self.base_tags
+
+    def update(self, value):
+        raise NotImplementedError()
+
+    def reset(self):
+        raise NotImplementedError()
 
 
 class LLMetric(Metric):
-    def __init__(self) -> None:
+    base_tags = {'likelihood'}
+
+    def __init__(self, name="ll", tags=set()) -> None:
+        super().__init__(name=name, tags=tags)
+        self.value = None
+
+    def update(self, value):
         pass
+
+class ELBOMetric(LLMetric):
+    base_tags = {'likelihood'}
+
+    def __init__(self, name="elbo", tags=set()) -> None:
+        super().__init__(name=name, tags=tags)
+
+
+class KLMetric(Metric):
+    base_tags = {'kl_divergences'}
+
+    def __init__(self, name="kl", tags=set()) -> None:
+        super().__init__(name=name, tags=tags)
+
+
+class PerplexityMetric(Metric):
+    base_tags = set()
+
+    def __init__(self, name="perplexity", tags=set()) -> None:
+        super().__init__(name=name, tags=tags)
 
 
 class Aggregator:
     def __init__(self, *metrics: Iterable[Metric]) -> None:
         self.metrics = metrics
-        self.names = 2
+        self.names = []
+
+    def set(self, source_name):
+        pass
 
     def log(self):
         pass
 
 
-metric_ll = LLMetric(name='p(x|z)')
-metric_kl = KLMetric(name='')
-metric_elbo = ELBOMetric()
+metric_elbo = ELBOMetric(tags={'loss'})
+metric_ll = LLMetric()
+metric_kl = KLMetric()
 metric_perplexity = PerplexityMetric()
 
 aggregator = Aggregator(metric_ll, metric_kl, metric_elbo, metric_perplexity)
@@ -137,6 +178,7 @@ for epoch in range(args.epochs):
         x = x.to(device)
 
         loss, output = model(x, x_sl, word_dropout_rate=0.0)
+        import IPython; IPython.embed()
 
         optimizer.zero_grad()
         loss.backward()
@@ -159,18 +201,6 @@ for epoch in range(args.epochs):
         metric_elbo.update(output.elbo)
 
         aggregator.log()
-
-
-
-
-
-
-
-
-
-
-
-
 
     step, log = 0, ""
     # for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
