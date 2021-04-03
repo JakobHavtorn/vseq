@@ -8,18 +8,20 @@ from torch.utils.data import Dataset
 
 from .batcher import Batcher
 from .transforms import Transform
-from .load import extensions_to_load
+from .load import EXTENSIONS_TO_LOADFCN
 from .datapaths import DATAPATHS_MAPPING
 
 
 class BaseDataset(Dataset):
     def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True):
-        """Dataset class
+        """Dataset class that serves examples from files listed in a `source` as defined by `modalities`.
+
+        `modalities` defines how to obtain an example from a specific file extension via a `Transform` and a `Batcher`.
 
         Args:
             source (str): Dataset shorthand name or path to source file
-            modalities (List[Tuple[str, Batcher, Transform]]): File extensions, collater and transforms
-            sort (bool, optional): If True, sort the first modality according to its collater. Defaults to True.
+            modalities (List[Tuple[str, Batcher, Transform]]): File extensions, batcher and transforms
+            sort (bool, optional): If True, sort the first modality according to its batcher. Defaults to True.
         """        
         super().__init__()
         self.source = source
@@ -46,7 +48,7 @@ class BaseDataset(Dataset):
         input_data = dict()
         unique_metadata = dict()
         for ext in self.unique_extensions:
-            input_data[ext], unique_metadata[ext] = extensions_to_load[ext](example_path + f".{ext}")
+            input_data[ext], unique_metadata[ext] = EXTENSIONS_TO_LOADFCN[ext](example_path + f".{ext}")
 
         # Transform modalities according to transforms
         data = []
@@ -54,7 +56,6 @@ class BaseDataset(Dataset):
         for ext, transform in zip(self.extensions, self.transforms):
             x = input_data[ext]
             y = transform(x) if transform else x
-            # unique_metadata[ext].transforms_length = transform.length(y)
 
             data.append(y)
             metadata.append(unique_metadata[ext])

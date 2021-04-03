@@ -4,6 +4,8 @@ import torch
 
 
 class Batcher:
+    """Base class for Batchers. These must define `collate` and optionally `sort` methods.
+    """        
     def __init__(self) -> None:
         pass
 
@@ -11,9 +13,23 @@ class Batcher:
         return self.collate(batch)
 
     def collate(self, batch: List[torch.Tensor]):
+        """Convert a list of Tensors into a single Tensor.
+
+        Args:
+            batch (List[torch.Tensor]): Batch of Tensors to convert.
+        """
         raise NotImplementedError()
 
-    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx=None):
+    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: bool = None):
+        """Sort the order of examples within the batch optionally specifying which modality to sort if more than one.
+
+        Args:
+            batch (List[Tuple[Any, Any]]): The batch to sort, generally as a list of tuples of data and metadata.
+            sort_modality_idx (bool, optional): Index of the modality to sort. Defaults to None.
+
+        Raises:
+            NotImplementedError: [description]
+        """
         raise NotImplementedError()
 
 
@@ -70,7 +86,7 @@ class TextBatcher(Batcher):
 
         return torch.LongTensor(padded_batch), torch.LongTensor(sequence_lengths)
 
-    def sort(self, batch: List[torch.Tensor], sort_modality_idx=None):
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: bool = None):
         if sort_modality_idx is not None:
             sort_key = lambda x: len(x[0][sort_modality_idx])
         else:

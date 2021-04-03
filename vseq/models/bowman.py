@@ -18,7 +18,7 @@ from vseq.utils.variational import kl_divergence_mc
 from .base_module import BaseModule
 
 
-Output = namedtuple("Output", ["elbo", "ll", "kl", "kl_dwise", "p_x", "q_z", "p_z", "z"])
+Output = namedtuple("Output", ["loss", "elbo", "ll", "kl", "ll_twise", "kl_dwise", "p_x", "q_z", "p_z", "z"])
 
 
 class Bowman(BaseModule):
@@ -74,26 +74,29 @@ class Bowman(BaseModule):
         mu, sigma = self.prior_logits.chunk(2, dim=0)
         return D.Normal(mu, sigma)
 
-    def compute_elbo(self, log_prob_twise, kl_dwise):
-        kl = kl_dwise.sum(2)
-        log_prob = log_prob_twise.sum(1)
-        elbo = log_prob.sum(1) - kl.squeeze()
-        return elbo, log_prob, kl
+    def compute_elbo(self, log_prob_twise, kl_dwise, x_sl, beta: float = 1):
+        kl = kl_dwise.sum(2).squeeze()  # (B,)
+        log_prob = log_prob_twise.sum(1)  # (B,)
+        elbo = log_prob - kl  # (B,)
+        loss = -(log_prob - beta * kl).mean()  # (1,)
+        # loss = - log_prob.sum() / x_sl.sum() + beta * kl.mean()  # (1,)
+        return loss, elbo, log_prob, kl
 
-    def forward(self, x, x_sl, word_dropout_rate: float = 0.75) -> Tuple[torch.Tensor, Output]:
+    def forward(self, x, x_sl, word_dropout_rate: float = 0.75, beta: float = 1) -> Tuple[torch.Tensor, Output]:
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
-        kl_dwise, _, _ = kl_divergence_mc(q_z, p_z, z)
+        # kl_dwise, _, _ = kl_divergence_mc(q_z, p_z, z)
+        kl_dwise = torch.distributions.kl_divergence(q_z, p_z)
 
-        import IPython; IPython.embed()
         log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
 
-        elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise)
+        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl)
+
         output = Output(
-            elbo=elbo, ll=log_prob, ll_twise=log_prob_twise, kl=kl, kl_dwise=kl_dwise, p_x=p_x, q_z=q_z, p_z=p_z, z=z
+            loss=loss, elbo=elbo, ll=log_prob, kl=kl, ll_twise=log_prob_twise, kl_dwise=kl_dwise, p_x=p_x, q_z=q_z, p_z=p_z, z=z
         )
-        return -elbo, output
+        return loss, output
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
         # Encode input sequence
@@ -101,15 +104,15 @@ class Bowman(BaseModule):
         e = self.embedding(x)
         e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_t, c_t) = self.lstm_encode(e)
-        h_t = h_t.transpose(0, 1)  # (T, B, D) --> (B, T, D)
+        h_t = h_t.transpose(0, 1)  # (T=1, B, D) --> (B, T=1, D)
 
         # Compute and sample from q(z|x)
-        q_logits = self.h_to_q(h_t)
-        mu, log_sigma = q_logits.chunk(2, dim=2)
+        q_z_logits = self.h_to_q(h_t)
+        mu, log_sigma = q_z_logits.chunk(2, dim=2)
         sigma = self.std_activation(log_sigma)
-        q = D.Normal(mu, sigma)
-        z = q.rsample()
-        return z, q  # (B, T, D)
+        q_z = D.Normal(mu, sigma)
+        z = q_z.rsample()
+        return z, q_z  # (B, T=1, D)
 
     def reconstruct(self, z: torch.Tensor, x: torch.Tensor, x_sl: torch.Tensor, word_dropout_rate: float = 0.75):
         """
@@ -135,8 +138,8 @@ class Bowman(BaseModule):
 
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
         p = D.Categorical(logits=p_logits)
-        seq_mask = sequence_mask(x_sl - 1, dtype=float).to(self.device)
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
+        seq_mask = sequence_mask(x_sl - 1, dtype=float).to(self.device)
         log_prob = p.log_prob(y) * seq_mask
 
         return log_prob, p

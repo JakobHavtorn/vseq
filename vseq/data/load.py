@@ -1,12 +1,10 @@
 from dataclasses import dataclass
-from vseq import data
 
-import torch
 import torchaudio
 
 
 @dataclass
-class MetaData():
+class MetaData:
     length: int
     filepath: str
 
@@ -21,7 +19,8 @@ class AudioMetaData(MetaData):
 
 @dataclass
 class TextMetaData(MetaData):
-    pass
+    word_length: int
+    char_length: int
 
 
 def load_audio(filepath, sum_channels: bool = True):
@@ -38,21 +37,29 @@ def load_audio(filepath, sum_channels: bool = True):
         bits_per_sample=metadata.bits_per_sample,
         encoding=metadata.encoding,
         length=metadata.num_frames,
-        filepath=filepath
+        filepath=filepath,
     )
     return audio, metadata
 
 
 def load_text(filepath):
     """Load a text file and return """
-    with open(filepath, 'r') as text_file:
+    with open(filepath, "r") as text_file:
         string = text_file.read()
 
-    metadata = TextMetaData(length=len(string), filepath=filepath)
+    metadata = TextMetaData(
+        length=len(string), char_length=len(string), word_length=len(string.split()), filepath=filepath
+    )
     return string, metadata
 
 
-extensions_to_load = dict(
+# from typing import NewType
+
+# Extension = NewType("Extension", str)
+
+# EXTENSIONS = {Extension("wav"), Extension("flac"), Extension("mp3"), Extension("txt")}
+
+EXTENSIONS_TO_LOADFCN = dict(
     wav=load_audio,
     flac=load_audio,
     mp3=load_audio,

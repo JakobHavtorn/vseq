@@ -1,14 +1,18 @@
 import argparse
 import logging
-import tqdm
+import math
 
+from typing import Iterable, Union
+from torch.types import Number
+
+import tqdm
 import torch
 
 from torch.utils.data import DataLoader
 
 import vseq
+from vseq import data
 import vseq.data
-from vseq.data import text_cleaners
 import vseq.models
 import vseq.training
 import vseq.utils
@@ -103,64 +107,155 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 # model.summary(x.shape, batch_size=1, x_sl=x_sl)
 
 
-from typing import Iterable
-
-
 class Metric:
     base_tags = set()
 
-    def __init__(self, name=None, tags=None) -> None:
+    def __init__(self, name: str, tags: set, accumulate: bool, keep_on_device: bool):
         self.name = name
-        self.tags = tags | self.base_tags
+        self.tags = self.base_tags if tags is None else (tags | self.base_tags)
+        self.accumulate = accumulate
+        self.keep_on_device = keep_on_device
+        self.accumulated_values = []
 
-    def update(self, value):
+    @property
+    def log_value(self):
+        raise NotImplementedError()
+
+    @property
+    def str_value(self):
+        raise NotImplementedError()
+
+    def _accumulate(self, value):
+        if not self.keep_on_device:
+            value = value.cpu()
+        self.accumulated_values.append(value)
+
+    def update(self, value: torch.Tensor):
         raise NotImplementedError()
 
     def reset(self):
-        raise NotImplementedError()
+        self.accumulated_values = []
 
 
-class LLMetric(Metric):
+class RunningMean(Metric):
+    _str_value_fmt = '10.3'
+
+    def __init__(self, name: str, tags: set, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
+        self._running = 0
+        self._running_weight = 0
+
+    @property
+    def log_value(self):
+        return self._running
+
+    @property
+    def str_value(self):
+        return f"{self._running:{self._str_value_fmt}f}"
+
+    def update(self, value: Union[torch.Tensor, Number], weight=1.0):
+
+        if self.accumulate:
+            self.accumulate(value)
+
+        weight = weight.cpu().item() if isinstance(weight, torch.Tensor) else weight    
+        value = value.sum().cpu().item() if isinstance(value, torch.Tensor) else value
+
+        self._running_weight += weight
+
+        weight_value = weight / self._running_weight
+        weight_running = (self._running_weight - weight) / self._running_weight
+        self._running = value * weight_value + self._running * weight_running
+    
+    def reset(self):
+        super().reset()
+        self.running = 0
+        self.running_weight = 0
+
+
+class LLMetric(RunningMean):
     base_tags = {'likelihood'}
 
-    def __init__(self, name="ll", tags=set()) -> None:
-        super().__init__(name=name, tags=tags)
-        self.value = None
+    def __init__(self, name: str = "ll", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
 
-    def update(self, value):
-        pass
 
-class ELBOMetric(LLMetric):
+class ELBOMetric(RunningMean):
     base_tags = {'likelihood'}
 
-    def __init__(self, name="elbo", tags=set()) -> None:
-        super().__init__(name=name, tags=tags)
+    def __init__(self, name: str = "elbo", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
 
 
-class KLMetric(Metric):
+class KLMetric(RunningMean):
     base_tags = {'kl_divergences'}
 
-    def __init__(self, name="kl", tags=set()) -> None:
-        super().__init__(name=name, tags=tags)
+    def __init__(self, name: str = "kl", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
 
 
-class PerplexityMetric(Metric):
+class PerplexityMetric(RunningMean):
     base_tags = set()
 
-    def __init__(self, name="perplexity", tags=set()) -> None:
-        super().__init__(name=name, tags=tags)
+    def __init__(self, name: str = "pp", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
+
+    def update(self, log_likelihood):
+        value = log_likelihood / math.log(2)
+        value = 2 ** value
+
+
+class BitsPerDim(RunningMean):
+    base_tags = set()
+
+    def __init__(self, name: str = "bpd", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
+        super().__init__(name, tags, accumulate=accumulate, keep_on_device=keep_on_device)
+
+from types import SimpleNamespace
 
 
 class Aggregator:
-    def __init__(self, *metrics: Iterable[Metric]) -> None:
+    def __init__(self, *metrics: Iterable[Metric], source_name_len: int = 15) -> None:
         self.metrics = metrics
-        self.names = []
+        self.source_name_len = source_name_len
+        self.current_source = None
+        self.steps = 0
 
     def set(self, source_name):
-        pass
+        self.current_source = source_name
+
+    def reset(self):
+        self.print(end='\n')
+        log_values = SimpleNamespace(**{metric.name: metric.log_value for metric in self.metrics})
+        setattr(self, self.current_source, log_values)
+        for metric in self.metrics:
+            metric.reset()
+
+        self.steps = 0
+        self.current_source = None
+
+    def print(self, end='\r'):
+        s = [f"{metric.name} = {metric.str_value}" for metric in self.metrics]
+        s = f"{self.current_source:<{self.source_name_len}s} | " + " | ".join(s)
+        print(s, end=end)
 
     def log(self):
         pass
+
+    # def __call__(self, loader):
+    #     self.current_source = loader.dataset.source
+        
+    #     n, N = 0, len(loader)
+    #     for batch in loader:
+    #         yield batch
+    #         n += 1
+    #         self.log(end=("\n" if n == N else "\r"))
+            
+    #     log_values = SimpleNamespace(**{metric.name: metric.log_value for metric in self.metrics})
+    #     setattr(self, self.current_source, log_values)
+
+    #     for metric in self.metrics:
+    #         metric.reset()
 
 
 metric_elbo = ELBOMetric(tags={'loss'})
@@ -171,24 +266,34 @@ metric_perplexity = PerplexityMetric()
 aggregator = Aggregator(metric_ll, metric_kl, metric_elbo, metric_perplexity)
 
 
-for epoch in range(args.epochs):
+def epochs(N):
+    BOLD = '\033[1m'
+    END = '\033[0m'
+    for epoch in range(1, N + 1):
+        print(BOLD + f"\nEpoch {epoch}:" + END)
+        yield epoch
+
+
+for epoch in epochs(args.epochs):
 
     aggregator.set(train_dataset.source)
     for (x, x_sl), metadata in train_loader:
         x = x.to(device)
 
         loss, output = model(x, x_sl, word_dropout_rate=0.0)
-        import IPython; IPython.embed()
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        metric_ll.update(output.ll)
-        metric_kl.update(output.kl)
-        metric_elbo.update(output.elbo)
+        metric_elbo.update(output.elbo, weight=output.elbo.numel())
+        metric_ll.update(output.ll.sum() / (x_sl - 1).sum(), weight=(x_sl - 1).sum())
+        metric_kl.update(output.kl, weight=output.kl.numel())
 
-        aggregator.log()
+        aggregator.print()
+
+    # aggregator.log()
+    aggregator.reset()
 
     aggregator.set(val_dataset.source)
     for (x, x_sl), metadata in train_loader:
@@ -196,54 +301,61 @@ for epoch in range(args.epochs):
 
         loss, output = model(x, x_sl, word_dropout_rate=0.0)
 
-        metric_ll.update(output.ll)
-        metric_kl.update(output.kl)
-        metric_elbo.update(output.elbo)
+        metric_elbo.update(output.elbo, weight=output.elbo.numel())
+        metric_ll.update(output.ll.sum() / (x_sl - 1).sum(), weight=(x_sl - 1).sum())
+        metric_kl.update(output.kl, weight=output.kl.numel())
 
-        aggregator.log()
+        aggregator.print()
 
-    step, log = 0, ""
-    # for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
-    mean_log_prob, mean_kl, mean_loss = 0, 0, 0
-    for (x, x_sl), metadata in train_loader:
-        # import IPython; IPython.embed()
+    # aggregator.log()
+    aggregator.reset()
 
-        step += 1
-        x = x.to(device)
 
-        log_prob, kl_divergence, p = model(x, x_sl, word_dropout_rate=0.0)
+    # wandb.log("train_loss", aggregator.train.loss)
+    # wandn.log("test_loss", aggregator.test.loss)
 
-        log_prob_reduced = log_prob.sum() / (x_sl - 1).sum()
-        kl_divergence_reduced = kl_divergence.sum()
-        loss = kl_divergence_reduced - log_prob_reduced
+    # step, log = 0, ""
+    # # for (x, x_sl), metadata in tqdm.tqdm(train_loader, total=len(train_loader)):
+    # mean_log_prob, mean_kl, mean_loss = 0, 0, 0
+    # for (x, x_sl), metadata in train_loader:
+    #     # import IPython; IPython.embed()
 
-        mean_log_prob = mean_log_prob * ((step - 1) / step) + log_prob_reduced.item() / step
-        mean_kl = mean_kl * ((step - 1) / step) + kl_divergence_reduced.item() / step
-        mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
+    #     step += 1
+    #     x = x.to(device)
 
-        print(len(log) * " ", end="\r")
-        log = f"Loss={mean_loss:.3f}, " f"KL={mean_kl:.3f}, " f"log-prob={mean_log_prob:.3f}, " f"({step}/{100})"
-        print(log, end="\r")
+    #     log_prob, kl_divergence, p = model(x, x_sl, word_dropout_rate=0.0)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    #     log_prob_reduced = log_prob.sum() / (x_sl - 1).sum()
+    #     kl_divergence_reduced = kl_divergence.sum()
+    #     loss = kl_divergence_reduced - log_prob_reduced
 
-        if step == 100:
-            sl = x_sl.numpy() - 1
-            refs_encoded = x[:, 1:].cpu().numpy()
-            hyps_encoded = p.logits.argmax(dim=-1).T.cpu().numpy()
-            refs = token_map.decode_batch(refs_encoded[:2], sl[:2])
-            hyps = token_map.decode_batch(hyps_encoded[:2], sl[:2])
+    #     mean_log_prob = mean_log_prob * ((step - 1) / step) + log_prob_reduced.item() / step
+    #     mean_kl = mean_kl * ((step - 1) / step) + kl_divergence_reduced.item() / step
+    #     mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
 
-            print("\n\nREF #1:", refs[0])
-            print("HYP #1:", hyps[0])
-            print("\nREF #2:", refs[1])
-            print("HYP #2:", hyps[1])
-            break
-        # model.generate(n_samples=4)
-        # break
+    #     print(len(log) * " ", end="\r")
+    #     log = f"Loss={mean_loss:.3f}, " f"KL={mean_kl:.3f}, " f"log-prob={mean_log_prob:.3f}, " f"({step}/{100})"
+    #     print(log, end="\r")
 
-        # loss = criterion(x, x_hat, x_sl)
+    #     optimizer.zero_grad()
+    #     loss.backward()
+    #     optimizer.step()
 
-        # loss.backward()
+    #     if step == 100:
+    #         sl = x_sl.numpy() - 1
+    #         refs_encoded = x[:, 1:].cpu().numpy()
+    #         hyps_encoded = p.logits.argmax(dim=-1).T.cpu().numpy()
+    #         refs = token_map.decode_batch(refs_encoded[:2], sl[:2])
+    #         hyps = token_map.decode_batch(hyps_encoded[:2], sl[:2])
+
+    #         print("\n\nREF #1:", refs[0])
+    #         print("HYP #1:", hyps[0])
+    #         print("\nREF #2:", refs[1])
+    #         print("HYP #2:", hyps[1])
+    #         break
+    #     # model.generate(n_samples=4)
+    #     # break
+
+    #     # loss = criterion(x, x_hat, x_sl)
+
+    #     # loss.backward()
