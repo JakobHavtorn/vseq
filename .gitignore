@@ -50,6 +50,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+pytest
 
 # Translations
 *.mo
@@ -132,9 +133,8 @@ dmypy.json
 /data/
 
 # VS Code settings
-settings.json
-
 .vscode
+settings.json
 
 # Pytorch checkpoint files
 *.pt
