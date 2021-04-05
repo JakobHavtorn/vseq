@@ -1,17 +1,16 @@
 """
 Test Dilated Causal Convolution
 """
-
-import os
-import sys
+import logging
 
 import torch
 import pytest
 import numpy as np
 
-# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
 from vseq.models.wavenet import CausalConv1d, DilatedCausalConv1d
+
+
+LOGGER = logging.getLogger(name=__file__)
 
 
 CAUSAL_RESULT = [
@@ -32,9 +31,9 @@ def causal_conv(data, in_channels, out_channels, print_result=True):
 
     output = conv(data)
 
-    print('Causal convolution ---')
+    LOGGER.debug('Causal convolution ---')
     if print_result:
-        print('    {0}'.format(output.data.numpy().astype(int)))
+        LOGGER.debug('    {0}'.format(output.data.numpy().astype(int)))
 
     return output
 
@@ -45,9 +44,9 @@ def dilated_causal_conv(step, data, channels, dilation=1, print_result=True):
 
     output = conv(data)
 
-    print('{0} step is OK: dilation={1}, size={2}'.format(step, dilation, output.shape))
+    LOGGER.debug('{0} step is OK: dilation={1}, size={2}'.format(step, dilation, output.shape))
     if print_result:
-        print('    {0}'.format(output.data.numpy().astype(int)))
+        LOGGER.debug('    {0}'.format(output.data.numpy().astype(int)))
 
     return output
 
@@ -59,9 +58,9 @@ def generate_x():
     x = np.reshape(x, [1, 2, 16])  # [batch, channel, timestep]
     x = torch.autograd.Variable(torch.from_numpy(x))
 
-    print('Input size={0}'.format(x.shape))
-    print(x.data.numpy().astype(int))
-    print('-'*80)
+    LOGGER.debug('\nInput size={0}'.format(x.shape))
+    LOGGER.debug(x.data.numpy().astype(int))
+    LOGGER.debug('-'*80)
 
     return x
 

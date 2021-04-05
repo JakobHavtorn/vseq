@@ -38,7 +38,7 @@ class DilatedCausalConv1d(torch.nn.Module):
 
 
 class CausalConv1d(torch.nn.Module):
-    """Causal Convolution for WaveNet"""
+    """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and same padding)"""
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -60,11 +60,12 @@ class CausalConv1d(torch.nn.Module):
 
 class ResidualBlock(torch.nn.Module):
     def __init__(self, res_channels, skip_channels, dilation):
-        """
-        Residual block
-        :param res_channels: number of residual channel for input, output
-        :param skip_channels: number of skip channel for output
-        :param dilation:
+        """Residual block
+
+        Args:
+            res_channels (int): number of residual channel for input, output
+            skip_channels (int): number of skip channel for output
+            dilation (int): amount of dilation
         """
         super().__init__()
 
@@ -102,8 +103,7 @@ class ResidualBlock(torch.nn.Module):
 
 class ResidualStack(torch.nn.Module):
     def __init__(self, layer_size, stack_size, res_channels, skip_channels):
-        """
-        Stack residual blocks by layer and stack size
+        """Stack residual blocks by layer and stack size
 
         Args:
             layer_size (int): Number of stacked residual blocks (k). Dilations chosen as 2, 4, 8, 16, 32, 64...
@@ -156,7 +156,7 @@ class ResidualStack(torch.nn.Module):
 
 class DenseNet(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
-        """The last network of WaveNet. Outputs log probabilities of each frame value class.
+        """The last network of WaveNet. Outputs log probabilities of frame classes.
 
         Args:
             in_channels (int): Number of input channels
