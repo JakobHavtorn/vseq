@@ -4,8 +4,11 @@ description: Bayesian hyperparameter optimization for Bowman VAE
 project: vseq
 method: bayes
 metric:
-  name: ptb_valid.elbo
+  name: elbo_valid
   goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 3
 parameters:
   lr:
     min: 0.0001
