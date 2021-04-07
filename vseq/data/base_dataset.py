@@ -12,8 +12,21 @@ from .load import EXTENSIONS_TO_LOADFCN
 from .datapaths import DATAPATHS_MAPPING
 
 
+def memoize(func):
+    cache = dict()
+
+    def memoized_func(*args):
+        if args in cache:
+            return cache[args]
+        result = func(*args)
+        cache[args] = result
+        return result
+
+    return memoized_func
+
+
 class BaseDataset(Dataset):
-    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True):
+    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False):
         """Dataset class that serves examples from files listed in a `source` as defined by `modalities`.
 
         `modalities` defines how to obtain an example from a specific file extension via a `Transform` and a `Batcher`.
@@ -27,12 +40,16 @@ class BaseDataset(Dataset):
         self.source = source
         self.extensions, self.transforms, self.batchers = zip(*modalities)
         self.sort = sort
+        self.cache = cache
 
         self.num_modalities = len(modalities)
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.unique_extensions = set(self.extensions)
         self.examples = self.load_examples(self.source_filepath)
+
+        if self.cache:
+            self.getitem = memoize(self.getitem)
 
     @staticmethod
     def load_examples(source_filepath):
@@ -42,6 +59,9 @@ class BaseDataset(Dataset):
         return examples
 
     def __getitem__(self, idx):
+        return self.getitem(idx)
+
+    def getitem(self, idx):
         example_path = self.examples[idx]
 
         # Load data for each modality

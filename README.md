@@ -13,3 +13,10 @@ pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --ed
 nbstripout --install
 ```
 
+## wandb sweeps
+
+See `experiments/sweep_bowman.yaml`
+
+> `wandb sweep experiments/sweeps/sweep_bowman.yaml`
+
+> `wandb agent <sweep-id>`

@@ -15,7 +15,7 @@ from .modules import CausalConv1d, ResidualStack, DenseNet
 from ..base_module import BaseModule
 
 
-Output = namedtuple("Output", ["loss", "likelihood", "logits", "categorical"])
+Output = namedtuple("Output", ["loss", "ll", "logits", "categorical"])
 
 
 class InputSizeError(Exception):
@@ -135,11 +135,11 @@ class WaveNet(BaseModule):
 
         output = self.densenet(output)
 
-        loss, likelihood = self.compute_loss(x, x_sl, output)
+        loss, ll = self.compute_loss(x, x_sl, output)
 
         categorical = D.Categorical(logits=output.transpose(1, 2))
 
-        output = Output(loss=loss, likelihood=likelihood, logits=output, categorical=categorical)
+        output = Output(loss=loss, ll=ll, logits=output, categorical=categorical)
 
         return loss, output
 

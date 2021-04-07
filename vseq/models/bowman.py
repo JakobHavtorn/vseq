@@ -18,16 +18,17 @@ from vseq.utils.variational import kl_divergence_mc
 from .base_module import BaseModule
 
 
-Output = namedtuple("Output", ["loss", "elbo", "ll", "kl", "ll_twise", "kl_dwise", "p_x", "q_z", "p_z", "z"])
+Output = namedtuple("Output", ["loss", "elbo", "rec", "kl", "rec_twise", "kl_dwise", "p_x", "q_z", "p_z", "z"])
 
 
 class Bowman(BaseModule):
-    def __init__(self, num_embeddings: int, embedding_dim: int, hidden_size: int, delimiter_token_idx: int):
+    def __init__(self, num_embeddings: int, embedding_dim: int, hidden_size: int, latent_dim: int, delimiter_token_idx: int):
         super().__init__()
 
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
+        self.latent_dim = latent_dim
 
         self.std_activation = nn.Softplus(beta=np.log(2))
         self.std_activation_inverse = vseq.modules.activations.InverseSoftplus(beta=np.log(2))
@@ -48,7 +49,8 @@ class Bowman(BaseModule):
             bidirectional=False,
         )
 
-        self.h_to_q = nn.Linear(hidden_size, 2 * hidden_size)
+        self.h_to_z = nn.Linear(hidden_size, 2 * latent_dim)
+        self.z_to_h = nn.Linear(latent_dim, hidden_size)
 
         self.lstm_decode = nn.LSTM(
             input_size=embedding_dim,
@@ -62,7 +64,7 @@ class Bowman(BaseModule):
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
-        prior_logits = torch.cat([torch.zeros(hidden_size), torch.ones(hidden_size)])
+        prior_logits = torch.cat([torch.zeros(latent_dim), torch.ones(latent_dim)])
         self.register_buffer("prior_logits", prior_logits)
 
         # TODO WordDropout as module
@@ -94,7 +96,16 @@ class Bowman(BaseModule):
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl)
 
         output = Output(
-            loss=loss, elbo=elbo, ll=log_prob, kl=kl, ll_twise=log_prob_twise, kl_dwise=kl_dwise, p_x=p_x, q_z=q_z, p_z=p_z, z=z
+            loss=loss,
+            elbo=elbo,
+            rec=log_prob,
+            kl=kl,
+            rec_twise=log_prob_twise,
+            kl_dwise=kl_dwise,
+            p_x=p_x,
+            q_z=q_z,
+            p_z=p_z,
+            z=z,
         )
         return loss, output
 
@@ -107,7 +118,7 @@ class Bowman(BaseModule):
         h_t = h_t.transpose(0, 1)  # (T=1, B, D) --> (B, T=1, D)
 
         # Compute and sample from q(z|x)
-        q_z_logits = self.h_to_q(h_t)
+        q_z_logits = self.h_to_z(h_t)
         mu, log_sigma = q_z_logits.chunk(2, dim=2)
         sigma = self.std_activation(log_sigma)
         q_z = D.Normal(mu, sigma)
@@ -119,10 +130,12 @@ class Bowman(BaseModule):
         Computes log-likelihood for x under p(x|z).
         """
         # Prepare decoder initial states
-        h_0 = z.transpose(0, 1)  # (B, T, D) -> (T, B, D)
+        h_0 = self.z_to_h(z.transpose(0, 1))  # (B, T, D) -> (T, B, D)
         c_0 = torch.zeros_like(h_0)
 
         # Prepare inputs (x) and targets (y)
+        # import IPython; IPython.embed()
+        y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         if self.training:
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
             mask[:, 0] = False  # We never mask the start token - or do we?
@@ -138,7 +151,6 @@ class Bowman(BaseModule):
 
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
         p = D.Categorical(logits=p_logits)
-        y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         seq_mask = sequence_mask(x_sl - 1, dtype=float).to(self.device)
         log_prob = p.log_prob(y) * seq_mask
 

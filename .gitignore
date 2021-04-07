@@ -138,3 +138,6 @@ settings.json
 
 # Pytorch checkpoint files
 *.pt
+
+# wandb
+wandb
