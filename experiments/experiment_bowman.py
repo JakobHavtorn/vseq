@@ -23,7 +23,6 @@ from vseq.data.transforms import EncodeInteger
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import LLMetric, KLMetric, PerplexityMetric, Tracker
 from vseq.utils.rand import set_seed
-from vseq.utils.training import epochs
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -175,4 +174,5 @@ for epoch in tracker.epochs(args.epochs):
     # plt.savefig('batch_elbo.pdf')
     # plt.cla()
 
+    wandb.log({'elbo_valid': getattr(tracker.sources, val_dataset.source).elbo})
     tracker.log()
