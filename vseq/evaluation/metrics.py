@@ -1,6 +1,6 @@
 import math
 
-from typing import Optional, Union, List
+from typing import Optional, Set, Union
 
 import torch
 
@@ -8,144 +8,162 @@ import torch
 class Metric:
     base_tags = set()
 
-    def __init__(self, name: str, tags: set, accumulate: bool, keep_on_device: bool):
+    def __init__(
+        self,
+        name: str, tags:
+        set):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
-        self.accumulate = accumulate
-        self.keep_on_device = keep_on_device
-        self.accumulated_values = []
 
     @property
-    def log_value(self):
+    def value(self):
         raise NotImplementedError()
 
     @property
     def str_value(self):
         raise NotImplementedError()
-
-    def _accumulate(self, value: Union[torch.Tensor, float]):
-        if not self.keep_on_device:
-            value = value.cpu()
-
-        if isinstance(value, torch.Tensor):
-            value = value.tolist()
-
-        self.accumulated_values.append(value)
 
     def update(self, value: torch.Tensor):
         raise NotImplementedError()
 
-    def reset(self):
-        self.accumulated_values = []
 
-
-class RunningMean(Metric):
+class RunningMeanMetric(Metric):
     _str_value_fmt = "<10.3"
 
-    def __init__(self, name: str, tags: set, accumulate: bool = False, keep_on_device: bool = False):
-        """RunningMean computes a cumulative sum by default and weighted sum via the `weight` argument.
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str,
+        tags: Set[str],
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        device: torch.device = None,
+    ):
+        super().__init__(name=name, tags=tags)
 
-        If a batch of metrics are passed to `update` it first reduces by the mean.
+        values = torch.FloatTensor([values]) if isinstance(values, float) else values
 
-        Args:
-            name (str): Name of the metric
-            tags (set): Set of tags of the metric
-            accumulate (bool, optional): If True, keep all values passed to `update`. Defaults to False.
-            keep_on_device (bool, optional): If True, keep all values on their device. Defaults to False.
-        """
-        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
-        self._running = 0
-        self._weight = 0
+        if isinstance(reduce_by, torch.Tensor):
+            reduce_by = reduce_by.sum()
+        elif isinstance(reduce_by, float):
+            reduce_by = torch.FloatTensor([reduce_by])
+        else:
+            reduce_by = torch.FloatTensor([values.numel()])
+
+        if isinstance(weight_by, torch.Tensor):
+            weight_by = weight_by.sum()
+        elif isinstance(weight_by, float):
+            weight_by = torch.FloatTensor([weight_by])
+        else:
+            weight_by = reduce_by
+
+        device = device or values.device
+
+        values = values.to(device)
+        reduce_by = reduce_by.to(device)
+        weight_by = weight_by.to(device)
+
+        values = values.sum() if isinstance(values, torch.Tensor) else values
+
+        self.device = device
+        self.weight_by = weight_by
+        self._value = values / reduce_by  # Reduce within batch
+
+    def to(self, device: torch.device):
+        self.device = device
+        self._value = self._value.to(device)
+        self.weight_by = self.weight_by.to(device)
+        return self
 
     @property
-    def log_value(self):
-        return self._running
+    def value(self):
+        return self._value.item()
 
     @property
     def str_value(self):
-        return f"{self.log_value:{self._str_value_fmt}f}"
+        return f"{self.value:{self._str_value_fmt}f}"
 
-    def update(
-        self,
-        value: torch.Tensor,
-        reduce_by: Optional[torch.Tensor] = None,
-        weight_by: Optional[torch.Tensor] = None,
-    ):
-        """Update the running statistic (running mean by default).
+    def update(self, metric: Metric):
+        """Update the running mean statistic.
 
         Args:
-            value (torch.Tensor): Value by which to update the statistic.
-            reduce_by (Optional[torch.Tensor]): Weight used to reduce `value`. Defaults to `value.numel()`.
-            weight_by (Optional[torch.Tensor]): Weight of reduced `value` in the running statistic. Defaults to `reduce_by`.
+            metric (RunningMeanMetric): The running mean metric to update with
         """
+        d = self.weight_by + metric.weight_by
+        w1 = self.weight_by / d
+        w2 = metric.weight_by / d
 
-        if self.accumulate:
-            self.accumulate(value)
-        
-        reduce_by = value.numel() if reduce_by is None else reduce_by.sum().cpu().item()
-        weight_by = weight_by or reduce_by
+        self._value = self._value * w1 + metric._value * w2  # Reduce between batches (over entire epoch)
 
-        value = value.sum().cpu().item() / reduce_by  # Reduce within batch
-
-        self._weight += weight_by
-
-        weight_value = weight_by / self._weight
-        weight_running = (self._weight - weight_by) / self._weight
-        self._running = (
-            value * weight_value + self._running * weight_running
-        )  # Reduce between batches (over entire epoch)
-
-    def reset(self):
-        super().reset()
-        self._running = 0
-        self._weight = 0
+        self.weight_by = d
 
 
-class LLMetric(RunningMean):
-    base_tags = {"likelihoods"}
+class LLMetric(RunningMeanMetric):
+    base_tags = {"log_likelihoods"}
 
-    def __init__(self, name: str = "ll", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
-        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str = "ll",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        device: torch.device = None
+    ):
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
 
 
-class KLMetric(RunningMean):
+class KLMetric(RunningMeanMetric):
     base_tags = {"kl_divergences"}
 
-    def __init__(self, name: str = "kl", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
-        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
-
-
-class BitsPerDimMetric(RunningMean):
-    base_tags = set()
-    # _str_value_fmt = "<5.2"
-
-    def __init__(self, name: str = "bpd", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
-        super().__init__(name, tags, accumulate=accumulate, keep_on_device=keep_on_device)
-
-    def update(
+    def __init__(
         self,
-        log_likelihood: Union[torch.Tensor, float],
-        reduce_by: Optional[torch.Tensor] = None,
-        weight_by: Optional[torch.Tensor] = None,
+        values: Union[torch.Tensor, float],
+        name: str = "kl",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        device: torch.device = None
     ):
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
 
-        log2_likelihood = -log_likelihood / math.log(2)
-        super().update(log2_likelihood, reduce_by=reduce_by, weight_by=weight_by)
+
+class BitsPerDimMetric(RunningMeanMetric):
+    base_tags = set()
+
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str = "bpd",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        device: torch.device = None
+    ):
+        values = - values / math.log(2)
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
 
 
 class PerplexityMetric(BitsPerDimMetric):
     """Perplexity computed as $2^{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}$
 
     Args:
-        RunningMean ([type]): [description]
+        RunningMeanMetric ([type]): [description]
     """
 
     base_tags = set()
-    # _str_value_fmt = "<8.2"
 
-    def __init__(self, name: str = "pp", tags: set = None, accumulate: bool = False, keep_on_device: bool = False):
-        super().__init__(name=name, tags=tags, accumulate=accumulate, keep_on_device=keep_on_device)
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str = "pp",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        device: torch.device = None
+    ):
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
 
     @property
-    def log_value(self):
-        return 2 ** self._running
+    def value(self):
+        return 2 ** self._value

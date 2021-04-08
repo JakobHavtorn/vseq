@@ -14,7 +14,7 @@ import vseq.utils.device
 
 from vseq.data import DataModule, BaseDataset
 from vseq.data.batcher import TextBatcher
-from vseq.data.datapaths import PENN_TREEBANK_VALID, PENN_TREEBANK_TRAIN, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
+from vseq.data.datapaths import PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.evaluation.metrics import BitsPerDimMetric
 from vseq.data.tokens import  DELIMITER_TOKEN
 from vseq.data.tokenizers import word_tokenizer
@@ -45,7 +45,6 @@ args, _ = parser.parse_known_args()
 wandb.init(
     project='vseq',
     group='bowman',
-    # name='original',
 )
 wandb.config.update(args)
 
@@ -113,14 +112,7 @@ print(model)
 # model.summary(x.shape, batch_size=1, x_sl=x_sl)
 
 
-metric_loss = LLMetric(name='loss', tags={'loss'})
-metric_elbo = LLMetric(name='elbo')
-metric_rec = LLMetric(name='rec')
-metric_kl = KLMetric()
-metric_pp = PerplexityMetric()
-metric_bpd = BitsPerDimMetric()
-
-tracker = Tracker(metric_rec, metric_kl, metric_elbo, metric_pp, metric_bpd)
+tracker = Tracker(device=torch.device('cpu'))
 
 
 # elbo_train = []
@@ -131,18 +123,13 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, output = model(x, x_sl, word_dropout_rate=args.word_dropout)  # TODO Fix word dropout error
+        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        metric_loss.update(loss, weight_by=output.elbo.numel())
-        metric_elbo.update(output.elbo)
-        metric_rec.update(output.rec)
-        metric_kl.update(output.kl)
-        metric_bpd.update(output.elbo, reduce_by=x_sl - 1)
-        metric_pp.update(output.elbo, reduce_by=x_sl - 1)
+        tracker.update(metrics)
 
         # elbo_train.append(loss.item())
 
@@ -150,17 +137,18 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(val_loader):
         x = x.to(device)
 
-        loss, output = model(x, x_sl, word_dropout_rate=0.0)
+        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=0.0)
 
-        metric_loss.update(loss, weight_by=output.elbo.numel())
-        metric_elbo.update(output.elbo)
-        metric_rec.update(output.rec)
-        metric_kl.update(output.kl)
-        metric_bpd.update(output.elbo, reduce_by=x_sl - 1)
-        metric_pp.update(output.elbo, reduce_by=x_sl - 1)
+        tracker.update(metrics)
 
         # elbo.append(loss.item())
 
+    text_examples = token_map.decode_batch(model.generate(n_samples=10))
+    table = wandb.Table(columns=["Idx", "Text"])
+    for i, text in enumerate(text_examples):
+        table.add_data(str(i), text)
+
+    wandb.log(table)
 
     # model.generate(n_samples=)
 
@@ -174,5 +162,5 @@ for epoch in tracker.epochs(args.epochs):
     # plt.savefig('batch_elbo.pdf')
     # plt.cla()
 
-    wandb.log({'elbo_valid': getattr(tracker.sources, val_dataset.source).elbo})
+    wandb.log({'elbo_valid': tracker.sources[PENN_TREEBANK_VALID]["elbo"]})
     tracker.log()

@@ -1,28 +1,25 @@
-from collections import namedtuple
-from typing import Tuple
+from types import SimpleNamespace
+from typing import Tuple, List
+from vseq.evaluation.metrics import KLMetric, PerplexityMetric
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from torch.nn.modules import dropout
-from torch.nn.modules.sparse import Embedding
-
 import vseq.modules
 import vseq.modules.activations
+
 from vseq.utils.operations import sequence_mask
-from vseq.data.tokens import START_TOKEN
-from vseq.utils.variational import kl_divergence_mc
+from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
 
 from .base_module import BaseModule
 
 
-Output = namedtuple("Output", ["loss", "elbo", "rec", "kl", "rec_twise", "kl_dwise", "p_x", "q_z", "p_z", "z"])
-
-
 class Bowman(BaseModule):
-    def __init__(self, num_embeddings: int, embedding_dim: int, hidden_size: int, latent_dim: int, delimiter_token_idx: int):
+    def __init__(
+        self, num_embeddings: int, embedding_dim: int, hidden_size: int, latent_dim: int, delimiter_token_idx: int
+    ):
         super().__init__()
 
         self.num_embeddings = num_embeddings
@@ -84,7 +81,9 @@ class Bowman(BaseModule):
         # loss = - log_prob.sum() / x_sl.sum() + beta * kl.mean()  # (1,)
         return loss, elbo, log_prob, kl
 
-    def forward(self, x, x_sl, word_dropout_rate: float = 0.75, beta: float = 1) -> Tuple[torch.Tensor, Output]:
+    def forward(
+        self, x, x_sl, word_dropout_rate: float = 0.75, beta: float = 1
+    ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
@@ -95,19 +94,26 @@ class Bowman(BaseModule):
 
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl)
 
-        output = Output(
+        metrics = [
+            LLMetric(name="loss", values=loss, weight_by=elbo.numel()),
+            LLMetric(name="elbo", values=elbo),
+            LLMetric(name="rec", values=log_prob),
+            KLMetric(name="kl", values=kl_dwise),
+            BitsPerDimMetric(name="bdp", values=elbo, reduce_by=x_sl - 1),
+            PerplexityMetric(name="pp", values=elbo, reduce_by=x_sl - 1),
+        ]
+
+        outputs = SimpleNamespace(
             loss=loss,
             elbo=elbo,
             rec=log_prob,
             kl=kl,
-            rec_twise=log_prob_twise,
-            kl_dwise=kl_dwise,
             p_x=p_x,
             q_z=q_z,
             p_z=p_z,
             z=z,
         )
-        return loss, output
+        return loss, metrics, outputs
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
         # Encode input sequence
