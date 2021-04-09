@@ -4,6 +4,8 @@ from typing import Optional, Set, Union
 
 import torch
 
+from vseq.utils.operations import detach_to_device, infer_device
+
 
 class Metric:
     base_tags = set()
@@ -36,48 +38,46 @@ class RunningMeanMetric(Metric):
         name: str,
         tags: Set[str],
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None,
-        device: torch.device = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None
     ):
         super().__init__(name=name, tags=tags)
 
-        values = torch.FloatTensor([values]) if isinstance(values, float) else values
+        numel = values.numel() if isinstance(values, torch.Tensor) else 1
+        value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
 
-        if isinstance(reduce_by, torch.Tensor):
-            reduce_by = reduce_by.sum()
-        elif isinstance(reduce_by, float):
-            reduce_by = torch.FloatTensor([reduce_by])
-        else:
-            reduce_by = torch.FloatTensor([values.numel()])
+        reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
 
-        if isinstance(weight_by, torch.Tensor):
-            weight_by = weight_by.sum()
-        elif isinstance(weight_by, float):
-            weight_by = torch.FloatTensor([weight_by])
-        else:
-            weight_by = reduce_by
+        weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
 
-        device = device or values.device
-
-        values = values.to(device)
-        reduce_by = reduce_by.to(device)
-        weight_by = weight_by.to(device)
-
-        values = values.sum() if isinstance(values, torch.Tensor) else values
-
-        self.device = device
         self.weight_by = weight_by
-        self._value = values / reduce_by  # Reduce within batch
+        self._value = value / reduce_by
 
-    def to(self, device: torch.device):
-        self.device = device
-        self._value = self._value.to(device)
-        self.weight_by = self.weight_by.to(device)
-        return self
+
+        # SUPPORT FOR ON-DEVICE METRICS
+        # device = device or infer_device(values)
+
+        # values = detach_to_device(values, device=device)
+
+        # if reduce_by is None:
+        #     reduce_by = torch.FloatTensor([values.numel()]).to(device)
+        # else:
+        #     reduce_by = detach_to_device(reduce_by, device=device).sum()
+
+        # if weight_by is None:
+        #     weight_by = reduce_by
+        # else:
+        #     weight_by = detach_to_device(weight_by, device=device).sum()
+
+        # values = values.sum()
+
+        # self.device = device
+        # self.weight_by = weight_by.item()
+        # self._value = (values / reduce_by).item()  # Reduce within batch
 
     @property
     def value(self):
-        return self._value.item()
+        # return self._value.item()
+        return self._value
 
     @property
     def str_value(self):
@@ -107,10 +107,9 @@ class LLMetric(RunningMeanMetric):
         name: str = "ll",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None,
-        device: torch.device = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class KLMetric(RunningMeanMetric):
@@ -122,10 +121,9 @@ class KLMetric(RunningMeanMetric):
         name: str = "kl",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None,
-        device: torch.device = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class BitsPerDimMetric(RunningMeanMetric):
@@ -137,11 +135,10 @@ class BitsPerDimMetric(RunningMeanMetric):
         name: str = "bpd",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None,
-        device: torch.device = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None
     ):
         values = - values / math.log(2)
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class PerplexityMetric(BitsPerDimMetric):
@@ -159,11 +156,11 @@ class PerplexityMetric(BitsPerDimMetric):
         name: str = "pp",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None,
-        device: torch.device = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by, device=device)
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
     @property
     def value(self):
+        # return 2 ** self._value.item()
         return 2 ** self._value
