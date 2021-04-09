@@ -52,31 +52,8 @@ class RunningMeanMetric(Metric):
         self.weight_by = weight_by
         self._value = value / reduce_by
 
-
-        # SUPPORT FOR ON-DEVICE METRICS
-        # device = device or infer_device(values)
-
-        # values = detach_to_device(values, device=device)
-
-        # if reduce_by is None:
-        #     reduce_by = torch.FloatTensor([values.numel()]).to(device)
-        # else:
-        #     reduce_by = detach_to_device(reduce_by, device=device).sum()
-
-        # if weight_by is None:
-        #     weight_by = reduce_by
-        # else:
-        #     weight_by = detach_to_device(weight_by, device=device).sum()
-
-        # values = values.sum()
-
-        # self.device = device
-        # self.weight_by = weight_by.item()
-        # self._value = (values / reduce_by).item()  # Reduce within batch
-
     @property
     def value(self):
-        # return self._value.item()
         return self._value
 
     @property
@@ -162,5 +139,4 @@ class PerplexityMetric(BitsPerDimMetric):
 
     @property
     def value(self):
-        # return 2 ** self._value.item()
         return 2 ** self._value
