@@ -45,6 +45,16 @@ class Tracker:
         }
 
     @property
+    def accumulated_values(self):
+        return {
+            source: {
+                metrics[0].name: [metric.value for metric in metrics]
+                for metrics in self.accumulated_metrics[source].values()
+            }
+            for source in self.accumulated_metrics.keys()
+        }
+
+    @property
     def best_metrics(self):
         """Return the best metrics according to `metric.get_best`"""
         best = dict()
@@ -144,9 +154,9 @@ class Tracker:
             values[source].update(self.best_values[source])
         values.update(extra_log_data)
 
+        # TODO Flatten `values` before logging to allow using sweeps on tracked metrics.
         wandb.log(values)
         self.metrics = defaultdict(dict)
-        self.accumulated_metrics = defaultdict(lambda: defaultdict(list))
 
     def update(self, metrics: Metric):
         names = [metric.name for metric in metrics]
