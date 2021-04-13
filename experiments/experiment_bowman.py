@@ -1,5 +1,6 @@
 import argparse
 import logging
+import random
 
 import torch
 import wandb
@@ -43,11 +44,14 @@ parser.add_argument("--prior_samples", default=32, type=int, help="number of pri
 parser.add_argument("--n_interpolations", default=10, type=int, help="number of interpolation samples for logging")
 parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
-parser.add_argument("--num_workers", default=2, type=int, help="number of dataloader workers")
-parser.add_argument("--seed", default=42, type=int, help="random seed")
+parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
+parser.add_argument("--seed", default='random', type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
+
+if args.seed == 'random':
+    args.seed = random.randint(a=1e11, b=1e12)
 
 wandb.init(
     entity="vseq",
@@ -119,11 +123,8 @@ print(model.summary(input_example=x, x_sl=x_sl))
 
 tracker = Tracker()
 
-
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
 
-# elbo_train = []
-# elbo = []
 beta_annealer = CosineAnnealer(n_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
 for epoch in tracker.epochs(args.epochs):
 
@@ -140,10 +141,6 @@ for epoch in tracker.epochs(args.epochs):
         tracker.update(metrics)
         beta_annealer.step()
 
-        # wandb.log(dict(beta=beta_annealer.value, batch=tracker.step), step=epoch, commit=False)
-
-        # elbo_train.append(loss.item())
-
     model.eval()
     for (x, x_sl), metadata in tracker(val_loader):
         x = x.to(device)
@@ -151,8 +148,6 @@ for epoch in tracker.epochs(args.epochs):
         loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
 
         tracker.update(metrics)
-
-        # elbo.append(loss.item())
 
     # Get samples from prior
     (x, x_sl), log_prob = model.generate(z=prior_samples)
@@ -186,13 +181,3 @@ for epoch in tracker.epochs(args.epochs):
         interpolations=interpolations_table,
         elbo_valid=sweep_value,
     )
-
-    # import matplotlib.pyplot as plt
-
-    # plt.plot(elbo_train)
-    # plt.savefig('batch_elbo_train.pdf')
-    # plt.cla()
-
-    # plt.plot(elbo)
-    # plt.savefig('batch_elbo.pdf')
-    # plt.cla()
