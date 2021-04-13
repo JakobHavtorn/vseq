@@ -1,11 +1,11 @@
 import os
 
-from typing import Union, Optional
+from typing import Optional
 
 import torch
 
 
-def get_device(idx: Union[int, None] = None):
+def get_device(idx: Optional[int] = None):
     """Return the device to run on (cpu or cuda).
 
     If `CUDA_VISIBLE_DEVICES` is not set we assume that no devices are wanted and return the CPU.
@@ -36,6 +36,7 @@ def test_gpu_functionality():
         print("Allocated:", round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1), "GB")
         print("Cached:   ", round(torch.cuda.memory_reserved(0) / 1024 ** 3, 1), "GB")
         print("CUDA version:", torch.version.cuda)
+        torch.zeros(1).cuda()
         return True
     else:
         # provoke an error
