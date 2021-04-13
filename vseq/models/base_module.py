@@ -116,11 +116,11 @@ class BaseModule(nn.Module):
         s = 'kwargs={\n' + '  ' + s + '\n}'
         return s
 
-    def summary(self, input_size, batch_size=1, input_dtype=torch.FloatTensor, device=None, tb_summary_writer=None, **forward_kwargs):
+    def summary(self, input_example=None, input_size=None, batch_size=1, input_dtype=torch.FloatTensor, device=None, tb_summary_writer=None, **forward_kwargs):
         """Return a summary of the model"""
         if tb_summary_writer:
             # NOTE May have to make forward pass deterministic
             x = torch.randn(input_size)
             tb_summary_writer.add_graph(self, (x,))  # check_trace of jit.trace should be false since model is stochastic
 
-        return summary(self, input_size, batch_size=batch_size, input_dtype=input_dtype, device=device, **forward_kwargs)
+        return summary(self, input_example=input_example, input_size=input_size, batch_size=batch_size, input_dtype=input_dtype, device=device, **forward_kwargs)

@@ -1,12 +1,9 @@
 import argparse
 import logging
-import tqdm
 
 import torch
-import torchvision
 
 from torch.utils.data import DataLoader
-from torchaudio.transforms import MelSpectrogram
 
 import vseq
 import vseq.data
@@ -15,17 +12,18 @@ import vseq.training
 import vseq.utils
 import vseq.utils.device
 
-from vseq.data import transforms
-from vseq.data import DataModule, BaseDataset
-from vseq.data.collate import collate_audio, collate_spectrogram, collate_text
-from vseq.data.transforms import EncodeInteger, Compose, Scale, RandomSegment
+from vseq.data import BaseDataset, DataModule, transforms
+from vseq.data.batcher import AudioBatcher
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.text_cleaners import clean_librispeech
-from vseq.data.tokens import ENGLISH_STANDARD, DELIMITER_TOKEN
-from vseq.data.tokenizers import char_tokenizer
 from vseq.data.token_map import TokenMap
-from vseq.data.samplers import EvalSampler, FrameSampler
+from vseq.data.tokenizers import char_tokenizer
+from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD
+from vseq.data.transforms import Compose, EncodeInteger, RandomSegment, Scale
+from vseq.evaluation import LLMetric, Aggregator
 from vseq.utils.rand import set_seed
+from vseq.utils.training import epochs
+
 
 torch.autograd.set_detect_anomaly(True)
 LOGGER = logging.getLogger(name=__file__)
@@ -33,11 +31,11 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
 parser.add_argument("--lr", default=2e-3, type=float, help="base learning rate")
-parser.add_argument("--test_every", default=1, type=int, help="test every x epochs")
+# parser.add_argument("--test_every", default=1, type=int, help="test every x epochs")
 parser.add_argument("--seed", default=42, type=int, help="random seed")
 parser.add_argument("--num_workers", default=16, type=int, help="number of dataloader workers")
-parser.add_argument("--task_name", default="", type=str, help="run task_name suffix")
-parser.add_argument("--task_tags", default=[], type=str, nargs="+", help="tags for the task")
+# parser.add_argument("--task_name", default="", type=str, help="run task_name suffix")
+# parser.add_argument("--task_tags", default=[], type=str, nargs="+", help="tags for the task")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
@@ -56,8 +54,7 @@ PennTreebankTransform = transforms.Compose(
 )
 
 modalities = [
-    ("flac", Compose(RandomSegment(length=64000), Scale(-1, 1)), collate_audio),
-    # ("flac", Scale(-1, 1), collate_audio),
+    ("flac", Compose(RandomSegment(length=64000), Scale(-1, 1)), AudioBatcher()),
 ]
 
 
@@ -109,35 +106,85 @@ print(summary)
 
 model.load('./wavenet')
 
-x = model.generate(n_samples=1, n_frames=16000)
+# x = model.generate(n_samples=1, n_frames=16000)
 
-torchaudio.save('./wavenet/sample.wav', x[0].cpu(), sample_rate=16000, channels_first=True, compression=None)
+# torchaudio.save('./wavenet/sample.wav', x[0].cpu(), sample_rate=16000, channels_first=True, compression=None)
 
 import IPython; IPython.embed()
 
-try:
-    for epoch in range(args.epochs):
 
-        mean_loss = 0
-        for step, ((x, x_sl), metadata) in enumerate(train_loader, start=1):
-            x = x.to(device)
+metric_ll = LLMetric(tags={'loss'})
+aggregator = Aggregator(metric_ll)
 
-            # print(x.shape, x.numel)
+for epoch in epochs(args.epochs):
 
-            loss, output = model(x, x_sl)
+    aggregator.set(train_dataset.source)
+    for (x, x_sl), metadata in train_loader:
+        x = x.to(device)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        loss, output = model(x, x_sl)
 
-            mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-            print(f"{epoch=} | batch={step}/{len(train_loader)} | {loss=:.3f} | {mean_loss=:.3f}", end='\r')
-        model.save('./wavenet')
+        metric_ll.update(output.ll, weight=output.ll.numel())
 
-        print()
+        aggregator.print()
 
-except KeyboardInterrupt:
-    pass
+    aggregator.log()
+    aggregator.reset()
 
-import IPython; IPython.embed(using=False)
+    aggregator.set(val_dataset.source)
+    for (x, x_sl), metadata in train_loader:
+        x = x.to(device)
+
+        loss, output = model(x, x_sl)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        metric_ll.update(output.ll, weight=output.ll.numel())
+
+        aggregator.print()
+
+    aggregator.log()
+    aggregator.reset()
+
+
+
+
+
+
+
+
+
+
+
+# try:
+#     for epoch in range(args.epochs):
+
+#         mean_loss = 0
+#         for step, ((x, x_sl), metadata) in enumerate(train_loader, start=1):
+#             x = x.to(device)
+
+#             # print(x.shape, x.numel)
+
+#             loss, output = model(x, x_sl)
+
+#             optimizer.zero_grad()
+#             loss.backward()
+#             optimizer.step()
+
+#             mean_loss = mean_loss * ((step - 1) / step) + loss.item() / step
+
+#             print(f"{epoch=} | batch={step}/{len(train_loader)} | {loss=:.3f} | {mean_loss=:.3f}", end='\r')
+#         model.save('./wavenet')
+
+#         print()
+
+# except KeyboardInterrupt:
+#     pass
+
+# import IPython; IPython.embed(using=False)

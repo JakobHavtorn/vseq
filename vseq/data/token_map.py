@@ -75,6 +75,7 @@ class TokenMap:
     ):
         if isinstance(indices_batch, torch.Tensor):
             indices_batch = indices_batch.tolist()
+        assert len(indices_batch) == len(sl), "Batch must be first in `indices_batch`"
 
         batch = []
         N = len(sl)

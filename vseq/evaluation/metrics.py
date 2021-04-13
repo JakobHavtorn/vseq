@@ -1,32 +1,51 @@
 import math
 
-from typing import Optional, Set, Union
+from copy import deepcopy
+from typing import List, Optional, Set, Union
 
 import torch
 
-from vseq.utils.operations import detach_to_device, infer_device
 
 
 class Metric:
     base_tags = set()
+    _str_value_fmt = "<10.3"
 
-    def __init__(
-        self,
-        name: str, tags:
-        set):
+    def __init__(self, name: str, tags: set):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
 
     @property
     def value(self):
+        """Primary value of the metric to be used for logging"""
         raise NotImplementedError()
 
     @property
     def str_value(self):
+        """String representation of `value` to be used for e.g. console printing"""
         raise NotImplementedError()
 
-    def update(self, value: torch.Tensor):
+    def update(self, metric):
+        """Update the metric (e.g. running mean)"""
         raise NotImplementedError()
+
+    @staticmethod
+    def get_best(metrics):
+        """Return the best from list of metrics"""
+        return None
+
+    def copy(self):
+        return deepcopy(self)
+
+
+@staticmethod
+def min_value(metrics: List[Metric]):
+    return min(metrics, key=lambda m: m.value)
+
+
+@staticmethod
+def max_value(metrics: List[Metric]):
+    return max(metrics, key=lambda m: m.value)
 
 
 class RunningMeanMetric(Metric):
@@ -38,7 +57,7 @@ class RunningMeanMetric(Metric):
         name: str,
         tags: Set[str],
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
         super().__init__(name=name, tags=tags)
 
@@ -77,6 +96,7 @@ class RunningMeanMetric(Metric):
 
 class LLMetric(RunningMeanMetric):
     base_tags = {"log_likelihoods"}
+    get_best = max_value
 
     def __init__(
         self,
@@ -84,7 +104,7 @@ class LLMetric(RunningMeanMetric):
         name: str = "ll",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
         super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
@@ -98,13 +118,14 @@ class KLMetric(RunningMeanMetric):
         name: str = "kl",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
         super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class BitsPerDimMetric(RunningMeanMetric):
     base_tags = set()
+    get_best = min_value
 
     def __init__(
         self,
@@ -112,9 +133,9 @@ class BitsPerDimMetric(RunningMeanMetric):
         name: str = "bpd",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
-        values = - values / math.log(2)
+        values = -values / math.log(2)
         super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
@@ -126,6 +147,7 @@ class PerplexityMetric(BitsPerDimMetric):
     """
 
     base_tags = set()
+    get_best = min_value
 
     def __init__(
         self,
@@ -133,7 +155,7 @@ class PerplexityMetric(BitsPerDimMetric):
         name: str = "pp",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
-        weight_by: Optional[Union[torch.Tensor, float]] = None
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
         super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 

@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Any, Union, List
 
 import torch
 
@@ -80,28 +81,7 @@ def log_sum_exp(tensor, axis=-1, dim=None, sum_op=torch.mean):
     return torch.log(sum_op(torch.exp(tensor - maximum), axis=axis, keepdim=False) + 1e-8) + maximum
 
 
-def detach(x):
-    """Detach a tensor from the computational graph"""
-    if x is None:
-        return None
-    if isinstance(x, torch.Tensor):
-        return x.detach()
-
-    return x
-
-
-def detach_to_device(x, device):
-    """Detach a tensor from the computational graph, clone and place it on the given device"""
-    if x is None:
-        return None
-
-    if isinstance(x, torch.Tensor):
-        return x.detach().clone().to(device)
-
-    return torch.tensor(x, device=device, dtype=torch.float)
-
-
-def sequence_mask(seq_lens, max_len=None, dtype=torch.bool, device=None):
+def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch.bool, device: torch.device = None):
     """
     Creates a binary sequence mask where all entries up to seq_lens are 1 and the remaining are 0.
 
@@ -113,11 +93,40 @@ def sequence_mask(seq_lens, max_len=None, dtype=torch.bool, device=None):
     Returns:
         Tensor: The sequence mask of shape NT.
     """
-    device = device if device is not None else seq_lens.device
-    if isinstance(seq_lens, Iterable):
+    # import IPython; IPython.embed()
+    device = seq_lens.device if device is None else device
+    if not isinstance(seq_lens, torch.Tensor):
         seq_lens = torch.LongTensor(seq_lens) if device == torch.device('cpu') else torch.cuda.LongTensor(seq_lens)
+    elif device != seq_lens.device:
+        seq_lens = seq_lens.to(device)
 
     N = seq_lens.size(0)
     T = max_len or seq_lens.max()
     seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat((N, 1)) < seq_lens.unsqueeze(1)
     return seq_mask.to(dtype)
+
+
+def detach(x):
+    """Detach a tensor from the computational graph"""
+    if isinstance(x, torch.Tensor):
+        return x.detach()
+
+    return x
+
+
+def detach_to_device(x: Union[torch.Tensor, float, List[float], None], device: torch.device):
+    """Detach a tensor from the computational graph, clone and place it on the given device"""
+    if x is None:
+        return None
+
+    if isinstance(x, torch.Tensor):
+        return x.detach().clone().to(device)
+
+    return torch.tensor(x, device=device, dtype=torch.float)
+
+
+def infer_device(x: Any):
+    """Infer the device of any object (CPU for any non-torch object)"""
+    if isinstance(x, torch.Tensor):
+        return x.device
+    return torch.device('cpu')

@@ -141,3 +141,5 @@ settings.json
 
 # wandb
 wandb
+
+pytest

@@ -92,13 +92,13 @@ class Bowman(BaseModule):
 
         log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
 
-        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl)
+        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl, beta=beta)
 
         metrics = [
             LLMetric(name="loss", values=loss, weight_by=elbo.numel()),
             LLMetric(name="elbo", values=elbo),
             LLMetric(name="rec", values=log_prob),
-            KLMetric(name="kl", values=kl_dwise),
+            KLMetric(name="kl", values=kl),
             BitsPerDimMetric(name="bdp", values=elbo, reduce_by=x_sl - 1),
             PerplexityMetric(name="pp", values=elbo, reduce_by=x_sl - 1),
         ]
@@ -108,7 +108,7 @@ class Bowman(BaseModule):
             elbo=elbo,
             rec=log_prob,
             kl=kl,
-            p_x=p_x,
+            p_x=p_x,  # NOTE Save 700 MB by not returning p_x
             q_z=q_z,
             p_z=p_z,
             z=z,
@@ -140,9 +140,8 @@ class Bowman(BaseModule):
         c_0 = torch.zeros_like(h_0)
 
         # Prepare inputs (x) and targets (y)
-        # import IPython; IPython.embed()
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
-        if self.training:
+        if self.training and word_dropout_rate > 0:
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
             mask[:, 0] = False  # We never mask the start token - or do we?
             x = x.clone()  # We can't modify x in-place
@@ -155,26 +154,30 @@ class Bowman(BaseModule):
 
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
+        # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
-        p = D.Categorical(logits=p_logits)
-        seq_mask = sequence_mask(x_sl - 1, dtype=float).to(self.device)
-        log_prob = p.log_prob(y) * seq_mask
+        seq_mask = sequence_mask(x_sl - 1, dtype=float, device=p_logits.device)
+        p_x = D.Categorical(logits=p_logits)
+        log_prob = p_x.log_prob(y) * seq_mask
+        # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB
 
-        return log_prob, p
+        return log_prob, p_x
 
-    def generate(self, z: torch.Tensor = None, n_samples: int = 1, t_max: int = 100):
+    def generate(self, z: torch.Tensor = None, n_samples: int = 1, t_max: int = 100, use_mode: bool = False):
         """
         Generates a sequence by autoregressively sampling from p(x_t|x_<t, z).
         """
         # Setup initial loop conditions
+        n_samples = n_samples if z is None else z.shape[0]
         x_t = torch.full([1, n_samples], self.delimiter_token_idx, device=self.device)
-        h_t = z if z is not None else self.prior().sample(torch.Size([1, n_samples]))
+        z = self.prior().sample(torch.Size([n_samples, 1])) if z is None else z  # (B, T, D)
+        h_t = self.z_to_h(z.transpose(0, 1))  # (B, T, D) -> (T, B, D)
         c_t = torch.zeros_like(h_t)
+
+        # Sample x from p(x|z)
         log_prob, x, x_sl = [], [], torch.zeros(n_samples, dtype=torch.int)
         seq_active = torch.ones(n_samples, dtype=torch.int)
         all_ended, t = False, 0  # Used to condition while loop
-
-        # Sample x from p(x|z)
         while not all_ended and t < t_max:
 
             # Sample x_t from p(x_t|z, x_<t)
@@ -182,7 +185,7 @@ class Bowman(BaseModule):
             _, (h_t, c_t) = self.lstm_decode(e_t, (h_t, c_t))
             p_logits = self.output(h_t)  # labo: again, we could use our embedding matrix here
             p = D.Categorical(logits=p_logits)
-            x_t = p.sample()
+            x_t = p.logits.argmax(dim=-1) if use_mode else p.sample()
             log_prob_t = p.log_prob(x_t)
 
             # Update outputs
@@ -198,11 +201,11 @@ class Bowman(BaseModule):
             t += 1
             all_ended = torch.all(1 - seq_active).item()
 
-        seq_mask = sequence_mask(x_sl, dtype=int).T.to(self.device)
-        x = torch.cat(x) * seq_mask
-        log_prob = torch.cat(log_prob) * seq_mask.to(float)
+        seq_mask = sequence_mask(x_sl, dtype=int, device=self.device)
+        x = torch.cat(x).T * seq_mask
+        log_prob = torch.cat(log_prob).T * seq_mask.to(float)
 
-        return x, log_prob
+        return (x, x_sl), log_prob
 
 
 class WordDropout(nn.Module):

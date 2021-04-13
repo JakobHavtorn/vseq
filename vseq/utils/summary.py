@@ -70,14 +70,16 @@ def get_number_of_elements(shape):
 
 
 def time_forward_pass(forward, inputs, **forward_kwargs):
-    timer = timeit.Timer("forward(*inputs, **kwargs)", globals={"forward": forward, "inputs": inputs, "kwargs": forward_kwargs})
+    timer = timeit.Timer(
+        "forward(*inputs, **kwargs)", globals={"forward": forward, "inputs": inputs, "kwargs": forward_kwargs}
+    )
     number, time_per_repeat = timer.autorange()
     try:
         timings = timer.repeat(repeat=10, number=number)
         min_t, max_t, median = min(timings), max(timings), sorted(timings)[len(timings) // 2 - 1]
     except Exception:
         timer.print_exc()
-    return timings, {"min": min_t, "max": max_t, "median": median}
+    return {"min": min_t, "max": max_t, "median": median}
 
 
 def summary_to_string(summary, input_size, batch_size, gradient_factor, timing_stats=None):
@@ -141,12 +143,14 @@ def summary_to_string(summary, input_size, batch_size, gradient_factor, timing_s
 
 def summary(
     model,
-    input_size,
+    input_example=None,
+    input_size=None,
     batch_size=1,
     input_dtype=torch.FloatTensor,
     device=None,
     gradient_factor=2,
     debug=False,
+    time_forward_pass=False,
     **model_forward_kwargs,
 ):
     """Construct a summary of a nn.Module.
@@ -162,7 +166,6 @@ def summary(
     """
 
     def register_hook(module):
-
         def forward_pre_hook(module, input):
             class_name = str(module.__class__).split(".")[-1].split("'")[0]
 
@@ -178,14 +181,13 @@ def summary(
             key = module_idx + 1
 
             summary[key] = OrderedDict()
-            summary[key]['module_hash'] = hash(module)
+            summary[key]["module_hash"] = hash(module)
             summary[key]["key"] = key
             summary[key]["name"] = name
 
-
         def forward_hook(module, input, output):
             # Find the module added in the forward_pre_hook
-            module_idx = [key for key, layer in summary.items() if layer['module_hash'] == hash(module)]
+            module_idx = [key for key, layer in summary.items() if layer["module_hash"] == hash(module)]
             module_idx = module_idx[-1]
             module_unique_idx = module_ids.index(hash(module))
             key = module_idx
@@ -212,7 +214,7 @@ def summary(
             #         LOGGER.warning("If this call to 'summary' fails, it may be because of debug=True")
             #         print(header, end="")
             #     print(lines.split("\n")[-2])
-            # 
+            #
             # TODO Fix this bug which occurs in debug mode...
             #     ~/repos/infotropy/infotropy/utils/summary.py in summary_to_string(summary, input_size, batch_size, gradient_factor, timing_stats)
             #     98             layer,
@@ -222,22 +224,25 @@ def summary(
             #     102             n if len((n := str(summary[layer]["param_shapes"]))) < 40 else n[:37] + "...",
             # KeyError: 'input_shapes'
 
-
         # Register the hook except on "meta" modules holding other modules (TODO unless we want to do the graph thing)
         if not isinstance(module, nn.Sequential) and not isinstance(module, nn.ModuleList) and not (module == model):
             hooks.append(module.register_forward_pre_hook(forward_pre_hook))
             hooks.append(module.register_forward_hook(forward_hook))
 
+    assert input_example is None or input_size is None, "Give either input or input_size, not both."
 
     # multiple inputs to the network (convert input_size to list)
-    input_size = parse_input_size(input_size)
+    if input_size is not None:
+        input_size = parse_input_size(input_size)
+        # random input
+        x = [torch.rand(batch_size, *in_size).to(device) for in_size in input_size]
+    else:
+        input_size = input_example.shape[1:]
+        x = [input_example] if isinstance(input_example, torch.Tensor) else input_example
 
     if device is None:
         # device of first parameters in model
         device = next(model.parameters()).device
-
-    # random input
-    x = [torch.rand(batch_size, *in_size).to(device) for in_size in input_size]
 
     # create properties
     summary = OrderedDict()
@@ -256,7 +261,10 @@ def summary(
         h.remove()
 
     # time the forward pass
-    _, timing_stats = time_forward_pass(model.forward, x, **model_forward_kwargs)
+    if time_forward_pass:
+        timing_stats = time_forward_pass(model.forward, x, **model_forward_kwargs)
+    else:
+        timing_stats = {"min": 0, "max": 0, "median": 0}
 
     # TODO Return and print this as a pandas dataframe
     s, header, lines, extra = summary_to_string(summary, input_size, batch_size, gradient_factor, timing_stats)
