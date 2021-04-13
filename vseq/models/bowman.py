@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from typing import Tuple, List
 from vseq.evaluation.metrics import KLMetric, PerplexityMetric
 
+import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -18,7 +19,13 @@ from .base_module import BaseModule
 
 class Bowman(BaseModule):
     def __init__(
-        self, num_embeddings: int, embedding_dim: int, hidden_size: int, latent_dim: int, delimiter_token_idx: int
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        hidden_size: int,
+        latent_dim: int,
+        n_highway_blocks: int,
+        delimiter_token_idx: int,
     ):
         super().__init__()
 
@@ -26,11 +33,11 @@ class Bowman(BaseModule):
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
         self.latent_dim = latent_dim
+        self.n_highway_blocks = n_highway_blocks
+        self.delimiter_token_idx = delimiter_token_idx
 
         self.std_activation = nn.Softplus(beta=np.log(2))
         self.std_activation_inverse = vseq.modules.activations.InverseSoftplus(beta=np.log(2))
-
-        self.delimiter_token_idx = delimiter_token_idx
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
@@ -46,8 +53,19 @@ class Bowman(BaseModule):
             bidirectional=False,
         )
 
-        self.h_to_z = nn.Linear(hidden_size, 2 * latent_dim)
-        self.z_to_h = nn.Linear(latent_dim, hidden_size)
+        if n_highway_blocks > 0:
+            self.h_to_z = nn.Sequential(
+                vseq.modules.HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks),
+                nn.Linear(hidden_size, 2 * latent_dim),
+            )
+            self.z_to_h = nn.Sequential(
+                nn.Linear(latent_dim, hidden_size),
+                nn.Tanh(),
+                vseq.modules.HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks)
+            )
+        else:
+            self.h_to_z = nn.Linear(hidden_size, 2 * latent_dim)
+            self.z_to_h = nn.Linear(latent_dim, hidden_size)
 
         self.lstm_decode = nn.LSTM(
             input_size=embedding_dim,
@@ -99,7 +117,7 @@ class Bowman(BaseModule):
             LLMetric(name="elbo", values=elbo),
             LLMetric(name="rec", values=log_prob),
             KLMetric(name="kl", values=kl),
-            BitsPerDimMetric(name="bdp", values=elbo, reduce_by=x_sl - 1),
+            BitsPerDimMetric(name="bpd", values=elbo, reduce_by=x_sl - 1),
             PerplexityMetric(name="pp", values=elbo, reduce_by=x_sl - 1),
         ]
 

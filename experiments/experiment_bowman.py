@@ -3,6 +3,7 @@ import logging
 
 import torch
 import wandb
+import rich
 
 from torch.utils.data import DataLoader
 
@@ -20,7 +21,7 @@ from vseq.data.tokenizers import word_tokenizer
 from vseq.data.token_map import TokenMap
 from vseq.data.transforms import EncodeInteger
 from vseq.data.vocabulary import load_vocabulary
-from vseq.evaluation import LLMetric, KLMetric, PerplexityMetric, Tracker
+from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed
 from vseq.utils.argparsing import str2bool
 from vseq.training import CosineAnnealer
@@ -29,12 +30,13 @@ from vseq.training import CosineAnnealer
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--batch_size", default=32, type=int, help="batch size")
+parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--embedding_dim", default=353, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=191, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--latent_dim", default=13, type=int, help="dimensionality of latent space")
+parser.add_argument("--n_highway_blocks", default=4, type=int, help="number of Highway network blocks")
 parser.add_argument("--word_dropout", default=0.38, type=float, help="word dropout probability")
-parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--anneal_steps", default=5000, type=int, help="number of steps to anneal beta")
 parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--prior_samples", default=32, type=int, help="number of prior samples for logging")
@@ -53,6 +55,7 @@ wandb.init(
     group="bowman",
 )
 wandb.config.update(args)
+rich.print(vars(args))
 
 set_seed(args.seed)
 
@@ -100,6 +103,7 @@ model = vseq.models.Bowman(
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
     latent_dim=args.latent_dim,
+    n_highway_blocks=args.n_highway_blocks,
     delimiter_token_idx=delimiter_token_idx,
 )
 
