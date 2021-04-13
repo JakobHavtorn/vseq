@@ -103,7 +103,7 @@ model = vseq.models.Bowman(
     delimiter_token_idx=delimiter_token_idx,
 )
 
-wandb.watch(model)
+wandb.watch(model, log='all', log_freq=len(train_loader))
 
 model = model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
