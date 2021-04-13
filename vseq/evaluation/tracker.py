@@ -60,7 +60,7 @@ class Tracker:
     def best_values(self):
         best_metrics = self.best_metrics
         return {
-            source: {metric.name: metric.value for metric in best_metrics[source].values()}
+            source: {name: metric.value for name, metric in best_metrics[source].items()}
             for source in best_metrics.keys()
         }
 
