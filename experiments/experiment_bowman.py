@@ -45,13 +45,13 @@ parser.add_argument("--n_interpolations", default=10, type=int, help="number of 
 parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
-parser.add_argument("--seed", default='random', type=int, help="random seed")
+parser.add_argument("--seed", default=-1, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
 
-if args.seed == 'random':
-    args.seed = random.randint(a=1e11, b=1e12)
+if args.seed == -1:
+    args.seed = random.randint(a=0, b=2**32-1)
 
 wandb.init(
     entity="vseq",
