@@ -1,6 +1,4 @@
 black
-clearml
-clearml-agent
 gpustat
 ipdb
 ipython
@@ -23,4 +21,4 @@ torchaudio==0.8.0
 torchtext
 torchvision==0.9.0+cu111
 tqdm
-wandb
+wandb==0.10.25
