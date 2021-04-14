@@ -21,5 +21,6 @@ torchaudio==0.8.0
 torchtext
 torchvision==0.9.0+cu111
 tqdm
+uniplot
 wandb==0.10.25
-yaml
+pyyaml

@@ -1,0 +1,31 @@
+program: experiments/experiment_sweep_test.py
+name: Sweep Test 4 (Bayesian)
+description: Bayesian hyperparameter optimization for test of sweeps
+entity: vseq
+project: sweep_test
+method: bayes
+metric:
+  name: nested_metric.metric2  # best_metric
+  goal: maximize
+early_terminate:
+  type: hyperband  # https://arxiv.org/pdf/1603.06560.pdf
+  s: 2
+  eta: 3
+  max_iter: 27
+parameters:
+  start_value:
+    distribution: uniform
+    min: 0.0
+    max: 3.0
+  mid_value:
+    distribution: uniform
+    min: 3.0
+    max: 7.0
+  end_value:
+    distribution: uniform
+    min: 0.0
+    max: 4.0
+  noise_sigma:
+    distribution: uniform
+    min: 0.0
+    max: 2.0
