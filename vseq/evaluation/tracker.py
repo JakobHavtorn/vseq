@@ -178,6 +178,6 @@ class Tracker:
         """Yields the epoch index while printing epoch number and epoch delimiter."""
         for epoch in range(1, N + 1):
             self.epoch = epoch
-            rich.print(f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white]")
+            rich.print(f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white]")  # TODO Add date and time to line to far right
             yield epoch
             print("-" * (self.last_log_line_len or 50))
