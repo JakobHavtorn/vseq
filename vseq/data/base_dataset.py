@@ -1,3 +1,4 @@
+from enum import unique
 import os
 
 from typing import List, Tuple, Any
@@ -26,7 +27,7 @@ def memoize(func):
 
 
 class BaseDataset(Dataset):
-    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False):
+    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False, bundled: bool = True):
         """Dataset class that serves examples from files listed in a `source` as defined by `modalities`.
 
         `modalities` defines how to obtain an example from a specific file extension via a `Transform` and a `Batcher`.
@@ -65,12 +66,23 @@ class BaseDataset(Dataset):
         example_path = self.examples[idx]
 
         # Load data for each modality
+        input_data, unique_metadata = self._load_item(example_path)
+
+        # Transform modalities according to transforms
+        data, metadata = self._transform_item(input_data, unique_metadata)
+
+        if len(data) == 1:
+            return data[0], metadata[0]
+        return tuple(data), tuple(metadata)
+
+    def _load_item(self, example_path):
         input_data = dict()
         unique_metadata = dict()
         for ext in self.unique_extensions:
             input_data[ext], unique_metadata[ext] = EXTENSIONS_TO_LOADFCN[ext](example_path + f".{ext}")
+        return input_data, unique_metadata
 
-        # Transform modalities according to transforms
+    def _transform_item(self, input_data, unique_metadata):
         data = []
         metadata = []
         for ext, transform in zip(self.extensions, self.transforms):
@@ -79,10 +91,7 @@ class BaseDataset(Dataset):
 
             data.append(y)
             metadata.append(unique_metadata[ext])
-
-        if len(data) == 1:
-            return data[0], metadata[0]
-        return tuple(data), tuple(metadata)
+        return data, metadata
 
     def collate(self, batch: List[Tuple[Any, Any]]):
         """Arrange a list of outputs from `__getitem__` into a batch via the batcher of each transform"""
