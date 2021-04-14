@@ -30,6 +30,7 @@ from vseq.training import CosineAnnealer
 
 LOGGER = logging.getLogger(name=__file__)
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
@@ -44,26 +45,30 @@ parser.add_argument("--prior_samples", default=32, type=int, help="number of pri
 parser.add_argument("--n_interpolations", default=10, type=int, help="number of interpolation samples for logging")
 parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
-parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
-parser.add_argument("--seed", default=-1, type=int, help="random seed")
+parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
+parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
+parser.add_argument("--seed", default=-1, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
 
+
 if args.seed == -1:
     args.seed = random.randint(a=0, b=2**32-1)
-
-wandb.init(
-    entity="vseq",
-    project="vseq",
-    group="bowman",
-)
-wandb.config.update(args)
-rich.print(vars(args))
 
 set_seed(args.seed)
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
+
+
+wandb.init(
+    entity="vseq",
+    project="bowman",
+    group=None,
+)
+wandb.config.update(args)
+rich.print(vars(args))
+
 
 vocab = load_vocabulary(PENN_TREEBANK_TRAIN)
 token_map = TokenMap(tokens=vocab, add_start=False, add_end=False, add_delimit=True)
@@ -79,12 +84,15 @@ train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
     cache=args.cache_dataset,
+    bundled=True
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
     modalities=modalities,
     cache=args.cache_dataset,
 )
+# train_dataset.examples = train_dataset.examples[:1000]
+# val_dataset.examples = val_dataset.examples[:1000]
 
 train_loader = DataLoader(
     dataset=train_dataset,
@@ -100,6 +108,7 @@ val_loader = DataLoader(
     shuffle=False,
     batch_size=args.batch_size,
 )
+
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.Bowman(
@@ -117,9 +126,10 @@ model = model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 print(model)
 
-x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
+# x, x_sl = next(iter(train_loader))[0]
+# x = x.to(device)
+# print(model.summary(input_example=x, x_sl=x_sl))
+
 
 tracker = Tracker()
 
@@ -129,7 +139,7 @@ beta_annealer = CosineAnnealer(n_steps=args.anneal_steps, start_value=args.annea
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
-    for (x, x_sl), metadata in tracker(train_loader):
+    for b, ((x, x_sl), metadata) in enumerate(tracker(train_loader)):
         x = x.to(device)
 
         loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=args.word_dropout)
@@ -160,24 +170,21 @@ for epoch in tracker.epochs(args.epochs):
     x = ["she did n't want to be with him", "i want to talk to you"]
     x = [penn_treebank_transform(_x) for _x in x]
     x, x_sl = batcher(x)
+
     _, q_z = model.infer(x.to(device), x_sl)
     z_samples = q_z.mean.unsqueeze(-1).repeat(1, 1, 1, n_interps)  # Create interpolation axis
     alpha = torch.linspace(0, 1, n_interps).to(z_samples.device)
-    z_interps = z_samples[0] * alpha + z_samples[1] * (1 - alpha)
+    z_interps = z_samples[0] * (1 - alpha) + z_samples[1] * alpha
     z_interps = z_interps.permute(2, 0, 1)
-
     (x, x_sl), log_prob = model.generate(z=z_interps, use_mode=True)
+
     text = token_map.decode_batch(x, x_sl, join_separator=" ")
     data = [(i, t) for i, t in enumerate(text)]
     interpolations_table = wandb.Table(columns=["Idx", "Samples"], data=data)
-
-    # Log for sweep target
-    sweep_value = tracker.metrics[PENN_TREEBANK_VALID]["elbo"].value
 
     # Log tracker metrics
     tracker.log(
         beta=beta_annealer.value,
         samples=prior_samples_table,
         interpolations=interpolations_table,
-        elbo_valid=sweep_value,
     )

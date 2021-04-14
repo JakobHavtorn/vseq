@@ -1,6 +1,5 @@
 from collections import defaultdict
-from copy import deepcopy
-from typing import Union, Any
+from typing import Dict, Iterator, Union, Any
 from time import time
 
 import rich
@@ -16,9 +15,9 @@ class Tracker:
         """Tracks metrics, prints to console and logs to wandb.
 
         Args:
-            min_indent (int, optional): Minimum indent for dataset name. Defaults to 35.
-            print_every (Union[int, float], optional): Time between prints measured in steps (if int) else seconds.
-                                                       Defaults to 1.0.
+            min_indent (int): Minimum indent for dataset name. Defaults to 35.
+            print_every (Union[int, float]): Time between prints measured in steps (if int) or seconds (if float).
+                                             Defaults to 1.0 (second).
         """
 
         self.min_indent = min_indent
@@ -38,14 +37,16 @@ class Tracker:
         self.accumulated_output = defaultdict(list)  # dict(output.name=[output.value])
 
     @property
-    def values(self):
+    def values(self) -> Dict[str, Dict[str, float]]:
+        """Values of metrics as nested dict"""
         return {
             source: {metric.name: metric.value for metric in self.metrics[source].values()}
             for source in self.metrics.keys()
         }
 
     @property
-    def accumulated_values(self):
+    def accumulated_values(self) -> Dict[str, Dict[str, Metric]]:
+        """Accumulated values of metrics as nested dict"""
         return {
             source: {
                 metrics[0].name: [metric.value for metric in metrics]
@@ -55,8 +56,8 @@ class Tracker:
         }
 
     @property
-    def best_metrics(self):
-        """Return the best metrics according to `metric.get_best`"""
+    def best_metrics(self) -> Dict[str, Dict[str, Metric]]:
+        """Best metrics according to `metric.get_best` as nested dict"""
         best = dict()
         for source in self.accumulated_metrics.keys():
             best[source] = dict()
@@ -67,7 +68,8 @@ class Tracker:
         return best
 
     @property
-    def best_values(self):
+    def best_values(self) -> Dict[str, Dict[str, float]]:
+        """Values of the best metrics according to `metric.get_best` as nested dict"""
         best_metrics = self.best_metrics
         return {
             source: {name: metric.value for name, metric in best_metrics[source].items()}
@@ -98,13 +100,16 @@ class Tracker:
         """Resets metric values and subset specific tracking values. Prints new line."""
         self.print(end="\n")
 
+        for name, metric in self.metrics[self.source].items():
+            self.accumulated_metrics[self.source][name].append(metric.copy())
+
         self.source = None
         self.max_steps = None
         self.start_time = None
         self.step = 0
         self.accumulated_output = defaultdict(list)
 
-    def do_print(self):
+    def do_print(self) -> bool:
         """Print at first and last step and according to `print_every`"""
         t = time()
 
@@ -119,8 +124,7 @@ class Tracker:
         return do_print
 
     def print(self, end="\r"):
-        """Prints the current progress and metric values."""
-
+        """Print the current progress and metric values."""
         # progress string
         steps_frac = f"{self.step}/-" if self.max_steps is None else f"{self.step}/{self.max_steps}"
         duration = time() - self.start_time
@@ -144,23 +148,19 @@ class Tracker:
         self.last_log_line_len = len(s.strip()) - 42 - len(self.metrics[self.source]) * 19
 
     def log(self, **extra_log_data):
-        """Logs epoch values to experiment tracking framework."""
-        for source in self.metrics.keys():
-            for name, metric in self.metrics[source].items():
-                self.accumulated_metrics[source][name].append(metric.copy())
-
+        """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
         values = self.values
+        values.update(extra_log_data)
         for source in self.best_values.keys():
             values[source].update(self.best_values[source])
-        values.update(extra_log_data)
 
-        # TODO Flatten `values` before logging to allow using sweeps on tracked metrics.
         wandb.log(values)
         self.metrics = defaultdict(dict)
 
     def update(self, metrics: Metric):
+        """Update all tracked metrics with the given metrics adding any not currently tracked"""
         names = [metric.name for metric in metrics]
-        assert len(names) == len(set(names))
+        assert len(names) == len(set(names)), "Metrics must have unique names"
 
         self.step += 1
         for metric in metrics:
@@ -169,12 +169,13 @@ class Tracker:
             else:
                 self.metrics[self.source][metric.name] = metric.copy()
 
-    def accumulate(self, **kwargs: Any):
+    def accumulate(self, **kwargs: Dict[Any, Any]):
+        """Accumulate some outputs of interest. Gets reset on every `reset()` (e.g. epoch)"""
         for k, v in kwargs.items():
             self.accumulated_output[k].append(v)
 
-    def epochs(self, N):
-        """Prints epoch number and epoch delimiter."""
+    def epochs(self, N) -> Iterator[int]:
+        """Yields the epoch index while printing epoch number and epoch delimiter."""
         for epoch in range(1, N + 1):
             self.epoch = epoch
             rich.print(f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white]")
