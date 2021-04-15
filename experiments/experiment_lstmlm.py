@@ -61,7 +61,7 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="lstlm",
+    project="lstmlm",
     group=None,
 )
 wandb.config.update(args)
