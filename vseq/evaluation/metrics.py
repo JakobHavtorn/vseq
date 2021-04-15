@@ -94,6 +94,21 @@ class RunningMeanMetric(Metric):
         self.weight_by = d
 
 
+class LossMetric(RunningMeanMetric):
+    base_tags = {"losses"}
+    get_best = min_value
+
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str = "loss",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+    ):
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+
+
 class LLMetric(RunningMeanMetric):
     base_tags = {"log_likelihoods"}
     get_best = max_value

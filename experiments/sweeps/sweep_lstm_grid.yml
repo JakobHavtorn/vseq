@@ -1,0 +1,14 @@
+program: experiments/experiment_lstmlm.py
+name: LSTM LM (Bayesian)
+description: Grid hyperparameter search for LSTM LM
+entity: vseq
+project: lstmlm
+method: grid
+metric:
+  name: ptb_valid.best_ll
+  goal: maximize
+parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
+  lr:  # continuous uniform
+    values: [0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001, 0.00003, 0.00001, 0.000003]
+  loss_reduction:
+    values: ['nats_per_dim', 'nats_per_example']

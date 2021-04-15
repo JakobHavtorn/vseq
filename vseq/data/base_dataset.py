@@ -27,7 +27,7 @@ def memoize(func):
 
 
 class BaseDataset(Dataset):
-    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False, bundled: bool = True):
+    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False):
         """Dataset class that serves examples from files listed in a `source` as defined by `modalities`.
 
         `modalities` defines how to obtain an example from a specific file extension via a `Transform` and a `Batcher`.

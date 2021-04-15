@@ -1,18 +1,14 @@
 from types import SimpleNamespace
 from typing import Tuple, List
-from vseq.evaluation.metrics import KLMetric, PerplexityMetric
 
-import math
-import numpy as np
+from vseq.evaluation.metrics import LossMetric
+
 import torch
 import torch.nn as nn
 import torch.distributions as D
 
-import vseq.modules
-import vseq.modules.activations
-
 from vseq.utils.operations import sequence_mask
-from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
+from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 
 from .base_module import BaseModule
 
@@ -51,23 +47,29 @@ class LSTMLM(BaseModule):
         # TODO WordDropout as module
 
     def forward(
-        self, x, x_sl, word_dropout_rate: float = 0.75) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
+        self, x, x_sl, word_dropout_rate: float = 0.75, loss_reduction: str = 'nats_per_dim') -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Autoregressively predict next step of input x of shape (B, T)"""
 
         log_prob_twise, p_x = self.reconstruct(x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
         log_prob = log_prob_twise.sum(1)  # (B,)
-        loss = - log_prob.sum() / (x_sl - 1).sum()
+
+        if loss_reduction == 'nats_per_dim':
+            loss = - log_prob.sum() / (x_sl - 1).sum()
+        elif loss_reduction == 'nats_per_example':
+            loss = - log_prob.mean()
+        else:
+            raise ValueError(f'Unknown reduction {loss_reduction}')
 
         metrics = [
-            LLMetric(name="loss", values=loss, weight_by=x_sl - 1),
-            LLMetric(name="ll", values=log_prob),
-            BitsPerDimMetric(name="bpd", values=log_prob, reduce_by=x_sl - 1),
-            PerplexityMetric(name="pp", values=log_prob, reduce_by=x_sl - 1)
+            LossMetric(loss, weight_by=log_prob.numel()),
+            LLMetric(log_prob),
+            BitsPerDimMetric(log_prob, reduce_by=x_sl - 1),
+            PerplexityMetric(log_prob, reduce_by=x_sl - 1)
         ]
 
         outputs = SimpleNamespace(
             loss=loss,
-            rec=log_prob,
+            ll=log_prob,
             p_x=p_x  # NOTE Save 700 MB by not returning p_x
         )
         return loss, metrics, outputs
