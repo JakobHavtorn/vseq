@@ -28,7 +28,8 @@ class Tracker:
         self.last_log_line_len = None
         self.source = None
         self.max_steps = None
-        self.start_time = None
+        self.start_time = defaultdict(lambda: None)
+        self.end_time = defaultdict(lambda: None)
         self.step = 0
         self.epoch = 0
 
@@ -94,7 +95,7 @@ class Tracker:
             self.source = source
             self.max_steps = None
 
-        self.start_time = time()
+        self.start_time[self.source] = time()
 
     def reset(self):
         """Resets metric values and subset specific tracking values. Prints new line."""
@@ -103,9 +104,9 @@ class Tracker:
         for name, metric in self.metrics[self.source].items():
             self.accumulated_metrics[self.source][name].append(metric.copy())
 
+        self.end_time[self.source] = time()
         self.source = None
         self.max_steps = None
-        self.start_time = None
         self.step = 0
         self.accumulated_output = defaultdict(list)
 
@@ -127,10 +128,13 @@ class Tracker:
         """Print the current progress and metric values."""
         # progress string
         steps_frac = f"{self.step}/-" if self.max_steps is None else f"{self.step}/{self.max_steps}"
-        duration = time() - self.start_time
-        mins = int(duration // 60)
-        secs = int(duration % 60)
-        duration = "-" if self.start_time is None else f"{mins:d}m {secs:d}s"
+        if self.start_time[self.source] is None:
+            duration = "-"
+        else:
+            duration = time() - self.start_time[self.source]
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            duration = f"{mins:d}m {secs:d}s"
         ps = f"{steps_frac} [not bold]([/not bold]{duration}[not bold])[/not bold]"  # +42 format
 
         # metrics string
@@ -147,15 +151,19 @@ class Tracker:
         rich.print(s, end=end)
         self.last_log_line_len = len(s.strip()) - 42 - len(self.metrics[self.source]) * 19
 
-    def log(self, **extra_log_data):
+    def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
         values = self.values
         values.update(extra_log_data)
         for source in self.best_values.keys():
             values[source].update(self.best_values[source])
+            values[source]["epoch_duration"] = self.end_time[source] - self.start_time[source]
 
         wandb.log(values)
+
         self.metrics = defaultdict(dict)
+        self.start_time = defaultdict(lambda: None)
+        self.end_time = defaultdict(lambda: None)
 
     def update(self, metrics: Metric):
         """Update all tracked metrics with the given metrics adding any not currently tracked"""

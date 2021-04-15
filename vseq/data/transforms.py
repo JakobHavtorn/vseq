@@ -1,15 +1,9 @@
-from typing import Callable, List, Any
+import math
 
-import numpy as np
+from typing import Callable, Optional
+
 import torch
 import torch.nn as nn
-import torchaudio, torchvision
-
-
-# TODO Where do we place the `collate` function?
-# TODO Data types can define extensions and collate functions
-# TODO In datasets, for inputs we care only about extensions and for outputs we care only about collate functions.
-# TODO So is the dataset abstraction artificial?
 
 
 class Transform(nn.Module):
@@ -79,8 +73,8 @@ class RandomSegment(Transform):
         return x[start_idx : start_idx + self.length]
 
 
-class Scale(nn.Module):
-    def __init__(self, low=0, high=1, min_val=None, max_val=None):
+class Scale(Transform):
+    def __init__(self, low=-1, high=1, min_val=None, max_val=None):
         """Scale an input to be in [low, high] by normalizing with data min and max values"""
         super().__init__()
         assert (low is not None) == (high is not None), "must set both low and high or neither"
@@ -101,7 +95,67 @@ class Scale(nn.Module):
         return self.low + x_scaled * (self.high - self.low)
 
 
-class Binarize(nn.Module):
+class MuLawEncode(Transform):
+    def __init__(self, bits: int = 8):
+        """Encode PCM audio via µ-law companding to some number of bits (8 by default)"""
+        super().__init__()
+        self.bits = bits
+        self.mu = 2 ** bits - 1
+        self._divisor = math.log(self.mu + 1)
+
+    def forward(self, x: torch.Tensor):
+        return x.sign() * torch.log(1 + self.mu * x.abs()) / self._divisor
+
+
+class MuLawDecode(Transform):
+    def __init__(self, bits: int = 8):
+        """Decode PCM audio via µ-law companding from some number of bits (8 by default)"""
+        super().__init__()
+        self.bits = bits
+        self.mu = 2 ** bits - 1
+
+    def forward(self, x: torch.Tensor):
+        return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu
+
+
+class Quantize(Transform):
+    def __init__(
+        self,
+        low: float = -1.0,
+        high: float = 1.0,
+        bits: int = 8,
+        bins: Optional[int] = None,
+        force_out_int64: bool = True,
+    ):
+        """Quantize a tensor of values between `low` and `high` using a number of `bits`.
+
+        The return value is an integer tensor with values in [0, 2**bits - 1].
+
+        If `bits` is 32 or smaller, the integer tensor is of type `IntTensor` (32 bits).
+        If `bits` is 33 or larger, the integer tensor is of type `LongTensor` (64 bits).
+
+        We can force `LongTensor` (64 bit) output if `force_out_int64` is `True`.
+
+        Args:
+            low (float, optional): [description]. Defaults to -1.0.
+            high (float, optional): [description]. Defaults to 1.0.
+            bits (int, optional): [description]. Defaults to 8.
+            bins (Optional[int], optional): [description]. Defaults to None.
+        """
+        super().__init__()
+        assert (bits is None) != (bins is None), "Must set one and only one of `bits` and `bins`"
+        self.low = low
+        self.high = high
+        self.bits = bins // 8 if bits is None else bits
+        self.bins = 2 ** bits if bins is None else bins
+        self.boundaries = torch.linspace(start=-1, end=1, steps=bins)
+        self.out_int32 = (self.bits <= 32) and (not force_out_int64)
+
+    def forward(self, x: torch.Tensor):
+        return torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
+
+
+class Binarize(Transform):
     def __init__(self, resample: bool = False, threshold: float = None):
         super().__init__()
         assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
@@ -115,7 +169,7 @@ class Binarize(nn.Module):
         return x > self.threshold
 
 
-class Dequantize(nn.Module):
+class Dequantize(Transform):
     """Dequantize a quantized data point by adding uniform noise.
 
     Sppecifically, assume the quantized data is x in {0, 1, 2, ..., D} for some D e.g. 255 for int8 data.

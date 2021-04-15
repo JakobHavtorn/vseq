@@ -1,12 +1,13 @@
 """WaveNet main model"""
 
-from torch._C import import_ir_module_from_buffer
+from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 import tqdm
 
 from collections import namedtuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.distributions as D
 
 from vseq.utils.operations import sequence_mask
@@ -27,7 +28,12 @@ class InputSizeError(Exception):
 
 class WaveNet(BaseModule):
     def __init__(
-        self, layer_size: int, stack_size: int, res_channels: int, in_channels: int = 1, out_classes: int = 256
+        self,
+        in_channels: int = 256,
+        out_classes: int = 256,
+        layer_size: int = 10,
+        stack_size: int = 5,
+        res_channels: int = 512
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
@@ -44,10 +50,11 @@ class WaveNet(BaseModule):
             ---------------------------------------> + ------------->	*skip*
 
         Args:
+            in_channels (int): Number of channels in the input data.
+            out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             layer_size (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             stack_size (int): Number of stacks of residual blocks with skip connections to the output.
-            in_channels (int): Number of channels in the input data. Skip channel is the same as the input channel.
-            res_channels (int): Number of channels in residual blocks.
+            res_channels (int): Number of channels in residual blocks. `skip_channels` is also set to `res_channels`.
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -62,7 +69,12 @@ class WaveNet(BaseModule):
 
         self.receptive_field = self.calc_receptive_field(layer_size, stack_size)
 
-        self.causal = CausalConv1d(in_channels, res_channels)
+        if in_channels > 1:
+            self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
+            self.causal = CausalConv1d(res_channels, res_channels)
+        else:
+            self.embedding = None
+            self.causal = CausalConv1d(in_channels, res_channels)
 
         self.res_stack = ResidualStack(
             layer_size=layer_size, stack_size=stack_size, res_channels=res_channels, skip_channels=res_channels
@@ -87,7 +99,14 @@ class WaveNet(BaseModule):
         if output_size < 1:
             raise InputSizeError(int(x.size(2)), self.receptive_field, output_size)
 
-    def compute_loss(self, x: torch.FloatTensor, x_sl: list[int], output: torch.FloatTensor):
+    def _get_target(self, x: torch.FloatTensor):
+        target = x.squeeze(1)  # (B, C, T) to (B, T)
+        target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
+        target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
+        target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
+        return target
+
+    def compute_loss(self, target: torch.IntTensor, x_sl: list[int], output: torch.FloatTensor):
         """To compute the loss, the inputs must be compared to outputs shifted by the receptive field.
 
         Args:
@@ -95,23 +114,17 @@ class WaveNet(BaseModule):
             x_sl (list[int]): Sequence lengths in the batch
             output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T)
         """
-        # Convert x to targets
-        assert x.shape[1] == 1, "Multiple input channels not supported"
-        target = x.squeeze(1)  # (B, C, T) to (B, T)  NOTE Only works for one input channel
-        target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
-        target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
         target = target[:, self.receptive_field :]  # Causal
-        target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
-
-        likelihood = - self.nll_criterion(output, target)
+        ll = - self.nll_criterion(output, target)
 
         # Mask and reduce likelihood
-        x_sl = torch.cuda.LongTensor(x_sl) if likelihood.is_cuda else torch.LongTensor(x_sl)
-        x_sl -= self.receptive_field
-        mask = sequence_mask(x_sl, device=likelihood.device)
-        likelihood *= mask
-        loss = - likelihood.sum(1).mean()  # Sum T, mean B
-        return loss, likelihood
+        x_sl = x_sl - self.receptive_field
+        mask = sequence_mask(x_sl, device=ll.device)
+        ll *= mask
+        loss = - ll.sum() / x_sl.sum()  # mean T, mean B, negate
+        # loss = - ll.sum(1).mean()  # mean T, mean B, negate
+        ll = ll.sum(1)
+        return loss, ll
 
     def forward(self, x, x_sl):
         """Reconstruct an input and compute the log-likelihood loss.
@@ -122,8 +135,14 @@ class WaveNet(BaseModule):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (list): Sequence lengths of each example in the batch.
         """
-        x = x.unsqueeze(-1) if x.ndim == 2 else x
-        x = x.transpose(1, 2)  # (batch, channels, timestep)
+        if self.in_channels == 1:
+            x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
+            target = self._get_target(x)
+        else:
+            target = x.clone()
+            x = self.embedding(x)  # (B, T, C)
+
+        x = x.transpose(1, 2)  # (B, C, T)
 
         output_size = self.calc_output_size(x)
 
@@ -135,13 +154,17 @@ class WaveNet(BaseModule):
 
         output = self.densenet(output)
 
-        loss, ll = self.compute_loss(x, x_sl, output)
+        loss, ll = self.compute_loss(target, x_sl, output)
 
         categorical = D.Categorical(logits=output.transpose(1, 2))
 
+        metrics = [
+            LossMetric(loss, weight_by=ll.numel()),
+            LLMetric(ll),
+            BitsPerDimMetric(ll, reduce_by=x_sl - 1)
+        ]
         output = Output(loss=loss, ll=ll, logits=output, categorical=categorical)
-
-        return loss, output
+        return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
 
