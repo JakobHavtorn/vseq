@@ -26,7 +26,7 @@ class HighwayBlockDense(nn.Module):
         """
         super().__init__()
         self.n_features = n_features
-        self.t_bias_mean = -1 if t_bias_mean is None else t_bias_mean
+        self.t_bias_mean = t_bias_mean
 
         self.h = nn.Sequential(nn.Linear(n_features, n_features), nn.Tanh())
         self.t = nn.Sequential(nn.Linear(n_features, n_features), nn.Sigmoid())
@@ -46,7 +46,7 @@ class HighwayBlockDense(nn.Module):
 
 
 class HighwayStackDense(nn.Module):
-    def __init__(self, n_features: int, n_blocks: int, t_bias_mean: Optional[float] = None):
+    def __init__(self, n_features: int, n_blocks: int, t_bias_mean: float = -1):
         """A stack of HighwayBlockDense layers"""
         super().__init__()
         self.n_features = n_features

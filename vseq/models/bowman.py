@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from typing import Tuple, List
-from vseq.evaluation.metrics import KLMetric, PerplexityMetric
+from vseq.evaluation.metrics import KLMetric, LossMetric, PerplexityMetric
 
 import math
 import numpy as np
@@ -92,6 +92,7 @@ class Bowman(BaseModule):
         return D.Normal(mu, sigma)
 
     def compute_elbo(self, log_prob_twise, kl_dwise, x_sl, beta: float = 1):
+        """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
         kl = kl_dwise.sum(2).squeeze()  # (B,)
         log_prob = log_prob_twise.sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
@@ -113,12 +114,12 @@ class Bowman(BaseModule):
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl, beta=beta)
 
         metrics = [
-            LLMetric(name="loss", values=loss, weight_by=elbo.numel()),
-            LLMetric(name="elbo", values=elbo),
-            LLMetric(name="rec", values=log_prob),
-            KLMetric(name="kl", values=kl),
-            BitsPerDimMetric(name="bpd", values=elbo, reduce_by=x_sl - 1),
-            PerplexityMetric(name="pp", values=elbo, reduce_by=x_sl - 1),
+            LossMetric(loss, weight_by=elbo.numel()),
+            LLMetric(elbo, name="elbo"),
+            LLMetric(log_prob, name="rec"),
+            KLMetric(kl),
+            BitsPerDimMetric(elbo, reduce_by=x_sl - 1),
+            PerplexityMetric(elbo, reduce_by=x_sl - 1),
         ]
 
         outputs = SimpleNamespace(
