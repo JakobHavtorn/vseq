@@ -142,4 +142,10 @@ settings.json
 # wandb
 wandb
 
+# pytest
 pytest
+
+# data files
+.wav
+.flac
+.mp3
