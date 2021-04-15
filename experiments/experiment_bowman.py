@@ -23,8 +23,8 @@ from vseq.data.token_map import TokenMap
 from vseq.data.transforms import EncodeInteger
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
-from vseq.utils.rand import set_seed
 from vseq.utils.argparsing import str2bool
+from vseq.utils.rand import set_seed, get_random_seed
 from vseq.training import CosineAnnealer
 
 
@@ -43,18 +43,18 @@ parser.add_argument("--anneal_steps", default=5000, type=int, help="number of st
 parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--prior_samples", default=32, type=int, help="number of prior samples for logging")
 parser.add_argument("--n_interpolations", default=10, type=int, help="number of interpolation samples for logging")
-parser.add_argument("--epochs", default=500, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
 parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
-parser.add_argument("--seed", default=-1, type=int, help="seed for random number generators. Random if -1.")
+parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
 
 
-if args.seed == -1:
-    args.seed = random.randint(a=0, b=2**32-1)
+if args.seed is None:
+    args.seed = get_random_seed()
 
 set_seed(args.seed)
 
@@ -119,12 +119,11 @@ model = vseq.models.Bowman(
     n_highway_blocks=args.n_highway_blocks,
     delimiter_token_idx=delimiter_token_idx,
 )
-
+model = model.to(device)
+print(model)
 wandb.watch(model, log='all', log_freq=len(train_loader))
 
-model = model.to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-print(model)
 
 # x, x_sl = next(iter(train_loader))[0]
 # x = x.to(device)

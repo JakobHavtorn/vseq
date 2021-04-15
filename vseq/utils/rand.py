@@ -15,3 +15,8 @@ def set_seed(seed):
     torch.manual_seed(seed)
     random.seed(seed)
     LOGGER.info("Set 'numpy', 'random' and 'torch' random seed to %s", seed)
+
+
+def get_random_seed():
+    """Return a random seed between 0 and 2**32 - 1"""
+    return random.randint(a=0, b=2**32-1)
