@@ -11,6 +11,8 @@ pylint
 pytest
 pytest-cov
 pytest-html
+pytorch-lightning
+pyyaml
 rich
 rootpath
 scikit-learn
@@ -23,4 +25,3 @@ torchvision==0.9.0+cu111
 tqdm
 uniplot
 wandb==0.10.25
-pyyaml

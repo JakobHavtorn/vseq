@@ -1,13 +1,10 @@
-import os
-import itertools
 import random
 
-
-import numpy as np
 from typing import Union
 from torch.utils.data.sampler import Sampler
 
-from .base_dataset import BaseDataset
+import numpy as np
+
 from .datapaths import DATAPATHS_MAPPING
 
 
