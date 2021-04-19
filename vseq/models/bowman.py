@@ -14,10 +14,10 @@ import vseq.modules.activations
 from vseq.utils.operations import sequence_mask
 from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
 
-from .base_module import BaseModule
+from .base_model import BaseModel
 
 
-class Bowman(BaseModule):
+class Bowman(BaseModel):
     def __init__(
         self,
         num_embeddings: int,

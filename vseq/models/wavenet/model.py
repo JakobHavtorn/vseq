@@ -13,7 +13,7 @@ import torch.distributions as D
 from vseq.utils.operations import sequence_mask
 
 from .modules import CausalConv1d, ResidualStack, DenseNet
-from ..base_module import BaseModule
+from ..base_model import BaseModel
 
 
 Output = namedtuple("Output", ["loss", "ll", "logits", "categorical"])
@@ -26,7 +26,7 @@ class InputSizeError(Exception):
         super().__init__(message)
 
 
-class WaveNet(BaseModule):
+class WaveNet(BaseModel):
     def __init__(
         self,
         in_channels: int = 256,

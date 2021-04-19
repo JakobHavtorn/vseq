@@ -30,7 +30,7 @@ def load_model(path, model_class_name: str = None, device: torch.device = torch.
     return model
 
 
-class BaseModule(nn.Module):
+class BaseModel(nn.Module):
     """Base class for end-use type Modules (e.g. models)"""
 
     def __init__(self):

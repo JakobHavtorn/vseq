@@ -10,10 +10,10 @@ import torch.distributions as D
 from vseq.utils.operations import sequence_mask
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 
-from .base_module import BaseModule
+from .base_model import BaseModel
 
 
-class LSTMLM(BaseModule):
+class LSTMLM(BaseModel):
     def __init__(
         self,
         num_embeddings: int,

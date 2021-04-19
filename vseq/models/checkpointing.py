@@ -16,7 +16,7 @@ import infotropy.settings
 import infotropy.utils
 
 from infotropy.datasets import DataModule
-from .base_module import load_model, BaseModule
+from .base_model import load_model, BaseModel
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -47,7 +47,7 @@ class Checkpoint:
     path: PosixPath = None
     name: str = ""
     task: Task = None
-    model: BaseModule = None
+    model: BaseModel = None
     optimizer: torch.optim.Optimizer = None
     datamodule: DataModule = None
     last_modified: datetime.datetime = None
