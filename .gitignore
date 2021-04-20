@@ -149,3 +149,6 @@ pytest
 .wav
 .flac
 .mp3
+
+# lightning logs
+lightning_logs
