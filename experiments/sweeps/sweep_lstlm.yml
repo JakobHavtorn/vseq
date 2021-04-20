@@ -1,17 +1,12 @@
-program: experiments/experiment_bowman.py
+program: experiments/experiment_lstmlm.py
 name: LSTM LM (Bayesian)
 description: Bayesian hyperparameter optimization for LSTM LM
 entity: vseq
 project: lstmlm
 method: bayes
 metric:
-  name: ptb_valid.ll
+  name: ptb_valid.best_ll
   goal: maximize
-early_terminate:
-  type: hyperband  # https://arxiv.org/pdf/1603.06560.pdf
-  s: 2
-  eta: 3
-  max_iter: 27
 parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
   lr:  # continuous uniform
     distribution: uniform
@@ -20,7 +15,7 @@ parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
   batch_size:  # categorical
     values: [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
   embedding_dim:
-    values: [4, 8, 16, 32, 64, 128, 192, 256, 384]
+    values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
   hidden_size:
     values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
   word_dropout:
@@ -28,4 +23,4 @@ parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
     min: 0.0
     max: 1.0
   loss_reduction:
-    values: ['sum', '']
+    values: ['nats_per_dim', 'nats_per_example']
