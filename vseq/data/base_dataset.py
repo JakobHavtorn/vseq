@@ -1,12 +1,11 @@
 from typing import List, Tuple, Any, Union
-from vseq.data.load import MetaData
 
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from .batcher import Batcher
 from .transforms import Transform
-from .load import EXTENSIONS_TO_LOADFCN
+from .load import EXTENSIONS_TO_LOADFCN, MetaData
 from .datapaths import DATAPATHS_MAPPING
 
 
