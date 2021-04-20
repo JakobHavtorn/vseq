@@ -18,6 +18,7 @@ class PLModelWrapper(pl.LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        # TODO Unpack batch properly?
         loss, metrics, outputs = self.model.forward(batch)
         self.log('train_step', {m.name: m.value for m in metrics})
         return loss

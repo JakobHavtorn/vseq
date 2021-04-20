@@ -129,10 +129,11 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 lightning_module = PLModelWrapper(model, optimizer)
 
 
-args.auto_select_gpus = True
-trainer = pl.Trainer.from_argparse_args(args)
+if __name__ == '__main__':
+    args.auto_select_gpus = True
+    trainer = pl.Trainer.from_argparse_args(args)
 
-trainer.fit(lightning_module, train_loader, val_loader)
+    trainer.fit(lightning_module, train_loader, val_loader)
 
-result = trainer.test(test_dataloaders=test_loader)
-print(result)
+    result = trainer.test(test_dataloaders=test_loader)
+    print(result)
