@@ -3,39 +3,53 @@ from argparse import ArgumentParser
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
-import wandb
 
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data import random_split
+import torchmetrics
 from torchvision.datasets.mnist import FashionMNIST
 from torchvision import transforms
 
-from pytorch_lightning.loggers import WandbLogger, wandb
+from pytorch_lightning.loggers import WandbLogger
 
 from vseq.utils.rand import get_random_seed
 
 
+class Loss(torchmetrics.Metric):
+    def __init__(self, dist_sync_on_step=False):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+
+        self.add_state("accumulated", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("observations", default=torch.tensor(0.0), dist_reduce_fx="sum")
+
+    def update(self, loss: torch.Tensor):
+        loss = loss.detach()
+        self.accumulated += loss.sum()
+        self.observations += loss.numel()
+
+    def compute(self):
+        return self.accumulated / self.observations
+
+
 class LitAutoEncoder(pl.LightningModule):
 
-    def __init__(self, hidden_dim: int = 64, learning_rate: int = 3e-4):
+    def __init__(self, hidden_dim: int = 64, latent_dim: int = 3, learning_rate: int = 3e-4):
         super().__init__()
         self.encoder = nn.Sequential(
             nn.Linear(28 * 28, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 3)
+            nn.Linear(hidden_dim, latent_dim)
         )
         self.decoder = nn.Sequential(
-            nn.Linear(3, hidden_dim),
+            nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 28 * 28)
         )
 
-        # metrics = pl.metrics.MetricCollection([
-        #     pl.metrics.AverageMeter()
-        # ])
-        # self.train_metrics = metrics.clone(prefix="train")
-        # self.valid_metrics = metrics.clone(prefix="valid")
+        self.train_metrics = torchmetrics.MetricCollection(dict(loss=Loss()))
+        self.valid_metrics = torchmetrics.MetricCollection(dict(loss=Loss()))
+        self.test_metrics = torchmetrics.MetricCollection(dict(loss=Loss()))
 
         # import IPython; IPython.embed()
         self.save_hyperparameters()
@@ -46,17 +60,26 @@ class LitAutoEncoder(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss = self.full_forward(batch)
-        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_step', self.train_metrics(loss=loss))
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss = self.full_forward(batch)
-        self.log('valid_loss', loss)
+        self.log('valid_step', self.valid_metrics(loss=loss), prog_bar=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         loss = self.full_forward(batch)
-        self.log('test_loss', loss)
+        self.log('test_step', self.test_metrics(loss=loss))
+
+    def training_epoch_end(self, outs):
+        # log epoch metric
+        self.log('train_epoch', self.train_metrics.compute())
+        self.log('valid_epoch', self.valid_metrics.compute())
+
+    def test_epoch_end(self, outs):
+        # log epoch metric
+        self.log('test_epoch', self.test_metrics.compute())
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
@@ -65,6 +88,8 @@ class LitAutoEncoder(pl.LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument('--hidden_dim', type=int, default=256)
+        parser.add_argument('--latent_dim', type=int, default=32)
         parser.add_argument('--learning_rate', type=float, default=0.0001)
         return parser
 
@@ -128,15 +153,15 @@ def cli_main():
     # ------------
     # model
     # ------------
-    model = LitAutoEncoder()
+    model = LitAutoEncoder(hidden_dim=args.hidden_dim, latent_dim=args.latent_dim, learning_rate=args.learning_rate)
 
-    wandb.watch(model, log='all')
+    logger.watch(model, log='all', log_freq=len(train_loader))
 
     # ------------
     # training
     # ------------
     args.logger = logger
-    # args.auto_lr_find = True
+    args.auto_lr_find = True
     args.auto_select_gpus = True
     trainer = pl.Trainer.from_argparse_args(args)
 
