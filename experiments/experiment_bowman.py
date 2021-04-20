@@ -16,7 +16,7 @@ import vseq.utils.device
 
 from vseq.data import DataModule, BaseDataset
 from vseq.data.batcher import TextBatcher
-from vseq.data.datapaths import PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
+from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.tokens import DELIMITER_TOKEN
 from vseq.data.tokenizers import word_tokenizer
 from vseq.data.token_map import TokenMap
@@ -91,8 +91,11 @@ val_dataset = BaseDataset(
     modalities=modalities,
     cache=args.cache_dataset,
 )
-# train_dataset.examples = train_dataset.examples[:1000]
-# val_dataset.examples = val_dataset.examples[:1000]
+test_dataset = BaseDataset(
+    source=PENN_TREEBANK_TEST,
+    modalities=modalities,
+    cache=args.cache_dataset,
+)
 
 train_loader = DataLoader(
     dataset=train_dataset,
@@ -108,7 +111,13 @@ val_loader = DataLoader(
     shuffle=False,
     batch_size=args.batch_size,
 )
-
+test_loader = DataLoader(
+    dataset=test_dataset,
+    collate_fn=test_dataset.collate,
+    num_workers=args.num_workers,
+    shuffle=False,
+    batch_size=args.batch_size,
+)
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.Bowman(
@@ -125,14 +134,14 @@ wandb.watch(model, log='all', log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-# x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
+x, x_sl = next(iter(train_loader))[0]
+x = x.to(device)
+print(model.summary(input_example=x, x_sl=x_sl))
 
-
-tracker = Tracker()
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
+
+tracker = Tracker()
 
 beta_annealer = CosineAnnealer(n_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
 for epoch in tracker.epochs(args.epochs):
@@ -151,12 +160,20 @@ for epoch in tracker.epochs(args.epochs):
         beta_annealer.step()
 
     model.eval()
-    for (x, x_sl), metadata in tracker(val_loader):
-        x = x.to(device)
+    with torch.no_grad():
+        for (x, x_sl), metadata in tracker(val_loader):
+            x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
 
-        tracker.update(metrics)
+            tracker.update(metrics)
+
+        for (x, x_sl), metadata in tracker(test_loader):
+            x = x.to(device)
+
+            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+
+            tracker.update(metrics)
 
     # Get samples from prior
     (x, x_sl), log_prob = model.generate(z=prior_samples)
