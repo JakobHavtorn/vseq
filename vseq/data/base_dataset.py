@@ -3,7 +3,7 @@ from typing import List, Tuple, Any, Union
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from .batcher import Batcher
+from .batchers import Batcher
 from .transforms import Transform
 from .load import EXTENSIONS_TO_LOADFCN, MetaData
 from .datapaths import DATAPATHS_MAPPING
@@ -11,15 +11,17 @@ from .datapaths import DATAPATHS_MAPPING
 
 # TODO https://funcy.readthedocs.io/en/stable/calc.html
 def memoize(func):
-    cache = dict()
+    memory = dict()
 
     def memoized_func(*args):
-        if args in cache:
-            return cache[args]
+        if args in memory:
+            return memory[args]
+
         result = func(*args)
-        cache[args] = result
+        memory[args] = result
         return result
 
+    memoized_func.memory = memory
     return memoized_func
 
 
