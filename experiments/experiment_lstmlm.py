@@ -15,7 +15,7 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import DataModule, BaseDataset
-from vseq.data.batcher import TextBatcher
+from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.tokens import DELIMITER_TOKEN
 from vseq.data.tokenizers import word_tokenizer

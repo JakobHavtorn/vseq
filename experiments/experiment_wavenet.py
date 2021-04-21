@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 import vseq.models
 
 from vseq.data import BaseDataset, DataModule, transforms
-from vseq.data.batcher import AudioBatcher
+from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.transforms import Compose, Quantize, RandomSegment, Scale, MuLawEncode
 from vseq.evaluation.tracker import Tracker
