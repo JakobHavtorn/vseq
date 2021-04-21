@@ -1,11 +1,11 @@
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 
 import torch
 
 
 class Batcher:
-    """Base class for Batchers. These must define `collate` and optionally `sort` methods.
-    """        
+    """Base class for Batchers. These must define `collate` and optionally `sort` methods."""
+
     def __init__(self) -> None:
         pass
 
@@ -20,7 +20,7 @@ class Batcher:
         """
         raise NotImplementedError()
 
-    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: bool = None):
+    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: Optional[int] = None):
         """Sort the order of examples within the batch optionally specifying which modality to sort if more than one.
 
         Args:
@@ -50,7 +50,7 @@ class AudioBatcher(Batcher):
 
         return padded_batch, torch.LongTensor(sequence_lengths)
 
-    def sort(self, batch: List[torch.Tensor], sort_modality_idx: bool = None):
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:
             sort_key = lambda x: len(x[0][sort_modality_idx])
         else:
@@ -94,7 +94,7 @@ class TextBatcher(Batcher):
 
         return torch.LongTensor(padded_batch), torch.LongTensor(sequence_lengths)
 
-    def sort(self, batch: List[torch.Tensor], sort_modality_idx: bool = None):
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:
             sort_key = lambda x: len(x[0][sort_modality_idx])
         else:

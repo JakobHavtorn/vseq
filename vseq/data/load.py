@@ -53,12 +53,6 @@ def load_text(filepath):
     return string, metadata
 
 
-# from typing import NewType
-
-# Extension = NewType("Extension", str)
-
-# EXTENSIONS = {Extension("wav"), Extension("flac"), Extension("mp3"), Extension("txt")}
-
 EXTENSIONS_TO_LOADFCN = dict(
     wav=load_audio,
     flac=load_audio,

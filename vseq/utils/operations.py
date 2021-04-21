@@ -105,7 +105,7 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch
     return seq_mask.to(dtype)
 
 
-def detach(x):
+def detach(x: Union[torch.Tensor, Any]):
     """Detach a tensor from the computational graph"""
     if isinstance(x, torch.Tensor):
         return x.detach()

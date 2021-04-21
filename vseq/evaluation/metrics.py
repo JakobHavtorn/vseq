@@ -5,6 +5,7 @@ from typing import List, Optional, Set, Union
 
 import torch
 
+from vseq.utils.operations import detach
 
 
 class Metric:
@@ -59,7 +60,20 @@ class RunningMeanMetric(Metric):
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
+        """Create a running mean metric.
+
+        Args:
+            values (Union[torch.Tensor, float]): Values of the metric
+            name (str): Name of the metric
+            tags (Set[str]): Tags to use for grouping with other metrics.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
+            weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
+        """
         super().__init__(name=name, tags=tags)
+
+        values = detach(values)
+        reduce_by = detach(reduce_by)
+        reduce_by = detach(reduce_by)
 
         numel = values.numel() if isinstance(values, torch.Tensor) else 1
         value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
@@ -177,3 +191,36 @@ class PerplexityMetric(BitsPerDimMetric):
     @property
     def value(self):
         return 2 ** self._value
+
+
+class HoyerSparsityMetric(RunningMeanMetric):
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str,
+        tags: Set[str],
+        reduce_by: Optional[Union[torch.Tensor, float]],
+        weight_by: Optional[Union[torch.Tensor, float]],
+        normalze: bool = True,
+    ):
+        """Sparsity of representation as computed in [1] and presented in [2].
+
+        Args:
+            values (Union[torch.Tensor, float]): [description]
+            name (str): [description]
+            tags (Set[str]): [description]
+            reduce_by (Optional[Union[torch.Tensor, float]]): [description]
+            weight_by (Optional[Union[torch.Tensor, float]]): [description]
+            normalze (bool, optional): Normalize the values with the running standard deviation per dimension.
+                                       This normalisation is important as one could achieve a “sparse” representation
+                                       simply by having different dimensions vary along different length scales.
+                                       Defaults to True.
+
+        Raises:
+            NotImplementedError: [description]
+
+        [1] Hurley and Rickard, 2008
+        [2] http://arxiv.org/abs/1812.02833 p. 7
+        """
+        super().__init__(values, name, tags, reduce_by=reduce_by, weight_by=weight_by)
+        raise NotImplementedError()
