@@ -1,6 +1,6 @@
 import random
 
-from typing import Union
+from typing import Iterator, Union, List
 from torch.utils.data.sampler import Sampler
 
 import numpy as np
@@ -103,7 +103,7 @@ class FrameSampler(Sampler):
 
         return batches
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[List[int]]:
         try:
             for batch in self.batches:
                 yield batch
@@ -162,7 +162,7 @@ class EvalSampler(Sampler):
         batches = list(map(lambda x: x.tolist(), batches))
         return batches
     
-    def __iter__(self):
+    def __iter__(self) -> Iterator[List[int]]:
         for batch in self.batches:
             yield batch
 
