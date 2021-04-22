@@ -1,9 +1,19 @@
+"""
+Basic example of Distributed Data Parallel (DDP) training a classifier on FashionMNIST.
+
+Run with e.g.
+
+> `env CUDA_VISIBLE_DEVICES=1,2 python examples/ddp_mnist.py --nodes 1 --gpus 2 --epochs 40`
+"""
+
 import argparse
-import time
 import os
 
 from datetime import datetime
+from vseq.evaluation.tracker import Tracker
+from vseq.evaluation.metrics import AccuracyMetric, LossMetric
 
+import wandb
 import torch.multiprocessing as mp
 import torchvision
 import torchvision.transforms as transforms
@@ -23,27 +33,39 @@ def main():
     args.world_size = args.gpus * args.nodes
 
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
+    os.environ["MASTER_PORT"] = "12356"
 
     mp.spawn(train, nprocs=args.gpus, args=(args,))
 
 
 class ConvNet(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, conv1_ch=16, conv2_ch=16, hidden_dim=16, num_classes=10):
         super(ConvNet, self).__init__()
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(1, conv1_ch, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm2d(conv1_ch),
             nn.ReLU(),
+            nn.Dropout2d(0.5),
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(conv1_ch, conv2_ch, kernel_size=5, stride=1, padding=2),
+            nn.BatchNorm2d(conv2_ch),
             nn.ReLU(),
+            nn.Dropout2d(0.5),
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
-        self.fc = nn.Linear(7 * 7 * 32, num_classes)
+        self.fc = nn.Sequential(
+            nn.Linear(7 * 7 * conv2_ch, hidden_dim),
+            nn.ReLU(),
+            nn.Batchidden_dimNorm1d(hidden_dim),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Batchidden_dimNorm1d(hidden_dim),
+            nn.Dropout(0.5),
+            nn.Linear(hidden_dim, num_classes)
+        )
 
     def forward(self, x):
         out = self.layer1(x)
@@ -59,6 +81,13 @@ def train(gpu_idx, args):
 
     torch.manual_seed(0)
     batch_size = 64
+
+    if gpu_idx == 0:
+        wandb.init(
+            entity="vseq",
+            project="sandbox",
+            group=None,
+        )
 
     # define the model
     model = ConvNet()
@@ -76,9 +105,11 @@ def train(gpu_idx, args):
     train_dataset = torchvision.datasets.FashionMNIST(
         root="./data", train=True, transform=transforms.ToTensor(), download=True
     )
+    train_dataset.source = "mnist_train"
     valid_dataset = torchvision.datasets.FashionMNIST(
         root="./data", train=False, transform=transforms.ToTensor(), download=True
     )
+    valid_dataset.source = "mnist_valid"
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset, num_replicas=args.world_size, rank=rank
     )
@@ -102,16 +133,13 @@ def train(gpu_idx, args):
         sampler=valid_sampler,
     )
 
+    tracker = Tracker(print_every=1.0, rank=rank, world_size=args.world_size)
+
     start = datetime.now()
-    total_train_step = len(train_loader)
-    total_valid_step = len(valid_loader)
-    for epoch in range(args.epochs):
+    for epoch in tracker.epochs(args.epochs):
 
         model.train()
-        running_loss = 0
-        correct = 0
-        total = 0
-        for i, (images, labels) in enumerate(train_loader):
+        for (images, labels) in tracker.steps(train_loader):
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
 
@@ -124,31 +152,16 @@ def train(gpu_idx, args):
             loss.backward()
             optimizer.step()
 
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-            accuracy = correct / total
+            metrics = [
+                LossMetric(loss, weight_by=labels.numel()),
+                AccuracyMetric(predictions=torch.max(outputs.data, 1).indices, labels=labels),
+            ]
 
-            if gpu_idx == 0 and ((i + 1) % 10 == 0 or (i + 1) == total_train_step):
-                print(
-                    "Train Epoch [{:3d}/{:3d}], Step [{:3d}/{:3d}], Loss: {:.4f}, Acc: {:.4f}".format(
-                        epoch + 1, args.epochs, i + 1, total_train_step, running_loss / (i + 1), accuracy,
-                    ),
-                end="\r")
-
-        if gpu_idx == 0:
-            print()
-        else:
-            time.sleep(1)
-        print(f"{rank}: {loss=} {running_loss=} {accuracy=}")
+            tracker.update(metrics)
 
         with torch.no_grad():
             model.eval()
-            running_loss = 0
-            correct = 0
-            total = 0
-            for i, (images, labels) in enumerate(valid_loader):
+            for i, (images, labels) in enumerate(tracker(valid_loader)):
                 images = images.cuda(non_blocking=True)
                 labels = labels.cuda(non_blocking=True)
 
@@ -156,23 +169,14 @@ def train(gpu_idx, args):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
 
-                running_loss += loss.item()
-                _, predicted = torch.max(outputs.data, 1)
-                correct += (predicted == labels).sum().item()
-                total += labels.size(0)
-                accuracy = correct / total
+                metrics = [
+                    LossMetric(loss, weight_by=labels.numel()),
+                    AccuracyMetric(predictions=torch.max(outputs.data, 1).indices, labels=labels),
+                ]
 
-                if gpu_idx == 0 and ((i + 1) % 10 == 0 or (i + 1) == total_valid_step):
-                    print(
-                        "Valid Epoch [{:3d}/{:3d}], Step [{:3d}/{:3d}], Loss: {:.4f}, Acc: {:.4f}".format(
-                            epoch + 1, args.epochs, i + 1, total_valid_step, running_loss / (i + 1), accuracy,
-                        ),
-                    end="\r")
+                tracker.update(metrics)
 
-        if gpu_idx == 0:
-            print()
-            print("----------------------------------------------------------------")
-
+        tracker.log()
 
     if gpu_idx == 0:
         print("Training complete in: " + str(datetime.now() - start))

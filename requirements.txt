@@ -1,4 +1,5 @@
 black
+blessed
 gpustat
 ipdb
 ipython
@@ -17,10 +18,6 @@ rich
 rootpath
 scikit-learn
 seaborn
-# torch==1.8.0+cu102  # -f https://download.pytorch.org/whl/torch_stable.html 
-# torchaudio==0.8.0
-# torchtext
-# torchvision==0.9.0+cu102
 torch==1.8.1
 torchaudio
 torchtext
@@ -28,6 +25,5 @@ torchvision
 tqdm
 uniplot
 wandb==0.10.25
-
 # datasets
 # transformers

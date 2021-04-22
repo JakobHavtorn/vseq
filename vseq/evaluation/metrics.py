@@ -2,6 +2,7 @@ import math
 
 from copy import deepcopy
 from typing import List, Optional, Set, Union
+from vseq.utils.summary import get_number_of_elements
 
 import torch
 
@@ -21,14 +22,13 @@ class Metric:
         """Primary value of the metric to be used for logging"""
         raise NotImplementedError()
 
-    @property
-    def str_value(self):
-        """String representation of `value` to be used for e.g. console printing"""
-        raise NotImplementedError()
-
     def update(self, metric):
         """Update the metric (e.g. running mean)"""
         raise NotImplementedError()
+
+    @property
+    def str_value(self):
+        return f"{self.value:{self._str_value_fmt}f}"
 
     @staticmethod
     def get_best(metrics):
@@ -89,10 +89,6 @@ class RunningMeanMetric(Metric):
     def value(self):
         return self._value
 
-    @property
-    def str_value(self):
-        return f"{self.value:{self._str_value_fmt}f}"
-
     def update(self, metric: Metric):
         """Update the running mean statistic.
 
@@ -106,6 +102,33 @@ class RunningMeanMetric(Metric):
         self._value = self._value * w1 + metric._value * w2  # Reduce between batches (over entire epoch)
 
         self.weight_by = d
+
+
+class AccuracyMetric(Metric):
+    _str_value_fmt = "<10.3"
+    get_best = max_value
+
+    def __init__(
+        self,
+        predictions: Union[torch.Tensor, float],
+        labels: Union[torch.Tensor, float],
+        name: str = "accuracy",
+        tags: Set[str] = None,
+    ):
+        """Classification accuracy"""
+        super().__init__(name, tags)
+        predictions = detach(predictions)
+        labels = detach(labels)
+        self.correct = (predictions == labels).sum().item()
+        self.total = labels.size(0)
+
+    @property
+    def value(self):
+        return self.correct / self.total
+
+    def update(self, metric: Metric):
+        self.correct += metric.correct
+        self.total += metric.total
 
 
 class LossMetric(RunningMeanMetric):

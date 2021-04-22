@@ -3,8 +3,7 @@ Basic example of Distributed Data Parallel (DDP)
 
 Run with e.g.
 
-> `env CUDA_VISIBLE_DEVICES=1,2 python examples/ddp.py`
-
+> `env CUDA_VISIBLE_DEVICES=1,2 python examples/ddp_minimal.py`
 """
 
 import os
