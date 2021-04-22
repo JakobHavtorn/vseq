@@ -3,6 +3,8 @@ from typing import Any, Union, List
 
 import torch
 
+from torch import Tensor
+
 from .shape import elevate_sample_dim
 
 
@@ -79,6 +81,19 @@ def log_sum_exp(tensor, axis=-1, dim=None, sum_op=torch.mean):
     axis = dim if dim is not None else axis
     maximum, _ = torch.max(tensor, axis=axis, keepdim=False)
     return torch.log(sum_op(torch.exp(tensor - maximum), axis=axis, keepdim=False) + 1e-8) + maximum
+
+
+def hard_sigmoid(x, a: Union[float, Tensor] = 1/3):
+    """Hard sigmoid function with variable slope.
+
+    The variable slope is useful for annealing towards step function when estimating gradients via. a straight
+    through estimator.
+
+    Otherwise nn.Hardsigmoid() or F.hardsigmoid() may be more efficient.
+    """
+    temp = torch.div(torch.add(torch.mul(x, a), 1), 2.0)
+    output = torch.clamp(temp, min=0, max=1)
+    return output
 
 
 def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch.bool, device: torch.device = None):
