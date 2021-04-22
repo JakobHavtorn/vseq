@@ -1,12 +1,13 @@
 import os
+import sys
 
 import wget
 
 from tqdm import tqdm
 
 
-DATA_DESTINATION = "/data/research/"  # sys.argv[1]
-SOURCEFILE_DESTINATION = "/home/labo/repos/vseq/data/"  # sys.argv[2]
+DATA_DESTINATION = sys.argv[1]
+SOURCEFILE_DESTINATION = sys.argv[2]
 
 SUBSETS = ["train", "test", "valid"]
 
