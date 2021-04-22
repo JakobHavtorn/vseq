@@ -1,14 +1,18 @@
 program: experiments/experiment_lstmlm.py
-name: LSTM LM (Bayesian)
-description: Grid hyperparameter search for LSTM LM
+name: SGD hyperparameters
+description: SGD hyperparameters
 entity: vseq
 project: lstmlm
-method: grid
+method: bayes
 metric:
   name: ptb_valid.best_ll
   goal: maximize
 parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
+  optimizer:
+    values: ["SGD"]
+  optimizer_kwargs:
+    values: ['{"momentum": 0.9}', '{"momentum": 0.9, "nesterov": 1}', '{"momentum": 0.9, "dampening": 0.1}']
   lr:  # continuous uniform
-    values: [0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001, 0.00003, 0.00001, 0.000003]
-  loss_reduction:
-    values: ['nats_per_dim', 'nats_per_example']
+    values: [0.3, 0.1, 0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001, 0.00003]
+  batch_size:
+    values: [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
