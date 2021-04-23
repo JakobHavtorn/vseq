@@ -14,7 +14,7 @@ import vseq.models
 import vseq.utils
 import vseq.utils.device
 
-from vseq.data import DataModule, BaseDataset
+from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.tokens import DELIMITER_TOKEN
@@ -33,10 +33,10 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--optimizer", default='Adam', type=str, help="optimizer")
-parser.add_argument("--optimizer_kwargs", default='{}', type=json.loads, help="extra kwargs for optimizer")
+parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=json.loads, help="extra kwargs for optimizer")
 parser.add_argument("--embedding_dim", default=464, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=373, type=int, help="dimensionality of hidden state in LSTM")
+parser.add_argument("--num_layers", default=1, type=int, help="number of LSTM layers")
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
 parser.add_argument(
     "--loss_reduction",
@@ -119,6 +119,7 @@ test_loader = DataLoader(
     batch_size=args.batch_size,
 )
 
+
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.LSTMLM(
     num_embeddings=len(token_map),
@@ -128,16 +129,15 @@ model = vseq.models.LSTMLM(
 )
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
-
 model = model.to(device)
-
-optimizer = getattr(torch.optim, args.optimizer)
-optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_kwargs)
 print(model)
-
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
 print(model.summary(input_example=x, x_sl=x_sl))
+
+optimizer = args.optimizer_json.pop('optimizer')
+optimizer = getattr(torch.optim, optimizer)
+optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_json)
 
 
 tracker = Tracker()

@@ -17,15 +17,26 @@ class LSTMLM(BaseModel):
     def __init__(
         self,
         num_embeddings: int,
-        embedding_dim: int,
-        hidden_size: int,
         delimiter_token_idx: int,
+        embedding_dim: int = 464,
+        hidden_size: int = 373,
+        num_layers: int = 1,
     ):
+        """Simple LSTM-based Language Model with learnable input token embeddings and multiple LSTM layers.
+
+        Args:
+            num_embeddings (int): Number of input tokens.
+            delimiter_token_idx (int): Index of the delimiter token (combined start+end token) in the input.
+            embedding_dim (int, optional): Dimensionality of the embedding space. Defaults to 464 (c.f. Bowman)
+            hidden_size (int, optional): Dimensionality of the hidden space (LSTM gates). Defaults to 373 (c.f. Bowman)
+            num_layers (int, optional): Number of LSTM layers. Defaults to 1 (c.f. Bowman)
+        """
         super().__init__()
 
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.delimiter_token_idx = delimiter_token_idx
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
