@@ -1,9 +1,11 @@
 import torch
-import torch.nn as nn
 
 
 class STEFunction(torch.autograd.Function):
     """Abstract base class for Straight-Through Estimator"""
+    @staticmethod
+    def forward(ctx, x):
+        raise NotImplementedError()
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -21,13 +23,3 @@ class BernoulliSTE(STEFunction):
     @staticmethod
     def forward(ctx, p):
         return torch.bernoulli(p)
-
-
-class BernoulliStraightThrough(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        p = torch.sigmoid(x)
-        b = BernoulliSTE.apply(p)
-        return b
