@@ -5,7 +5,8 @@ from vseq.data.vocabulary import build_voabulary
 
 
 parser = argparse.ArgumentParser()
-parser.add
+parser.add_argument("--dataset", default="ptb_train", type=int, help="dataset")
+args = parser.parse_args()
 
-build_voabulary('ptb_train', cleaner_fcn=clean_librispeech)
 
+build_voabulary(args.dataset, cleaner_fcn=clean_librispeech)

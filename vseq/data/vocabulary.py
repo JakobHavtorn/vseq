@@ -20,7 +20,7 @@ def _get_vocab_filepath(source_filepath, create_vocab_dir=False):
     return vocab_filepath
 
 
-def build_voabulary(source, cleaner_fcn=None):
+def build_vocabulary(source, cleaner_fcn=None):
     """
     Builds a vocabulary file with word-count pairs on each line.
 
