@@ -251,7 +251,11 @@ def summary(
     module_ids = []
 
     # register hook
-    model.apply(register_hook)
+    for module in model.children():
+        try:
+            module.apply(register_hook)
+        except RuntimeError as exc:
+            LOGGER.warning(f"Didn't register hook on {module} with exception: {exc}")
 
     # make a forward pass
     model(*x, **model_forward_kwargs)

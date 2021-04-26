@@ -1,14 +1,15 @@
 from types import SimpleNamespace
 from typing import Tuple, List
 
-from vseq.evaluation.metrics import LossMetric
-
 import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from vseq.utils.operations import sequence_mask
+from haste_pytorch import LayerNormLSTM
+
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
+from vseq.evaluation.metrics import LossMetric
+from vseq.utils.operations import sequence_mask
 
 from .base_model import BaseModel
 
@@ -21,6 +22,8 @@ class LSTMLM(BaseModel):
         embedding_dim: int = 464,
         hidden_size: int = 373,
         num_layers: int = 1,
+        layer_norm: bool = False,
+        **lstm_kwargs,
     ):
         """Simple LSTM-based Language Model with learnable input token embeddings and multiple LSTM layers.
 
@@ -38,19 +41,20 @@ class LSTMLM(BaseModel):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.delimiter_token_idx = delimiter_token_idx
+        self.layer_norm = layer_norm
+        self.lstm_kwargs = lstm_kwargs
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        self.lstm = nn.LSTM(
+        rnn_layer = LayerNormLSTM if layer_norm else nn.LSTM
+
+        self.lstm = rnn_layer(
             input_size=embedding_dim,
             hidden_size=hidden_size,
-            num_layers=1,
-            bias=True,
             batch_first=False,
-            dropout=0,
-            bidirectional=False,
+            **lstm_kwargs
         )
 
         self.output = nn.Linear(hidden_size, num_embeddings)
@@ -99,10 +103,10 @@ class LSTMLM(BaseModel):
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
-        h, _ = self.lstm(e)
-
-        h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
+        # h, _ = self.lstm(e)
+        h, _ = self.lstm(e[:, :-1])
+        # h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here

@@ -37,6 +37,7 @@ parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=js
 parser.add_argument("--embedding_dim", default=128, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--num_layers", default=3, type=int, help="number of LSTM layers")
+parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 # parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
@@ -124,6 +125,7 @@ model = vseq.models.HMLM(
     embedding_dim=args.embedding_dim,
     sizes=args.hidden_size,
     num_layers=args.num_layers,
+    layer_norm=args.layer_norm
     # delimiter_token_idx=delimiter_token_idx,
 )
 
@@ -131,9 +133,9 @@ model = vseq.models.HMLM(
 wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
-x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
+# x, x_sl = next(iter(train_loader))[0]
+# x = x.to(device)
+# print(model.summary(input_example=x, x_sl=x_sl))
 
 optimizer = args.optimizer_json.pop('optimizer')
 optimizer = getattr(torch.optim, optimizer)

@@ -38,6 +38,7 @@ parser.add_argument("--embedding_dim", default=464, type=int, help="dimensionali
 parser.add_argument("--hidden_size", default=373, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--num_layers", default=1, type=int, help="number of LSTM layers")
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
+parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 parser.add_argument(
     "--loss_reduction",
     default="nats_per_dim",
@@ -125,6 +126,7 @@ model = vseq.models.LSTMLM(
     num_embeddings=len(token_map),
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
+    layer_norm=args.layer_norm,
     delimiter_token_idx=delimiter_token_idx,
 )
 
