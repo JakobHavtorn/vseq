@@ -163,15 +163,18 @@ class Tracker:
         steps_frac = f"{self.step}/-" if self.max_steps is None else f"{self.step}/{self.max_steps}"
         if self.start_time[source] is None:
             duration = "-"
+            s_per_step = "-"
         else:
             duration = time() - self.start_time[source]
+            s_per_step = self.step / duration
+            s_per_step = f"{round(s_per_step, 3):.3f}Hz"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
-        ps = f"{steps_frac} [not bold]([/not bold]{duration}[not bold])[/not bold]"  # +42 format
+        ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{s_per_step}][/]"  # +42 format
 
         # metrics string
-        sep = "[magenta]|[/magenta]"  # +19 format pr metric
+        sep = "[magenta]|[/]"  # +19 format pr metric
         ms = "".join([f"{sep} {metric.name} = {metric.str_value}" for metric in self.metrics[source].values()])
 
         # source string
@@ -179,7 +182,7 @@ class Tracker:
 
         # full log string
         sp = f"{ss} - {ps}"
-        s = f"{sp:<{self.min_indent + 42}s}{ms}"
+        s = f"{sp:<{self.min_indent + 60}s}{ms}"
 
         if self.is_ddp:
             end = '\r' if self.rank == 0 else '\n'
@@ -194,7 +197,7 @@ class Tracker:
         else:
             rich.print(s, end=end, flush=True)
 
-        self.last_log_line_len = len(s.strip()) - 42 - len(self.metrics[source]) * 19 
+        self.last_log_line_len = len(s.strip()) - 60 - len(self.metrics[source]) * 19 
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
