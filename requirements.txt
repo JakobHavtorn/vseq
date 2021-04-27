@@ -12,7 +12,6 @@ pylint
 pytest
 pytest-cov
 pytest-html
-pytorch-lightning
 pyyaml
 rich
 rootpath
@@ -24,6 +23,6 @@ torchtext
 torchvision
 tqdm
 uniplot
-wandb==0.10.25
+wandb
 # datasets
 # transformers

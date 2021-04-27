@@ -12,7 +12,7 @@ from vseq.data.transforms import EncodeInteger
 from vseq.data.vocabulary import load_vocabulary
 
 
-repeats = 1
+REPEATS = 5
 
 
 class ResettingDataset():
@@ -75,14 +75,14 @@ def time_dataset(dataset):
     return min_t, max_t, median_t
 
 
-for i in range(repeats):
+for i in range(REPEATS):
     print(f"        Non-cached {i}: ", end="")
     time_dataset(dataset_not_cached)
 
-for i in range(repeats):
+for i in range(REPEATS):
     print(f"Cached with resets {i}: ", end="")
     time_dataset(dataset_cached_reset)
 
-for i in range(repeats):
+for i in range(REPEATS):
     print(f"            Cached {i}: ", end="")
     time_dataset(dataset_cached)
