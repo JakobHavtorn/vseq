@@ -25,5 +25,6 @@ torchvision
 tqdm
 uniplot
 wandb==0.10.25
+haste_pytorch
 # datasets
 # transformers
