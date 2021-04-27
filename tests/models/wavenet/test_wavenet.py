@@ -22,7 +22,7 @@ def generate_dummy(dummy_length):
     x = np.random.uniform(low=-1, high=1, size=(1, dummy_length)).astype(np.float32)
     x = np.reshape(x, [1, dummy_length, IN_CHANNELS])  # [batch, timestep, channels]
     x = torch.from_numpy(x)
-    x_sl = [dummy_length]
+    x_sl = torch.LongTensor([dummy_length])
     return x, x_sl
 
 
@@ -41,7 +41,7 @@ def wavenet():
 def test_wavenet_output_size(wavenet):
     x, x_sl = generate_dummy(wavenet.receptive_field + 1)
 
-    loss, output = wavenet(x, x_sl)
+    loss, metrics, output = wavenet(x, x_sl)
 
     # input size = receptive field size + 1
     # output size = input size - receptive field size
@@ -50,7 +50,7 @@ def test_wavenet_output_size(wavenet):
 
     x, x_sl = generate_dummy(wavenet.receptive_field * 2)
 
-    loss, output = wavenet(x, x_sl)
+    loss, metrics, output = wavenet(x, x_sl)
 
     # input size = receptive field size * 2
     # output size = input size - receptive field size
@@ -62,4 +62,4 @@ def test_wavenet_fail_with_short_input(wavenet):
     x, x_sl = generate_dummy(wavenet.receptive_field)
 
     with pytest.raises(InputSizeError):
-        l, o = wavenet(x, x_sl)  # Should fail. Input size is too short.
+        loss, metrics, output = wavenet(x, x_sl)  # Should fail. Input size is too short.

@@ -16,20 +16,27 @@ from .metrics import Metric
 def source_string(source):
     return f"{source[:18]}.." if len(source) > 20 else source
 
+
 def rank_string(rank):
     return f"[grey30]rank {rank:2d} [/grey30]"
 
 
 class Tracker:
     def __init__(
-        self, min_indent: int = 35, print_every: Union[int, float] = 1.0, rank: int = None, world_size: int = None
+        self,
+        min_indent: int = 35,
+        print_every: Union[int, float] = 1.0,
+        rank: Optional[int] = None,
+        world_size: Optional[int] = None,
     ) -> None:
         """Tracks metrics, prints to console and logs to wandb.
 
         Args:
             min_indent (int): Minimum indent for dataset name. Defaults to 35.
             print_every (Union[int, float]): Time between prints measured in steps (if int) or seconds (if float).
-                                             Defaults to 1.0 (second).
+                                             Defaults to 1.0 (seconds).
+            rank (Optional[int]): Rank (index) of the current worker process if using Distributed Data Parallel (DDP).
+            world_size (Optional[int]): Total number of worker processes if using Distributed Data Parallel (DDP).
         """
 
         self.min_indent = min_indent
@@ -37,8 +44,9 @@ class Tracker:
         self.rank = 0 if rank is None else rank
         self.world_size = world_size
 
-        assert ((rank is None) == (world_size is None)), "Must set both `rank` and `world_size` or neither"
-        self.is_ddp = (rank is not None)
+        # ddp logic
+        assert (rank is None) == (world_size is None), "Must either set both `rank` and `world_size` or neither of them"
+        self.is_ddp = rank is not None
         if self.is_ddp:
             self.terminal = Terminal()
 
@@ -46,15 +54,15 @@ class Tracker:
         self.printed_last = 0
         self.last_log_line_len = 0
         self.source = None
-        self.max_steps = None
+        self.max_steps = defaultdict(lambda: 0)
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
-        self.step = 0
+        self.step = defaultdict(lambda: 0)
         self.epoch = 0
 
         self.metrics = defaultdict(dict)  # dict(source=dict(metric.name=metric))
-        self.accumulated_metrics = defaultdict(lambda: defaultdict(list))  # dict(source=dict(metric.name=[metric]))
-        self.accumulated_output = defaultdict(list)  # dict(output.name=[output.value])
+        self.accumulated_metrics = defaultdict(lambda: defaultdict(list))  # dict(source=dict(metric.name=list(metric)))
+        self.accumulated_output = defaultdict(list)  # dict(key=list(value))
 
     @property
     def values(self) -> Dict[str, Dict[str, float]]:
@@ -96,8 +104,7 @@ class Tracker:
             for source in best_metrics.keys()
         }
 
-    def __call__(self, loader: Union[str, DataLoader]):
-        """Shortcut applicable to the standard case."""
+    def steps(self, loader: Union[str, DataLoader]):
         self.set(loader)
         for batch in loader:
             yield batch
@@ -105,31 +112,55 @@ class Tracker:
                 self.print()
         self.reset()
 
+    def epochs(self, N) -> Iterator[int]:
+        """Yields the epoch index while printing epoch number and epoch delimiter."""
+        for epoch in range(1, N + 1):
+            self.epoch = epoch
+
+            if self.rank == 0:
+                s = f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white] "
+                s += datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                rich.print(s, flush=True)
+
+            yield epoch
+
+            if self.rank == 0:
+                print("-" * (self.last_log_line_len or 50), flush=True)
+
+    def __call__(self, loader: Union[str, DataLoader]):
+        """Shortcut applicable to the standard case."""
+        return self.steps(loader)
+
     def set(self, source: Union[str, DataLoader]):
         """Set source name, start time and maximum number of steps if available."""
         if isinstance(source, DataLoader):
             self.source = source.dataset.source
-            self.max_steps = len(source)
+            self.max_steps[self.source] = len(source)
         else:
             self.source = source
-            self.max_steps = None
+            self.max_steps[self.source] = None
 
         self.start_time[self.source] = time()
 
         if self.is_ddp and self.rank == 0:
             for rank in reversed(range(self.world_size)):
-                rich.print(rank_string(rank) + source_string(self.source) + ' ' * self.last_log_line_len, flush=True)
-            rich.print(f'Running DDP with world_size={self.world_size}', flush=True, end='\r')
+                rich.print(rank_string(rank) + source_string(self.source) + " " * self.last_log_line_len, flush=True)
+            rich.print(f"Running DDP with world_size={self.world_size}", flush=True, end="\r")
 
         if self.is_ddp:
             distributed.barrier()
 
     def reset(self):
         """Resets metric values and subset specific tracking values. Prints new line."""
+        # print line for last iteration regardless of `do_print()`
         self.print(end="\n")
         if self.is_ddp:
             distributed.barrier()
-            if self.rank == 0:  # TODO This can be removed if printing with `print` rather than rich
+
+            # reset terminal to bottom of terminal window
+            # NOTE This is due to risk of race condition not resetting this properly.
+            # TODO Can be removed if printing with `print` rather than rich.
+            if self.rank == 0:
                 print(self.terminal.move_xy(0, self.terminal.height - 2), flush=True)
 
         for name, metric in self.metrics[self.source].items():
@@ -137,9 +168,7 @@ class Tracker:
 
         self.end_time[self.source] = time()
         self.source = None
-        self.max_steps = None
         self.printed_last = 0
-        self.step = 0
         self.accumulated_output = defaultdict(list)
 
     def do_print(self) -> bool:
@@ -148,7 +177,7 @@ class Tracker:
         if isinstance(self.print_every, float):
             do_print = (t - self.printed_last) > self.print_every
         else:
-            do_print = (self.step % self.print_every) == 0 or self.step == 1
+            do_print = (self.step[self.source] % self.print_every) == 0 or self.step[self.source] == 1
 
         if do_print:
             self.printed_last = t
@@ -160,7 +189,10 @@ class Tracker:
         source = self.source if source is None else source
 
         # progress string
-        steps_frac = f"{self.step}/-" if self.max_steps is None else f"{self.step}/{self.max_steps}"
+        if self.max_steps[source]:
+            steps_frac = f"{self.step[source]}/{self.max_steps[source]}"
+        else:
+            steps_frac = f"{self.step[source]}/-"
         if self.start_time[source] is None:
             duration = "-"
             s_per_step = "-"
@@ -185,14 +217,14 @@ class Tracker:
         s = f"{sp:<{self.min_indent + 60}s}{ms}"
 
         if self.is_ddp:
-            end = '\r' if self.rank == 0 else '\n'
+            end = "\r" if self.rank == 0 else "\n"
             s = rank_string(self.rank) + s
 
             # TODO Instead of rich, print with regular print and add colors manually.
             #      The current implementation has a race condition on placing the cursor
             #      and printing the line with rich. This is merged to one print call without rich.
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
-              rich.print(s, end=end, flush=True)
+                rich.print(s, end=end, flush=True)
             # print(self.terminal.move_y(self.terminal.height - self.rank - 1) + s, end='\r')#, flush=True)
         else:
             rich.print(s, end=end, flush=True)
@@ -201,24 +233,9 @@ class Tracker:
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
-
         # if ddp, gather and reduce metrics from other workers
         if self.is_ddp:
-            metrics_per_rank = [None] * self.world_size
-            distributed.all_gather_object(metrics_per_rank, (self.rank, self.metrics))
-            if self.rank == 0:
-                metrics_per_rank = [metrics for (rank, metrics) in metrics_per_rank if rank != 0]
-                for metrics in metrics_per_rank:
-                    for source in self.best_values.keys():
-                        m = list(metrics[source].values())
-                        self.update(m, source=source)
-                self.step = 0
-
-        if self.is_ddp and self.rank == 0:
-            rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
-            for source in self.best_values.keys():
-                self.print(source=source)
-                print(flush=True)
+            self.ddp_gather_and_reduce()
 
         # add extra, best and tracker metrics
         values = self.values
@@ -233,14 +250,16 @@ class Tracker:
         self.metrics = defaultdict(dict)
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
+        self.step = defaultdict(lambda: 0)
+        self.max_steps = defaultdict(lambda: 0)
 
     def update(self, metrics: List[Metric], source: Optional[str] = None):
-        """Update all tracked metrics with the given metrics adding any not currently tracked"""
+        """Update all metrics tracked on `source` with the given `metrics` and add any not currently tracked"""
         names = [metric.name for metric in metrics]
         assert len(names) == len(set(names)), "Metrics must have unique names"
         source = self.source if source is None else source
 
-        self.step += 1
+        self.step[self.source] += 1
         for metric in metrics:
             if metric.name in self.metrics[source]:
                 self.metrics[source][metric.name].update(metric)
@@ -248,24 +267,31 @@ class Tracker:
                 self.metrics[source][metric.name] = metric.copy()
 
     def accumulate(self, **kwargs: Dict[Any, Any]):
-        """Accumulate some outputs of interest. Gets reset on every `reset()` (e.g. epoch)"""
+        """Accumulate some outputs of interest. Gets reset on every call to `reset()` (e.g. epoch)"""
         for k, v in kwargs.items():
             self.accumulated_output[k].append(v)
 
-    def epochs(self, N) -> Iterator[int]:
-        """Yields the epoch index while printing epoch number and epoch delimiter."""
-        for epoch in range(1, N + 1):
-            self.epoch = epoch
+    def ddp_gather_and_reduce(self):
+        """Share metrics across all `Tracker` objects, reduce them in `rank==0` and update that Tracker"""
+        # gather metric objects across processes
+        metrics_per_rank = [None] * self.world_size
+        distributed.all_gather_object(metrics_per_rank, (self.rank, self.metrics))
 
-            if self.rank == 0:
-                s = f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white] "
-                s += datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                rich.print(s, flush=True)
+        if self.rank == 0:
+            # reduce gathered metrics
+            gathered_metrics = [metrics for (rank, metrics) in metrics_per_rank if rank != 0]
+            for source in self.best_values.keys():
+                # update metrics
+                for metrics in gathered_metrics:
+                    m = list(metrics[source].values())
+                    self.update(m, source=source)
 
-            yield epoch
+                # update steps to match total steps taken
+                self.step[source] = self.step[source] * (len(gathered_metrics) + 1)
+                self.max_steps[source] = self.max_steps[source] * (len(gathered_metrics) + 1)
 
-            if self.rank == 0:
-                print("-" * (self.last_log_line_len or 50), flush=True)
-
-    def steps(self, loader: Union[str, DataLoader]):
-        return self(loader)
+            # print summary of gathered and redued metrics
+            rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
+            for source in self.best_values.keys():
+                self.print(source=source)
+                print(flush=True)

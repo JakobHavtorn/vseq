@@ -1,5 +1,5 @@
 program: experiments/experiment_sweep_test.py
-name: Sweep Test 4 (Bayesian)
+name: Sweep Test (Bayesian)
 description: Bayesian hyperparameter optimization for test of sweeps
 entity: vseq
 project: sweep_test
