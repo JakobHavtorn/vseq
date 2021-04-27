@@ -10,6 +10,8 @@ import argparse
 import os
 
 from datetime import datetime
+
+from vseq.data.distributed_samplers import DistributedSamplerWrapper
 from vseq.evaluation.tracker import Tracker
 from vseq.evaluation.metrics import AccuracyMetric, LossMetric
 
@@ -24,22 +26,26 @@ import torch.distributed as dist
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--ddp_master_addr", default="localhost", type=str, help="address for the DDP master")
+    parser.add_argument("--ddp_master_port", default="123456", type=str, help="port for the DDP master")
     parser.add_argument("-n", "--nodes", default=1, type=int, help="number of nodes")
     parser.add_argument("-g", "--gpus", default=1, type=int, help="number of gpus per node")
     parser.add_argument("-nr", default=0, type=int, help="ranking of this node within the nodes")
+    parser.add_argument("--batch_size", default=64, type=int, help="batch size")
     parser.add_argument("--epochs", default=2, type=int, help="number of total epochs to run")
     parser.add_argument("--num_workers", default=2, type=int, help="number of dataloading workers")
+    parser.add_argument("--seed", default=0, type=int, help="seed")
     args = parser.parse_args()
     args.world_size = args.gpus * args.nodes
 
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12356"
+    os.environ["MASTER_ADDR"] = args.ddp_master_addr
+    os.environ["MASTER_PORT"] = args.ddp_master_port
 
     mp.spawn(train, nprocs=args.gpus, args=(args,))
 
 
 class ConvNet(nn.Module):
-    def __init__(self, conv1_ch=16, conv2_ch=16, hidden_dim=16, num_classes=10):
+    def __init__(self, conv1_ch=64, conv2_ch=64, hidden_dim=64, num_classes=10):
         super(ConvNet, self).__init__()
         self.layer1 = nn.Sequential(
             nn.Conv2d(1, conv1_ch, kernel_size=5, stride=1, padding=2),
@@ -58,11 +64,11 @@ class ConvNet(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(7 * 7 * conv2_ch, hidden_dim),
             nn.ReLU(),
-            nn.Batchidden_dimNorm1d(hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.Dropout(0.5),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Batchidden_dimNorm1d(hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.Dropout(0.5),
             nn.Linear(hidden_dim, num_classes)
         )
@@ -78,9 +84,9 @@ class ConvNet(nn.Module):
 def train(gpu_idx, args):
     rank = args.nr * args.gpus + gpu_idx
     dist.init_process_group(backend="nccl", init_method="env://", world_size=args.world_size, rank=rank)
+    torch.cuda.set_device(gpu_idx)
 
-    torch.manual_seed(0)
-    batch_size = 64
+    torch.manual_seed(args.seed)
 
     if gpu_idx == 0:
         wandb.init(
@@ -93,7 +99,6 @@ def train(gpu_idx, args):
     model = ConvNet()
     if gpu_idx == 0:
         print(model)
-    torch.cuda.set_device(gpu_idx)
     model.cuda(gpu_idx)
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu_idx])
 
@@ -110,15 +115,23 @@ def train(gpu_idx, args):
         root="./data", train=False, transform=transforms.ToTensor(), download=True
     )
     valid_dataset.source = "mnist_valid"
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset, num_replicas=args.world_size, rank=rank
+
+    train_sampler = DistributedSamplerWrapper(
+        sampler=torch.utils.data.RandomSampler(train_dataset),
+        num_replicas=args.world_size,
+        rank=rank
     )
-    valid_sampler = torch.utils.data.distributed.DistributedSampler(
-        valid_dataset, num_replicas=args.world_size, rank=rank
+    valid_sampler = DistributedSamplerWrapper(
+        sampler=torch.utils.data.BatchSampler(
+            sampler=torch.utils.data.SequentialSampler(valid_dataset),
+            batch_size=args.batch_size,
+            drop_last=False,
+        )
     )
+
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
-        batch_size=batch_size,
+        batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
@@ -126,11 +139,9 @@ def train(gpu_idx, args):
     )
     valid_loader = torch.utils.data.DataLoader(
         dataset=valid_dataset,
-        batch_size=batch_size,
-        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
-        sampler=valid_sampler,
+        batch_sampler=valid_sampler
     )
 
     tracker = Tracker(print_every=1.0, rank=rank, world_size=args.world_size)
@@ -139,7 +150,7 @@ def train(gpu_idx, args):
     for epoch in tracker.epochs(args.epochs):
 
         model.train()
-        for (images, labels) in tracker.steps(train_loader):
+        for images, labels in tracker.steps(train_loader):
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
 
@@ -161,7 +172,7 @@ def train(gpu_idx, args):
 
         with torch.no_grad():
             model.eval()
-            for i, (images, labels) in enumerate(tracker(valid_loader)):
+            for images, labels in tracker.steps(valid_loader):
                 images = images.cuda(non_blocking=True)
                 labels = labels.cuda(non_blocking=True)
 
@@ -181,6 +192,7 @@ def train(gpu_idx, args):
     if gpu_idx == 0:
         print("Training complete in: " + str(datetime.now() - start))
 
+    wandb.finish()
     dist.destroy_process_group()
 
 

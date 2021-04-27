@@ -1,4 +1,4 @@
-from typing import Optional, Iterator, List
+from typing import Optional, Iterator
 
 from operator import itemgetter
 
@@ -29,8 +29,7 @@ class DatasetFromSampler(Dataset):
             Single element by index
         """
         if self.sampler_list is None:
-            # Call self.sampler.__iter__ and iterate through it
-            self.sampler_list = list(self.sampler)
+            self.sampler_list = list(self.sampler)  # Calls self.sampler.__iter__
         return self.sampler_list[index]
 
     def __len__(self) -> int:
