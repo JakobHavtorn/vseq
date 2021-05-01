@@ -86,7 +86,7 @@ train_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=True,
     batch_size=4
-    # batch_sampler=train_sampler,
+    pin_memory=True,
 )
 val_loader = DataLoader(
     dataset=val_dataset,
@@ -94,7 +94,7 @@ val_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=4
-    # batch_sampler=val_sampler,
+    pin_memory=True,
 )
 
 model = vseq.models.WaveNet(
