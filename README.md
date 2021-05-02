@@ -30,6 +30,37 @@ root_dir
 ```
 
 
+## Type-hints
+
+This repo uses [Python type-hints](https://docs.python.org/3/library/typing.html).
+
+It also extends this with the [`torchtyping`](https://github.com/patrick-kidger/torchtyping) package which allows defining the shape, data type, layout and names of axis of `torch.Tensors`
+
+Turn this:
+
+```python
+def batch_outer_product(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    # x has shape (batch, x_channels)
+    # y has shape (batch, y_channels)
+    # return has shape (batch, x_channels, y_channels)
+    return x.unsqueeze(-1) * y.unsqueeze(-2)
+```
+
+into this:
+
+```python
+from torchtyping import TensorType
+
+
+def batch_outer_product(
+    x:   TensorType["batch", "x_channels"],
+    y:   TensorType["batch", "y_channels"]
+) -> TensorType["batch", "x_channels", "y_channels"]:
+
+    return x.unsqueeze(-1) * y.unsqueeze(-2)
+```
+
+
 
 ## WANDB
 

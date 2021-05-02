@@ -110,7 +110,7 @@ class Tracker:
             yield batch
             if self.do_print():
                 self.print()
-        self.reset()
+        self.unset()
 
     def epochs(self, N) -> Iterator[int]:
         """Yields the epoch index while printing epoch number and epoch delimiter."""
@@ -150,10 +150,9 @@ class Tracker:
         if self.is_ddp:
             distributed.barrier()
 
-    def reset(self):
-        """Resets metric values and subset specific tracking values. Prints new line."""
-        # print line for last iteration regardless of `do_print()`
-        self.print(end="\n")
+    def unset(self):
+        """Resets print timer and prints final line, unsets `source` and accumulates metrics."""
+        self.print(end="\n")  # print line for last iteration regardless of `do_print()`
         if self.is_ddp:
             distributed.barrier()
 
@@ -163,13 +162,22 @@ class Tracker:
             if self.rank == 0:
                 print(self.terminal.move_xy(0, self.terminal.height - 2), flush=True)
 
+        self.end_time[self.source] = time()
+
         for name, metric in self.metrics[self.source].items():
             self.accumulated_metrics[self.source][name].append(metric.copy())
 
-        self.end_time[self.source] = time()
         self.source = None
         self.printed_last = 0
         self.accumulated_output = defaultdict(list)
+
+    def reset(self):
+        """Reset all per-source attributes"""
+        self.metrics = defaultdict(dict)
+        self.start_time = defaultdict(lambda: None)
+        self.end_time = defaultdict(lambda: None)
+        self.step = defaultdict(lambda: 0)
+        self.max_steps = defaultdict(lambda: 0)
 
     def do_print(self) -> bool:
         """Print at first and last step and according to `print_every`"""
@@ -193,14 +201,18 @@ class Tracker:
             steps_frac = f"{self.step[source]}/{self.max_steps[source]}"
         else:
             steps_frac = f"{self.step[source]}/-"
+
         if self.start_time[source] is None:
             duration = "-"
         else:
             duration = time() - self.start_time[source]
+            s_per_step = self.step[source] / duration
+            s_per_step = f"{round(s_per_step, 3):.3f}Hz"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
-        ps = f"{steps_frac} [not bold]([/not bold]{duration}[not bold])[/not bold]"  # +42 format
+
+        ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{s_per_step}][/]"  # +42 format
 
         # metrics string
         sep = "[magenta]|[/magenta]"  # +19 format pr metric
@@ -230,11 +242,10 @@ class Tracker:
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
-        # if ddp, gather and reduce metrics from other workers
         if self.is_ddp:
             self.ddp_gather_and_reduce()
 
-        # add extra, best and tracker metrics
+        # add best and tracker metrics and any `extra_log_data`
         values = self.values
         values.update(extra_log_data)
         for source in self.best_values.keys():
@@ -244,11 +255,7 @@ class Tracker:
         if self.rank == 0:
             wandb.log(values)
 
-        self.metrics = defaultdict(dict)
-        self.start_time = defaultdict(lambda: None)
-        self.end_time = defaultdict(lambda: None)
-        self.step = defaultdict(lambda: 0)
-        self.max_steps = defaultdict(lambda: 0)
+        self.reset()
 
     def update(self, metrics: List[Metric], source: Optional[str] = None):
         """Update all metrics tracked on `source` with the given `metrics` and add any not currently tracked"""
