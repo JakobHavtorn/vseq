@@ -143,3 +143,5 @@ settings.json
 wandb
 
 pytest
+
+VSEQ.env
