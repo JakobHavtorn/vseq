@@ -14,7 +14,7 @@ import vseq.models
 import vseq.utils
 import vseq.utils.device
 
-from vseq.data import DataModule, BaseDataset
+from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.tokens import DELIMITER_TOKEN
@@ -25,9 +25,6 @@ from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.utils.argparsing import str2bool
-
-
-LOGGER = logging.getLogger(name=__file__)
 
 
 parser = argparse.ArgumentParser()
