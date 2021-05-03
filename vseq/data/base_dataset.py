@@ -54,14 +54,16 @@ class BaseDataset(Dataset):
             examples += [f"{row['filename']}-{idx}" for idx in range(int(row["n_examples"]))]
         
         # cache dataset for each loader
-        print("\nLoading and caching data:")
+        print(f"\nLoading and caching data for {self.source}:")
         with tqdm(total=len(source_rows) * len(self.unique_loaders)) as pbar:
             for loader in self.unique_loaders:
+                n_cached = len(loader.load.memory)
                 loader.enable_cache()
                 for row in source_rows:
                     loader.load_and_cache_batch(row["filename"])
                     pbar.update()
-                assert len(examples) == len(loader.load.memory), "Not all examples were cached correctly."
+
+                assert len(examples) == len(loader.load.memory) - n_cached, "Not all examples were cached correctly."
 
         return examples
             

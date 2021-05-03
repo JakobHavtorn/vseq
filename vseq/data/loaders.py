@@ -89,12 +89,12 @@ class Loader():
             cache (bool): Whether to enable caching.
         """
         self.extension = extension
-        self.cache = cache
+        self.cache = False
 
         self.suffix = f"{os.extsep}{extension}" if extension is not None else ""
         self.id = str(uuid.uuid4())
 
-        if self.cache:
+        if cache:
             self.enable_cache()
 
     def enable_cache(self):

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 import vseq
 import vseq.data
+from vseq.data import tokenizers
 import vseq.models
 import vseq.utils
 import vseq.utils.device
@@ -17,8 +18,9 @@ import vseq.utils.device
 from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
-from vseq.data.tokens import DELIMITER_TOKEN
-from vseq.data.tokenizers import word_tokenizer
+from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD
+from vseq.data.tokenizers import char_tokenizer, word_tokenizer
+from vseq.data.loaders import TextLoader
 from vseq.data.token_map import TokenMap
 from vseq.data.transforms import EncodeInteger
 from vseq.data.vocabulary import load_vocabulary
@@ -35,6 +37,7 @@ parser.add_argument("--optimizer_kwargs", default='{}', type=json.loads, help="e
 parser.add_argument("--embedding_dim", default=464, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=373, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
+parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
 parser.add_argument(
     "--loss_reduction",
     default="nats_per_dim",
@@ -67,31 +70,33 @@ wandb.init(
 wandb.config.update(args)
 rich.print(vars(args))
 
-
-vocab = load_vocabulary(PENN_TREEBANK_TRAIN)
-token_map = TokenMap(tokens=vocab, add_start=False, add_end=False, add_delimit=True)
+if args.token_level == "word":
+    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
+    tokenizer = word_tokenizer
+else:
+    tokens = ENGLISH_STANDARD
+    tokenizer = char_tokenizer
+token_map = TokenMap(tokens=tokens, add_start=False, add_end=False, add_delimit=True)
 penn_treebank_transform = EncodeInteger(
     token_map=token_map,
-    tokenizer=word_tokenizer,
+    tokenizer=tokenizer,
 )
 batcher = TextBatcher()
+loader = TextLoader('txt', cache=True)
 
-modalities = [("txt", penn_treebank_transform, batcher)]
+modalities = [(loader, penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 
 train_loader = DataLoader(

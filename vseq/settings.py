@@ -43,6 +43,8 @@ logging.basicConfig(format=LOG_FORMAT, level=logging.getLevelName(LOG_LEVEL))
 DATA_ROOT_DIRECTORY = get_vseq_envvar("VSEQ_DATA_ROOT_DIRECTORY", default=None)
 DATA_DIRECTORY = os.path.join(DATA_ROOT_DIRECTORY, "data")
 SOURCE_DIRECTORY = os.path.join(DATA_ROOT_DIRECTORY, "source")
+VOCAB_DIRECTORY = os.path.join(DATA_ROOT_DIRECTORY, "vocabularies")
 
-for path in [DATA_DIRECTORY, SOURCE_DIRECTORY]:
+
+for path in [DATA_DIRECTORY, SOURCE_DIRECTORY, VOCAB_DIRECTORY]:
     os.makedirs(path, exist_ok=True)

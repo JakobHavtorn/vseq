@@ -19,7 +19,6 @@ os.mkdir(ptb_source_dir)
 
 header = "filename,n_examples"
 for subset in SUBSETS:
-    
 
     # download the subset
     download_url = f"https://raw.githubusercontent.com/wojzaremba/lstm/master/data/ptb.{subset}.txt"
@@ -29,7 +28,7 @@ for subset in SUBSETS:
     # count examples
     data_file_path = os.path.join(ptb_data_dir, f"ptb.{subset}.txt")
     with open(data_file_path, "r") as data_file_buffer:
-        n_examples = data_file_buffer.read().strip().count("\n")
+        n_examples = data_file_buffer.read().strip().count("\n") + 1
 
     # create the subset source file
     source_file_lines = [header, f"{os.path.splitext(data_file_path)[0]},{n_examples}"]
