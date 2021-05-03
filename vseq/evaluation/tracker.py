@@ -14,7 +14,7 @@ from .metrics import Metric
 
 
 def source_string(source):
-    return f"{source[:18]}.." if len(source) > 20 else source
+    return f"{source[:18]}.." if len(source) > 20 else f"{source:<20s}"
 
 
 def rank_string(rank):
@@ -54,11 +54,11 @@ class Tracker:
         self.printed_last = 0
         self.last_log_line_len = 0
         self.source = None
-        self.max_steps = defaultdict(lambda: 0)
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
-        self.step = defaultdict(lambda: 0)
         self.epoch = 0
+        self.step = defaultdict(lambda: 0)
+        self.max_steps = defaultdict(lambda: 0)
 
         self.metrics = defaultdict(dict)  # dict(source=dict(metric.name=metric))
         self.accumulated_metrics = defaultdict(lambda: defaultdict(list))  # dict(source=dict(metric.name=list(metric)))
@@ -206,13 +206,13 @@ class Tracker:
             duration = "-"
         else:
             duration = time() - self.start_time[source]
-            s_per_step = self.step[source] / duration
-            s_per_step = f"{round(s_per_step, 3):.3f}Hz"
+            steps_per_s = self.step[source] / duration
+            steps_per_s = f"{round(steps_per_s, 3):.3f}Hz"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
 
-        ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{s_per_step}][/]"  # +42 format
+        ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{steps_per_s}][/]"  # +42 format
 
         # metrics string
         sep = "[magenta]|[/magenta]"  # +19 format pr metric

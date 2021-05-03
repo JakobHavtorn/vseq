@@ -11,7 +11,7 @@ import os
 
 from datetime import datetime
 
-from vseq.data.distributed_samplers import DistributedSamplerWrapper
+from vseq.data.samplers.distributed_samplers import DistributedSamplerWrapper
 from vseq.evaluation.tracker import Tracker
 from vseq.evaluation.metrics import AccuracyMetric, LossMetric
 
@@ -88,7 +88,7 @@ def train(gpu_idx, args):
 
     torch.manual_seed(args.seed)
 
-    if gpu_idx == 0:
+    if rank == 0:
         wandb.init(
             entity="vseq",
             project="sandbox",
@@ -97,7 +97,7 @@ def train(gpu_idx, args):
 
     # define the model
     model = ConvNet()
-    if gpu_idx == 0:
+    if rank == 0:
         print(model)
     model.cuda(gpu_idx)
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu_idx])
@@ -110,11 +110,11 @@ def train(gpu_idx, args):
     train_dataset = torchvision.datasets.FashionMNIST(
         root="./data", train=True, transform=transforms.ToTensor(), download=True
     )
-    train_dataset.source = "mnist_train"
+    train_dataset.source = 'train'
     valid_dataset = torchvision.datasets.FashionMNIST(
         root="./data", train=False, transform=transforms.ToTensor(), download=True
     )
-    valid_dataset.source = "mnist_valid"
+    valid_dataset.source = 'val'
 
     train_sampler = DistributedSamplerWrapper(
         sampler=torch.utils.data.RandomSampler(train_dataset),
@@ -132,7 +132,6 @@ def train(gpu_idx, args):
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
         batch_size=args.batch_size,
-        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
         sampler=train_sampler,
