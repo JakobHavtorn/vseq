@@ -142,6 +142,10 @@ settings.json
 # wandb
 wandb
 
-pytest
-
+# environment file
 VSEQ.env
+
+# data files
+.wav
+.flac
+.mp3

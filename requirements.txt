@@ -1,4 +1,5 @@
 black
+blessed
 gpustat
 ipdb
 ipython
@@ -11,15 +12,17 @@ pylint
 pytest
 pytest-cov
 pytest-html
+pyyaml
 rich
 rootpath
 scikit-learn
 seaborn
-tensorboard
-torch==1.8.0+cu111  # -f https://download.pytorch.org/whl/torch_stable.html 
-torchaudio==0.8.0
+torch==1.8.1
+torchaudio
 torchtext
-torchvision==0.9.0+cu111
+torchvision
 tqdm
-wandb==0.10.25
-yaml
+uniplot
+wandb
+# datasets
+# transformers

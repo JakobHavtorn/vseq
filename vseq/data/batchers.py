@@ -1,11 +1,11 @@
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 
 import torch
 
 
 class Batcher:
-    """Base class for Batchers. These must define `collate` and optionally `sort` methods.
-    """        
+    """Base class for Batchers. These must define `collate` and optionally `sort` methods."""
+
     def __init__(self) -> None:
         pass
 
@@ -20,7 +20,7 @@ class Batcher:
         """
         raise NotImplementedError()
 
-    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: bool = None):
+    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: Optional[int] = None):
         """Sort the order of examples within the batch optionally specifying which modality to sort if more than one.
 
         Args:
@@ -44,11 +44,19 @@ class AudioBatcher(Batcher):
         T = max(sequence_lengths)
         N = len(batch)
 
-        padded_batch = torch.zeros((N, T), dtype=torch.float32)
+        padded_batch = torch.zeros((N, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
             padded_batch[i, :seq_len] = batch[i]
 
-        return padded_batch, sequence_lengths
+        return padded_batch, torch.LongTensor(sequence_lengths)
+
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
+        if sort_modality_idx is not None:
+            sort_key = lambda x: len(x[0][sort_modality_idx])
+        else:
+            sort_key = lambda x: len(x[0])
+
+        return sorted(batch, key=sort_key, reverse=True)
 
 
 class SpectrogramBatcher(Batcher):
@@ -67,7 +75,7 @@ class SpectrogramBatcher(Batcher):
         for i, seq_len in enumerate(sequence_lengths):
             padded_batch[i, :, :seq_len] = batch[i]
 
-        return padded_batch, sequence_lengths
+        return padded_batch, torch.LongTensor(sequence_lengths)
 
 
 class TextBatcher(Batcher):
@@ -86,7 +94,7 @@ class TextBatcher(Batcher):
 
         return torch.LongTensor(padded_batch), torch.LongTensor(sequence_lengths)
 
-    def sort(self, batch: List[torch.Tensor], sort_modality_idx: bool = None):
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:
             sort_key = lambda x: len(x[0][sort_modality_idx])
         else:

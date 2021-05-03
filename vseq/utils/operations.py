@@ -93,7 +93,6 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch
     Returns:
         Tensor: The sequence mask of shape NT.
     """
-    # import IPython; IPython.embed()
     device = seq_lens.device if device is None else device
     if not isinstance(seq_lens, torch.Tensor):
         seq_lens = torch.LongTensor(seq_lens) if device == torch.device('cpu') else torch.cuda.LongTensor(seq_lens)
@@ -106,7 +105,7 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch
     return seq_mask.to(dtype)
 
 
-def detach(x):
+def detach(x: Union[torch.Tensor, Any]):
     """Detach a tensor from the computational graph"""
     if isinstance(x, torch.Tensor):
         return x.detach()

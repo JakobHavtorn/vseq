@@ -5,6 +5,7 @@ from typing import List, Optional, Set, Union
 
 import torch
 
+from vseq.utils.operations import detach
 
 
 class Metric:
@@ -20,14 +21,13 @@ class Metric:
         """Primary value of the metric to be used for logging"""
         raise NotImplementedError()
 
-    @property
-    def str_value(self):
-        """String representation of `value` to be used for e.g. console printing"""
-        raise NotImplementedError()
-
     def update(self, metric):
         """Update the metric (e.g. running mean)"""
         raise NotImplementedError()
+
+    @property
+    def str_value(self):
+        return f"{self.value:{self._str_value_fmt}f}"
 
     @staticmethod
     def get_best(metrics):
@@ -59,7 +59,20 @@ class RunningMeanMetric(Metric):
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
+        """Create a running mean metric.
+
+        Args:
+            values (Union[torch.Tensor, float]): Values of the metric
+            name (str): Name of the metric
+            tags (Set[str]): Tags to use for grouping with other metrics.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
+            weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
+        """
         super().__init__(name=name, tags=tags)
+
+        values = detach(values)
+        reduce_by = detach(reduce_by)
+        reduce_by = detach(reduce_by)
 
         numel = values.numel() if isinstance(values, torch.Tensor) else 1
         value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
@@ -75,10 +88,6 @@ class RunningMeanMetric(Metric):
     def value(self):
         return self._value
 
-    @property
-    def str_value(self):
-        return f"{self.value:{self._str_value_fmt}f}"
-
     def update(self, metric: Metric):
         """Update the running mean statistic.
 
@@ -92,6 +101,48 @@ class RunningMeanMetric(Metric):
         self._value = self._value * w1 + metric._value * w2  # Reduce between batches (over entire epoch)
 
         self.weight_by = d
+
+
+class AccuracyMetric(Metric):
+    _str_value_fmt = "<10.3"
+    get_best = max_value
+
+    def __init__(
+        self,
+        predictions: Union[torch.Tensor, float],
+        labels: Union[torch.Tensor, float],
+        name: str = "accuracy",
+        tags: Set[str] = None,
+    ):
+        """Classification accuracy"""
+        super().__init__(name, tags)
+        predictions = detach(predictions)
+        labels = detach(labels)
+        self.correct = (predictions == labels).sum().item()
+        self.total = labels.size(0)
+
+    @property
+    def value(self):
+        return self.correct / self.total
+
+    def update(self, metric: Metric):
+        self.correct += metric.correct
+        self.total += metric.total
+
+
+class LossMetric(RunningMeanMetric):
+    base_tags = {"losses"}
+    get_best = min_value
+
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str = "loss",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+    ):
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class LLMetric(RunningMeanMetric):

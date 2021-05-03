@@ -2,42 +2,44 @@ program: experiments/experiment_bowman.py
 name: Bowman VAE (Bayesian)
 description: Bayesian hyperparameter optimization for Bowman VAE
 entity: vseq
-project: vseq
+project: bowman
 method: bayes
 metric:
-  name: elbo_valid
+  name: ptb_valid.elbo
   goal: maximize
 early_terminate:
   type: hyperband  # https://arxiv.org/pdf/1603.06560.pdf
   s: 2
   eta: 3
   max_iter: 27
-parameters:
+parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
   lr:  # continuous uniform
+    distribution: uniform
     min: 0.0001
     max: 0.01
-  embedding_dim:  # categorical
-    values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
+  batch_size:  # categorical
+    values: [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
+  embedding_dim:
+    values: [4, 8, 16, 32, 64, 128, 192, 256, 384]
   latent_dim:
-    values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
+    values: [4, 8, 16, 32, 64, 128]
   hidden_size:
     values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
-  n_highway_blocks:
+  n_highway_blocks:  # discrete uniform
+    distribution: int_uniform
     min: 0
     max: 10
-  word_dropout:  # continuous uniform
-    min: 0.01
-    max: 0.99
-  anneal_steps:  # integer uniform (quantized in steps of 100)
+  word_dropout:
+    distribution: uniform
+    min: 0.0
+    max: 1.0
+  anneal_steps:  # discrete uniform (quantized in steps of 100)
     distribution: q_uniform
-    min: 100
-    max: 10000
-    q: 100
+    min: 1000
+    max: 100000
+    q: 1000
   anneal_start_value:
-    values: [0, 0.1, 0.2, 0.3, 0.4, 0.5]
-  batch_size:
-    values: [16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512]
-  # samples:
-  #   values: [1, 2, 5, 10, 20]
-  # importance_weighted:
-  #   values: [True, False]
+    distribution: q_uniform
+    min: 0.0
+    max: 1.0
+    q: 0.1

@@ -1,7 +1,16 @@
 import math
 
 
-class CosineAnnealer:
+class Annealer:
+    """Abstract base class for annealers"""
+
+    value = None
+
+    def step(self):
+        raise NotImplementedError()
+
+
+class CosineAnnealer(Annealer):
     """Anneal a `value` using a cosine annealing schedule as in [1].
 
     Args:
@@ -13,15 +22,16 @@ class CosineAnnealer:
     """
 
     def __init__(self, n_steps: int, start_value: float = 0, end_value: float = 1):
+        super().__init__()
+
         if start_value != end_value:
             assert n_steps > 0
 
-        self.steps = 0
         self.n_steps = n_steps
         self.start_value = start_value
         self.end_value = end_value
+        self.steps = 0
         self.value = start_value
-        super().__init__()
 
     def step(self):
         self.steps += 1

@@ -1,8 +1,56 @@
 import os
+import subprocess
+import re
 
-from typing import Optional
+from io import StringIO
+from typing import Optional, Union, List
 
 import torch
+import pandas as pd
+
+
+def get_visible_devices_global_ids():
+    """Return the global indices of the visible devices"""
+    if "CUDA_VISIBLE_DEVICES" not in os.environ:
+        return list(range(torch.cuda.device_count()))
+
+    visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
+    visible_devices = re.split('; |, ', visible_devices)
+    visible_devices = [int(idx) for idx in visible_devices]
+    return visible_devices
+
+
+def get_gpu_memory_usage() -> pd.DataFrame:
+    """Return the free and used memory per GPU device on the node"""
+    gpu_stats = subprocess.check_output(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"])
+
+    gpu_df = pd.read_csv(StringIO(gpu_stats.decode("utf-8")), names=["memory.used", "memory.free"], skiprows=1)
+
+    gpu_df.rename(columns={"memory.used": "used", "memory.free": "free"}, inplace=True)
+    gpu_df["free"] = gpu_df["free"].map(lambda x: int(x.rstrip(" [MiB]")))
+    gpu_df["used"] = gpu_df["used"].map(lambda x: int(x.rstrip(" [MiB]")))
+
+    print("GPU usage:\n{}".format(gpu_df))
+    return gpu_df
+
+
+def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.device, List[torch.device]]:
+    """Return one or more available/visible (and unused) devices giving preference to those with most free memory"""
+    gpu_df = get_gpu_memory_usage()
+
+    visible_devices = get_visible_devices_global_ids()
+    invisible_devices = set(range(torch.cuda.device_count())) - set(visible_devices)
+    
+    if invisible_devices:
+        gpu_df = gpu_df.drop(index=invisible_devices)
+
+    if require_unused:
+        gpu_df = gpu_df[gpu_df.used < 10]
+    
+    gpu_df = gpu_df.sort_values(by="free")
+    device_ids = gpu_df.iloc[:n_gpus].index.to_list()
+    devices = [torch.device(idx) for idx in device_ids]
+    return devices[0] if len(devices) == 1 else devices
 
 
 def get_device(idx: Optional[int] = None):
@@ -43,5 +91,7 @@ def test_gpu_functionality():
         torch.zeros(1).cuda()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     test_gpu_functionality()
+    free_gpu_id = get_free_gpus()
+    print(free_gpu_id)
