@@ -1,14 +1,11 @@
-import os
-import itertools
 import random
 
-
-import numpy as np
-from typing import Union
+from typing import Iterator, Union, List
 from torch.utils.data.sampler import Sampler
 
-from .base_dataset import BaseDataset
-from .datapaths import DATAPATHS_MAPPING
+import numpy as np
+
+from ..datapaths import DATAPATHS_MAPPING
 
 
 class FrameSampler(Sampler):
@@ -22,8 +19,8 @@ class FrameSampler(Sampler):
         num_batches: Union[int, None] = None,
     ):
         """
-        The sampler groups the source into sample pools of examples with similar length meeting criterias defined by
-        'max_pool_difference' and 'min_pool_size'. Batches of close to, but never more than, 'max_seconds', are
+        This batch_sampler groups the source into sample pools of examples with similar length meeting criterias defined
+        by 'max_pool_difference' and 'min_pool_size'. Batches of close to, but never more than, 'max_seconds', are
         constructed by first sampling a pool and then sampling each batch from from within that pool.
 
         Args:
@@ -61,9 +58,7 @@ class FrameSampler(Sampler):
         return np.array(lengths)
 
     def create_sample_pools(self, max_diff, min_size):
-        """
-        Creates the sample pools. Can be used to change to the sampling criteria without creating a new sampler.
-        """
+        """Creates the sample pools. Can be used to change to the sampling criteria without creating a new sampler."""
         start, end = 0, 0
         sorted_idxs = np.argsort(self.lengths)
         sorted_lens = self.lengths[sorted_idxs]
@@ -83,10 +78,7 @@ class FrameSampler(Sampler):
         return pools
 
     def sample_batches(self):
-        """
-        Sample batches from the pools.
-        """
-
+        """Sample batches from the pools."""
         if self.num_batches is not None:
             if len(self.buffer) >= self.num_batches:
                 batches = self.buffer[:self.num_batches]
@@ -106,7 +98,7 @@ class FrameSampler(Sampler):
 
         return batches
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[List[int]]:
         try:
             for batch in self.batches:
                 yield batch
@@ -125,8 +117,8 @@ class EvalSampler(Sampler):
         max_seconds: float = 320.0
     ):
         """
-        The sampler groups the source into sample pools of examples with similar length meeting criterias defined by
-        'max_pool_difference' and 'min_pool_size'. Batches of up to 'seconds' are constructed by sampling from
+        This batch_sampler groups the source into sample pools of examples with similar length meeting criterias defined
+        by 'max_pool_difference' and 'min_pool_size'. Batches of up to 'seconds' are constructed by sampling from
         one pool at the time.
 
         Args:
@@ -144,9 +136,7 @@ class EvalSampler(Sampler):
         self.batches = self.sample_batches()
 
     def load_lengths(self, source_filepath):
-        """
-        Loads the example lengths into an array with same order as the examples of the source dataset.
-        """
+        """Loads the example lengths into an array with same order as the examples of the source dataset."""
         with open(source_filepath, "r") as source_file_buffer:
             lines = source_file_buffer.read().splitlines()
 
@@ -154,10 +144,7 @@ class EvalSampler(Sampler):
         return np.array(lengths)
 
     def sample_batches(self):
-        """
-        Sample batches from the pools.
-        """
-
+        """Sample batches from the pools."""
         sorted_idxs = np.argsort(self.lengths)
         batch_idxs = (self.lengths[sorted_idxs].cumsum() // self.max_seconds).astype(int)
         split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
@@ -165,7 +152,7 @@ class EvalSampler(Sampler):
         batches = list(map(lambda x: x.tolist(), batches))
         return batches
     
-    def __iter__(self):
+    def __iter__(self) -> Iterator[List[int]]:
         for batch in self.batches:
             yield batch
 

@@ -13,7 +13,7 @@ import torch.distributions as D
 from vseq.utils.operations import sequence_mask
 
 from .modules import CausalConv1d, ResidualStack, DenseNet
-from ..base_module import BaseModule
+from ..base_model import BaseModel
 
 
 Output = namedtuple("Output", ["loss", "ll", "logits", "categorical"])
@@ -26,7 +26,7 @@ class InputSizeError(Exception):
         super().__init__(message)
 
 
-class WaveNet(BaseModule):
+class WaveNet(BaseModel):
     def __init__(
         self,
         in_channels: int = 256,
@@ -100,7 +100,7 @@ class WaveNet(BaseModule):
             raise InputSizeError(int(x.size(2)), self.receptive_field, output_size)
 
     def _get_target(self, x: torch.FloatTensor):
-        target = x.squeeze(1)  # (B, C, T) to (B, T)
+        target = x.squeeze(-1)  # (B, T, C) to (B, T)
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
         target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
         target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
@@ -110,8 +110,8 @@ class WaveNet(BaseModule):
         """To compute the loss, the inputs must be compared to outputs shifted by the receptive field.
 
         Args:
-            x (torch.FloatTensor): Input audio waveform, i.e. the target (B, T) (may be dequantized with [0, 1) noise)
-            x_sl (list[int]): Sequence lengths in the batch
+            target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) (may be dequantized with [0, 1) noise)
+            x_sl (torch.LongTensor): Sequence lengths in the batch
             output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T)
         """
         target = target[:, self.receptive_field :]  # Causal
@@ -133,7 +133,7 @@ class WaveNet(BaseModule):
 
         Args:
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
-            x_sl (list): Sequence lengths of each example in the batch.
+            x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
         if self.in_channels == 1:
             x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)

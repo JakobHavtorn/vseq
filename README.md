@@ -30,6 +30,12 @@ root_dir
 ```
 
 
+## Type-hints
+
+This repo uses [Python type-hints](https://docs.python.org/3/library/typing.html).
+
+It also extends this with the [`torchtyping`](https://github.com/patrick-kidger/torchtyping) package which allows defining the shape, data type, layout and names of axis of `torch.Tensors`
+
 
 ## WANDB
 

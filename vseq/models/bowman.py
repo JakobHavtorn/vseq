@@ -14,10 +14,10 @@ import vseq.modules.activations
 from vseq.utils.operations import sequence_mask
 from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
 
-from .base_module import BaseModule
+from .base_model import BaseModel
 
 
-class Bowman(BaseModule):
+class Bowman(BaseModel):
     def __init__(
         self,
         num_embeddings: int,
@@ -26,6 +26,8 @@ class Bowman(BaseModule):
         latent_dim: int,
         n_highway_blocks: int,
         delimiter_token_idx: int,
+        random_prior_variance: bool = False,
+        trainable_prior: bool = False
     ):
         super().__init__()
 
@@ -35,6 +37,8 @@ class Bowman(BaseModule):
         self.latent_dim = latent_dim
         self.n_highway_blocks = n_highway_blocks
         self.delimiter_token_idx = delimiter_token_idx
+        self.random_prior_variance = random_prior_variance
+        self.trainable_prior = trainable_prior
 
         self.std_activation = nn.Softplus(beta=np.log(2))
         self.std_activation_inverse = vseq.modules.activations.InverseSoftplus(beta=np.log(2))
@@ -79,8 +83,16 @@ class Bowman(BaseModule):
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
-        prior_logits = torch.cat([torch.zeros(latent_dim), torch.ones(latent_dim)])
-        self.register_buffer("prior_logits", prior_logits)
+        if random_prior_variance:
+            m, v = torch.zeros(latent_dim), torch.ones(latent_dim)
+            prior_variance = D.LogNormal(m, v).sample()
+        else:
+            prior_variance = torch.ones(latent_dim)
+        prior_logits = torch.cat([torch.zeros(latent_dim), prior_variance])
+        if self.trainable_prior:
+            self.prior_logits = nn.Parameter(prior_logits)
+        else:
+            self.register_buffer("prior_logits", prior_logits)
 
         # TODO WordDropout as module
         # TODO Likelihood as module
@@ -119,7 +131,7 @@ class Bowman(BaseModule):
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl - 1),
-            PerplexityMetric(elbo, reduce_by=x_sl - 1),
+            PerplexityMetric(elbo, reduce_by=x_sl - 1)
         ]
 
         outputs = SimpleNamespace(
