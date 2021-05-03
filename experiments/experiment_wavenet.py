@@ -13,7 +13,7 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset, DataModule, transforms
-from vseq.data.batcher import AudioBatcher
+from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
 from vseq.data.text_cleaners import clean_librispeech
 from vseq.data.token_map import TokenMap

@@ -21,10 +21,12 @@ def memoize(func):
     memoized_func.memory = cache
     return memoized_func
 
+
 @dataclass
 class MetaData:
     length: int
     file_path: str
+
 
 @dataclass
 class AudioMetaData(MetaData):
@@ -35,13 +37,46 @@ class AudioMetaData(MetaData):
     example_id: str
     file_path: str
 
+
 @dataclass
 class TextMetaData(MetaData):
     word_length: int
     char_length: int
-    example_id: str
     file_path: str
+    example_id: str = None
     line_idx: int = None
+
+
+def load_text(file_path):
+    with open(file_path, "r") as text_file:
+        text = text_file.read()
+
+    metadata = TextMetaData(
+        length=len(text),
+        char_length=len(text),
+        word_length=len(text.split()),
+        file_path=file_path
+    )
+    return text, metadata
+
+
+def load_audio(file_path, sum_channels: bool = False):
+    metadata = torchaudio.info(file_path)
+    audio, _ = torchaudio.load(file_path)
+
+    if sum_channels:
+        audio = audio.sum(axis=0)
+
+    metadata = AudioMetaData(
+        sample_rate=metadata.sample_rate,
+        channels=metadata.num_channels,
+        bits_per_sample=metadata.bits_per_sample,
+        encoding=metadata.encoding,
+        length=metadata.num_frames,
+        file_path=file_path,
+    )
+    return audio, metadata
+
 
 class Loader():
 
@@ -75,6 +110,7 @@ class Loader():
     def load(self, example_id):
         raise NotImplementedError
 
+
 class AudioLoader(Loader):
 
     def __init__(self, extension, cache=False, sum_channels: bool = True):
@@ -91,21 +127,8 @@ class AudioLoader(Loader):
     def load(self, example_id):
         """Load a single audio file."""
         file_path = example_id + self.suffix
-        metadata = torchaudio.info(file_path)
-        audio, _ = torchaudio.load(file_path)
+        return load_audio(file_path, self.sum_channels)
 
-        if self.sum_channels:
-            audio = audio.sum(axis=0)
-
-        metadata = AudioMetaData(
-            sample_rate=metadata.sample_rate,
-            channels=metadata.num_channels,
-            bits_per_sample=metadata.bits_per_sample,
-            encoding=metadata.encoding,
-            length=metadata.num_frames,
-            file_path=file_path,
-        )
-        return audio, metadata
 
 class TextLoader(Loader):
 
@@ -122,17 +145,9 @@ class TextLoader(Loader):
     def load(self, example_id):
         """Load a single text file"""
         file_path = example_id + self.suffix
-        with open(file_path, "r") as text_file:
-            string = text_file.read()
-
-        metadata = TextMetaData(
-            length=len(string),
-            char_length=len(string),
-            word_length=len(string.split()),
-            example_id=example_id,
-            file_path=file_path
-        )
-        return string, metadata
+        text, metadata = load_text(file_path)
+        metadata.example_id = example_id
+        return text, metadata
 
     def load_and_cache_batch(self, batch_id):
         """Load a text file with multiple examples and cache them."""

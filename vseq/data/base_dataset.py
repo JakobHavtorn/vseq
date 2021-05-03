@@ -1,18 +1,15 @@
-from enum import unique
 import csv
-import os
 
 from tqdm import tqdm
 from typing import List, Tuple, Any
-from vseq.data.load import MetaData
 
-from torch import Tensor
 from torch.utils.data import Dataset
 
-from .load import Loader
+from .loaders import Loader
 from .transforms import Transform
-from .batcher import Batcher
+from .batchers import Batcher
 from .datapaths import DATAPATHS_MAPPING
+
 
 class BaseDataset(Dataset):
     def __init__(self, source: str, modalities: List[Tuple[Loader, Transform, Batcher]], sort: bool = True):
@@ -41,10 +38,10 @@ class BaseDataset(Dataset):
         
         with open(source_filepath, newline='') as source_file_buffer:
             reader = csv.DictReader(source_file_buffer)
-            _is_batch_dataset = ("n_examples" in reader.fieldnames)
+            is_batch_dataset = ("n_examples" in reader.fieldnames)
             source_rows = list(reader)
         
-        if _is_batch_dataset:
+        if is_batch_dataset:
             return self._load_and_cache_batch_dataset(source_rows)
         return [row["filename"] for row in source_rows]
     
