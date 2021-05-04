@@ -108,9 +108,9 @@ class HMLM(BaseModel):
 
         rate_metrics = [
             (
-                LossMetric(name=f"u_rate_{l}", values=u_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
-                LossMetric(name=f"c_rate_{l}", values=c_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
-                LossMetric(name=f"f_rate_{l}", values=f_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
+                LossMetric(name=f"u_rate_{l}", values=u_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
+                LossMetric(name=f"c_rate_{l}", values=c_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
+                LossMetric(name=f"f_rate_{l}", values=f_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
             )
             for l in range(self.num_layers)
         ]
