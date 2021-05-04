@@ -1,12 +1,13 @@
 import os
 import shutil
 import tarfile
-from glob import glob
-
 import wget
+
+from glob import glob
 from tqdm import tqdm
 
 from vseq.settings import DATA_DIRECTORY, SOURCE_DIRECTORY
+
 
 SUBSETS = ["training", "heldout"]
 

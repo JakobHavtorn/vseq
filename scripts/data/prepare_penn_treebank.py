@@ -1,10 +1,8 @@
 import os
-import sys
-
 import wget
-from tqdm import tqdm
 
 from vseq.settings import DATA_DIRECTORY, SOURCE_DIRECTORY
+
 
 SUBSETS = ["train", "test", "valid"]
 

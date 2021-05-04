@@ -1,17 +1,16 @@
-import sys
 import os
 import tarfile
 import shutil
+import wget
 
 from glob import glob
 from pathlib import Path
-
-import wget
-import torchaudio
 from tqdm import tqdm
 
+import torchaudio
 
 from vseq.settings import DATA_DIRECTORY, SOURCE_DIRECTORY
+
 
 SUBSETS = ["dev-clean",
            "dev-other",

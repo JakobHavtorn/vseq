@@ -1,11 +1,12 @@
 import os
 import gzip
-from math import ceil
-
 import wget
+
+from math import ceil
 from tqdm import tqdm
 
 from vseq.settings import DATA_DIRECTORY, SOURCE_DIRECTORY
+
 
 URL = "https://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz"
 
