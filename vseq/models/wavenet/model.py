@@ -1,15 +1,16 @@
 """WaveNet main model"""
 
-from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 import tqdm
 
 from collections import namedtuple
+from typing import List
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributions as D
 
+from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 from vseq.utils.operations import sequence_mask
 
 from .modules import CausalConv1d, ResidualStack, DenseNet
@@ -106,7 +107,7 @@ class WaveNet(BaseModel):
         target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
         return target
 
-    def compute_loss(self, target: torch.IntTensor, x_sl: list[int], output: torch.FloatTensor):
+    def compute_loss(self, target: torch.IntTensor, x_sl: List[int], output: torch.FloatTensor):
         """To compute the loss, the inputs must be compared to outputs shifted by the receptive field.
 
         Args:
