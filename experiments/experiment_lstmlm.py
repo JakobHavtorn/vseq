@@ -18,11 +18,11 @@ import vseq.utils.device
 from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
-from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD
+from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
 from vseq.data.tokenizers import char_tokenizer, word_tokenizer
 from vseq.data.loaders import TextLoader
 from vseq.data.token_map import TokenMap
-from vseq.data.transforms import EncodeInteger
+from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
@@ -72,15 +72,16 @@ rich.print(vars(args))
 
 if args.token_level == "word":
     tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
-    tokenizer = word_tokenizer
+    token_map = TokenMap(tokens=tokens, add_delimit=True)
+    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
 else:
-    tokens = ENGLISH_STANDARD
-    tokenizer = char_tokenizer
-token_map = TokenMap(tokens=tokens, add_start=False, add_end=False, add_delimit=True)
-penn_treebank_transform = EncodeInteger(
-    token_map=token_map,
-    tokenizer=tokenizer,
-)
+    tokens = PENN_TREEBANK_ALPHABET
+    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
+    penn_treebank_transform = Compose(
+        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
+        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
+    )
+
 batcher = TextBatcher()
 loader = TextLoader('txt', cache=True)
 
