@@ -103,8 +103,8 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
-.venv
+*.env
+*.venv
 env/
 venv/
 ENV/
@@ -142,10 +142,13 @@ settings.json
 # wandb
 wandb
 
-# pytest
-pytest
+# environment file
+VSEQ.env
 
 # data files
 .wav
 .flac
 .mp3
+
+# miscellaneous
+miscellaneous

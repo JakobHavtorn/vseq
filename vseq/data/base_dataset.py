@@ -1,96 +1,94 @@
-from typing import List, Tuple, Any, Union
+import csv
 
-from torch import Tensor
+from tqdm import tqdm
+from typing import List, Tuple, Any
+
 from torch.utils.data import Dataset
 
-from .batchers import Batcher
+from .loaders import Loader
 from .transforms import Transform
-from .load import EXTENSIONS_TO_LOADFCN, MetaData
+from .batchers import Batcher
 from .datapaths import DATAPATHS_MAPPING
 
 
-# TODO https://funcy.readthedocs.io/en/stable/calc.html
-def memoize(func):
-    memory = dict()
-
-    def memoized_func(*args):
-        if args in memory:
-            return memory[args]
-
-        result = func(*args)
-        memory[args] = result
-        return result
-
-    memoized_func.memory = memory
-    return memoized_func
-
-
 class BaseDataset(Dataset):
-    def __init__(self, source: str, modalities: List[Tuple[str, Batcher, Transform]], sort: bool = True, cache: bool = False):
+    def __init__(self, source: str, modalities: List[Tuple[Loader, Transform, Batcher]], sort: bool = True):
         """Dataset class that serves examples from files listed in a `source` as defined by `modalities`.
 
         `modalities` defines how to obtain an example from a specific file extension via a `Transform` and a `Batcher`.
 
         Args:
             source (str): Dataset shorthand name or path to source file
-            modalities (List[Tuple[str, Batcher, Transform]]): File extensions, batcher and transforms
+            modalities (List[Tuple[Loader, Batcher, Transform]]): File extensions, batcher and transforms
             sort (bool, optional): If True, sort the first modality according to its batcher. Defaults to True.
         """        
         super().__init__()
         self.source = source
-        self.extensions, self.transforms, self.batchers = zip(*modalities)
+        self.loaders, self.transforms, self.batchers = zip(*modalities)
         self.sort = sort
-        self.cache = cache
 
         self.num_modalities = len(modalities)
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
-        self.unique_extensions = set(self.extensions)
+        self.unique_loaders = set(self.loaders)
         self.examples = self.load_examples(self.source_filepath)
+        
+    def load_examples(self, source_filepath):
+        """Load example_ids from source file"""
+        
+        with open(source_filepath, newline='') as source_file_buffer:
+            reader = csv.DictReader(source_file_buffer)
+            is_batch_dataset = ("n_examples" in reader.fieldnames)
+            source_rows = list(reader)
+        
+        if is_batch_dataset:
+            return self._load_and_cache_batch_dataset(source_rows)
+        return [row["filename"] for row in source_rows]
+    
+    def _load_and_cache_batch_dataset(self, source_rows):
+        """Caches data for each loader upfront."""
+        
+        # load examples
+        examples = []
+        for row in source_rows:
+            examples += [f"{row['filename']}-{idx}" for idx in range(int(row["n_examples"]))]
+        
+        # cache dataset for each loader
+        print(f"\nLoading and caching data for {self.source}:")
+        with tqdm(total=len(source_rows) * len(self.unique_loaders)) as pbar:
+            for loader in self.unique_loaders:
+                n_cached = len(loader.load.memory)
+                loader.enable_cache()
+                for row in source_rows:
+                    loader.load_and_cache_batch(row["filename"])
+                    pbar.update()
 
-        if self.cache:
-            self.getitem = memoize(self.getitem)
+                assert len(examples) == len(loader.load.memory) - n_cached, "Not all examples were cached correctly."
 
-    @staticmethod
-    def load_examples(source_filepath):
-        with open(source_filepath, "r") as source_file_buffer:
-            lines = source_file_buffer.readlines()
-        examples = [l.split(',')[0].strip() for l in lines]
         return examples
-
+            
     def __getitem__(self, idx):
-        return self.getitem(idx)
+        """Get all modalities of a single example"""
+        
+        example_id = self.examples[idx]
 
-    def getitem(self, idx) -> Union[Tuple[Tuple[Tensor], Tuple[MetaData]], Tuple[Tensor, MetaData]]:
-        example_path = self.examples[idx]
+        # load data
+        loader_data = {}
+        for loader in self.unique_loaders:
+            loader_data[loader.id] = loader(example_id)
 
-        # Load data for each modality
-        input_data, unique_metadata = self._load_item(example_path)
+        # transform data
+        data, metadata = [], []
+        for loader, transform in zip(self.loaders, self.transforms):
+            x, m = loader_data[loader.id]
+            y = transform(x) if transform else x
+            data.append(y)
+            metadata.append(m)
 
-        # Transform modalities according to transforms
-        data, metadata = self._transform_item(input_data, unique_metadata)
-
+        # return data
         if len(data) == 1:
             return data[0], metadata[0]
         return tuple(data), tuple(metadata)
-
-    def _load_item(self, example_path):
-        input_data = dict()
-        unique_metadata = dict()
-        for ext in self.unique_extensions:
-            input_data[ext], unique_metadata[ext] = EXTENSIONS_TO_LOADFCN[ext](example_path + f".{ext}")
-        return input_data, unique_metadata
-
-    def _transform_item(self, input_data, unique_metadata):
-        data = []
-        metadata = []
-        for ext, transform in zip(self.extensions, self.transforms):
-            x = input_data[ext]
-            y = transform(x) if transform else x
-
-            data.append(y)
-            metadata.append(unique_metadata[ext])
-        return data, metadata
 
     def collate(self, batch: List[Tuple[Any, Any]]):
         """Arrange a list of outputs from `__getitem__` into a batch via the batcher of each transform"""

@@ -14,7 +14,7 @@ from .metrics import Metric
 
 
 def source_string(source):
-    return f"{source[:18]}.." if len(source) > 20 else source
+    return f"{source[:18]}.." if len(source) > 20 else f"{source}"
 
 
 def rank_string(rank):
@@ -24,7 +24,7 @@ def rank_string(rank):
 class Tracker:
     def __init__(
         self,
-        min_indent: int = 35,
+        min_indent: int = 40,
         print_every: Union[int, float] = 1.0,
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
@@ -32,14 +32,14 @@ class Tracker:
         """Tracks metrics, prints to console and logs to wandb.
 
         Args:
-            min_indent (int): Minimum indent for dataset name. Defaults to 35.
+            min_indent (int): Minimum indent for dataset name. Defaults to 40.
             print_every (Union[int, float]): Time between prints measured in steps (if int) or seconds (if float).
                                              Defaults to 1.0 (seconds).
             rank (Optional[int]): Rank (index) of the current worker process if using Distributed Data Parallel (DDP).
             world_size (Optional[int]): Total number of worker processes if using Distributed Data Parallel (DDP).
         """
 
-        self.min_indent = min_indent
+        self.min_indent = min_indent  # TODO Compute `min_indent` dynamically
         self.print_every = print_every
         self.rank = 0 if rank is None else rank
         self.world_size = world_size
@@ -54,11 +54,11 @@ class Tracker:
         self.printed_last = 0
         self.last_log_line_len = 0
         self.source = None
-        self.max_steps = defaultdict(lambda: 0)
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
-        self.step = defaultdict(lambda: 0)
         self.epoch = 0
+        self.step = defaultdict(lambda: 0)
+        self.max_steps = defaultdict(lambda: 0)
 
         self.metrics = defaultdict(dict)  # dict(source=dict(metric.name=metric))
         self.accumulated_metrics = defaultdict(lambda: defaultdict(list))  # dict(source=dict(metric.name=list(metric)))
@@ -110,7 +110,7 @@ class Tracker:
             yield batch
             if self.do_print():
                 self.print()
-        self.reset()
+        self.unset()
 
     def epochs(self, N) -> Iterator[int]:
         """Yields the epoch index while printing epoch number and epoch delimiter."""
@@ -119,7 +119,7 @@ class Tracker:
 
             if self.rank == 0:
                 s = f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white] "
-                s += datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                s += "[grey30]" + datetime.now().strftime("%d/%m/%Y %H:%M:%S") + "[/]"
                 rich.print(s, flush=True)
 
             yield epoch
@@ -150,10 +150,9 @@ class Tracker:
         if self.is_ddp:
             distributed.barrier()
 
-    def reset(self):
-        """Resets metric values and subset specific tracking values. Prints new line."""
-        # print line for last iteration regardless of `do_print()`
-        self.print(end="\n")
+    def unset(self):
+        """Resets print timer and prints final line, unsets `source` and accumulates metrics."""
+        self.print(end="\n")  # print line for last iteration regardless of `do_print()`
         if self.is_ddp:
             distributed.barrier()
 
@@ -163,13 +162,22 @@ class Tracker:
             if self.rank == 0:
                 print(self.terminal.move_xy(0, self.terminal.height - 2), flush=True)
 
+        self.end_time[self.source] = time()
+
         for name, metric in self.metrics[self.source].items():
             self.accumulated_metrics[self.source][name].append(metric.copy())
 
-        self.end_time[self.source] = time()
         self.source = None
         self.printed_last = 0
         self.accumulated_output = defaultdict(list)
+
+    def reset(self):
+        """Reset all per-source attributes"""
+        self.metrics = defaultdict(dict)
+        self.start_time = defaultdict(lambda: None)
+        self.end_time = defaultdict(lambda: None)
+        self.step = defaultdict(lambda: 0)
+        self.max_steps = defaultdict(lambda: 0)
 
     def do_print(self) -> bool:
         """Print at first and last step and according to `print_every`"""
@@ -199,13 +207,13 @@ class Tracker:
             s_per_step = "-"
         else:
             duration = time() - self.start_time[source]
-            s_per_step = self.step[source] / duration
-            s_per_step = f"{round(s_per_step, 3):.3f}Hz"
+            steps_per_s = self.step[source] / duration
+            steps_per_s = f"{round(steps_per_s, 3):.2f}Hz"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
 
-        ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{s_per_step}][/]"  # +42 format
+        ps = f"{steps_frac} [bright_white not bold]({duration}, {steps_per_s})[/]"  # +26 format
 
         # metrics string
         sep = "[magenta]|[/]"  # +19 format pr metric
@@ -216,7 +224,7 @@ class Tracker:
 
         # full log string
         sp = f"{ss} - {ps}"
-        s = f"{sp:<{self.min_indent + 60}s}{ms}"
+        s = f"{sp:<{self.min_indent + 26}s}{ms}"
 
         if self.is_ddp:
             end = "\r" if self.rank == 0 else "\n"
@@ -231,15 +239,14 @@ class Tracker:
         else:
             rich.print(s, end=end, flush=True)
 
-        self.last_log_line_len = len(s.strip()) - 60 - len(self.metrics[source]) * 19 
+        self.last_log_line_len = len(s.strip()) - 26 - len(self.metrics[source]) * 19
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
-        # if ddp, gather and reduce metrics from other workers
         if self.is_ddp:
             self.ddp_gather_and_reduce()
 
-        # add extra, best and tracker metrics
+        # add best and tracker metrics and any `extra_log_data`
         values = self.values
         values.update(extra_log_data)
         for source in self.best_values.keys():
@@ -249,11 +256,7 @@ class Tracker:
         if self.rank == 0:
             wandb.log(values)
 
-        self.metrics = defaultdict(dict)
-        self.start_time = defaultdict(lambda: None)
-        self.end_time = defaultdict(lambda: None)
-        self.step = defaultdict(lambda: 0)
-        self.max_steps = defaultdict(lambda: 0)
+        self.reset()
 
     def update(self, metrics: List[Metric], source: Optional[str] = None):
         """Update all metrics tracked on `source` with the given `metrics` and add any not currently tracked"""

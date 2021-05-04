@@ -2,7 +2,6 @@ import math
 
 from copy import deepcopy
 from typing import List, Optional, Set, Union
-from vseq.utils.summary import get_number_of_elements
 
 import torch
 
@@ -216,36 +215,3 @@ class PerplexityMetric(BitsPerDimMetric):
     @property
     def value(self):
         return 2 ** self._value
-
-
-class HoyerSparsityMetric(RunningMeanMetric):
-    def __init__(
-        self,
-        values: Union[torch.Tensor, float],
-        name: str,
-        tags: Set[str],
-        reduce_by: Optional[Union[torch.Tensor, float]],
-        weight_by: Optional[Union[torch.Tensor, float]],
-        normalze: bool = True,
-    ):
-        """Sparsity of representation as computed in [1] and presented in [2].
-
-        Args:
-            values (Union[torch.Tensor, float]): [description]
-            name (str): [description]
-            tags (Set[str]): [description]
-            reduce_by (Optional[Union[torch.Tensor, float]]): [description]
-            weight_by (Optional[Union[torch.Tensor, float]]): [description]
-            normalze (bool, optional): Normalize the values with the running standard deviation per dimension.
-                                       This normalisation is important as one could achieve a “sparse” representation
-                                       simply by having different dimensions vary along different length scales.
-                                       Defaults to True.
-
-        Raises:
-            NotImplementedError: [description]
-
-        [1] Hurley and Rickard, 2008
-        [2] http://arxiv.org/abs/1812.02833 p. 7
-        """
-        super().__init__(values, name, tags, reduce_by=reduce_by, weight_by=weight_by)
-        raise NotImplementedError()

@@ -1,0 +1,42 @@
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+name: vseq build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    env:
+      VSEQ_DATA_ROOT_DIRECTORY: ./data/
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [3.9]
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - uses: actions/cache@v2
+      with:
+        path: ${{ env.pythonLocation }}
+        key: ${{ env.pythonLocation }}-${{ hashFiles('setup.py') }}-${{ hashFiles('requirements.txt') }}
+
+    - name: Install dependencies
+      run: |
+        mkdir data
+        python -m pip install --upgrade --editable .
+
+    - name: Test with pytest
+      run: |
+        pytest -sv --html=pytest/report.html --self-contained-html --junit-xml=pytest/junit.xml --cov --cov-report=term --cov-report=html:pytest/coverage/html -p no:pytest_wampy tests

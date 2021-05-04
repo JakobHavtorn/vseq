@@ -50,7 +50,7 @@ class DistributedSamplerWrapper(DistributedSampler):
     On every epoch, each process seeds torch according to the epoch and `seed` and resamples the entire dataset
     using the `sampler`. This results in `num_replicas` identical samplings of the dataset.
 
-    This sampling of the dataset can additionally be randomly shuffled (`shuffle==True`) before being divded into
+    This sampling of the dataset can additionally be randomly shuffled (`shuffle==True`) before being divided into
     subsets. This is useful if the `sampler` is deterministic and we want the unique subset passed to each process to
     be different for every epoch. Otherwise, it doesn't harm.
 
@@ -62,7 +62,9 @@ class DistributedSamplerWrapper(DistributedSampler):
     
     The end-result is `num_replicas` equally sized and (almost) unique subsets of the dataset as sampled by `sampler`.
 
-    This works both when `sampler` is a `Sampler` and a `BatchSampler`. If batch sampling, the `drop_last` argument
+    This works both when `sampler` is a `Sampler` and a `BatchSampler`.
+    
+    If batch sampling, the `drop_last` argument ...
 
     .. note::
         `sampler` is assumed to be of constant size.

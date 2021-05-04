@@ -1,68 +1,63 @@
+import csv
 import os
+
 from collections import Counter
+from typing import Callable, Optional
 
 from tqdm import tqdm
+
+from vseq.settings import VOCAB_DIRECTORY
 
 from .tokenizers import word_tokenizer
 from .datapaths import DATAPATHS_MAPPING
 
 
-def _get_vocab_filepath(source_filepath, create_vocab_dir=False):
-    """
-    Forms, and possibly creates, the target path from the source file path as:
-    {source_dir}/vocab/{source_filename}
-    """
-    source_dir, source_filename = os.path.split(source_filepath)
-    vocab_dir = os.path.join(source_dir, "vocab")
-    if not os.path.exists(vocab_dir) and create_vocab_dir:
-        os.mkdir(vocab_dir)
-    vocab_filepath = os.path.join(vocab_dir, source_filename)
-    return vocab_filepath
+def get_vocabulary_path(name: str):
+    return os.path.join(VOCAB_DIRECTORY, f"{name}.txt")
 
 
-def build_vocabulary(source, cleaner_fcn=None):
+def build_vocabulary(source: str, name: str, cleaner_fcn: Optional[Callable] = None):
     """
     Builds a vocabulary file with word-count pairs on each line.
 
-    The file will use the same name as the source with '_vocab' suffix.
-
-    A directorry 'vocab' is created at the source location.
+    Args:
+        source (str): A dataset name available in `DATAPATHS_MAPPING` or a path to a `source` file.
+        name (str): A name for the vocabulary file.
+        cleaner_fcn (Optional[Callable], optional): Callable to use for pre-cleaning the text data. Defaults to None.
     """
-    cleaner_fcn = cleaner_fcn if cleaner_fcn is not None else lambda x: x
-
     source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
-    with open(source_filepath, "r") as source_file_buffer:
-        lines = source_file_buffer.readlines()
-    examples = [l.split(",")[0].strip() for l in lines]
+    with open(source_filepath, newline='') as source_file_buffer:
+        reader = csv.DictReader(source_file_buffer)
+        examples = [row["filename"] for row in reader]
 
     word_counts = Counter()
-    for example in tqdm(examples):
+    for example in tqdm(examples, smoothing=0.05):
         file_path = example + ".txt"
         with open(file_path, "r") as text_file:
-            string = text_file.read()
-        clean_string = cleaner_fcn(string)
-        words = word_tokenizer(clean_string)
-        word_counts.update(words)
+            strings = text_file.read().splitlines()
 
-    vocab_filepath = _get_vocab_filepath(source_filepath, create_vocab_dir=True)
+        for string in strings:
+            clean_string = cleaner_fcn(string) if cleaner_fcn else string
+            words = word_tokenizer(clean_string)
+            word_counts.update(words)
 
+    vocab_filepath = get_vocabulary_path(name)
     vocab_file_lines = [f"{w},{c}" for w, c in word_counts.most_common()]
     vocab_file_content = "\n".join(vocab_file_lines)
     with open(vocab_filepath, "w") as vocab_file_buffer:
         vocab_file_buffer.write(vocab_file_content)
 
 
-def load_vocabulary(source, max_size=None, min_count=None):
+def load_vocabulary(name, max_size=None, min_count=None):
     """
-    Load vocabulary file corresponding to source.
+    Load vocabulary file corresponding to a given name.
 
     Args:
-        source (str): A constant from vseq.data.datapaths or a path. Used to infer the vocab file.
+        name (str): Name of the vocabulary. Used to specify the vocabulary file.
         max_size (int): Maximum number of words to keep in the vocabulary.
-        min_count (int): Minimum number of occurences in source data of any word included in the vocabulary.
+        min_count (int): Minimum number of occurences of any word in vocabulary file.
     """
-    source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
-    vocab_filepath = _get_vocab_filepath(source_filepath, create_vocab_dir=True)
+    vocab_filepath = get_vocabulary_path(name)
 
     max_size = float("inf") if max_size is None else max_size
     min_freq = 0 if min_count is None else min_count
