@@ -30,9 +30,6 @@ jobs:
       run: |
         mkdir data
         python -m pip install --upgrade --editable .
-    - name: Lint with flake8
-      run: |
-        echo "Do some linting"
     - name: Test with pytest
       run: |
         pytest -sv --html=pytest/report.html --self-contained-html --junit-xml=pytest/junit.xml --cov --cov-report=term --cov-report=html:pytest/coverage/html -p no:pytest_wampy tests
