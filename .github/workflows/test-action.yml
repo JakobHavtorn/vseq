@@ -1,7 +1,7 @@
 # This workflow will install Python dependencies, run tests and lint with a variety of Python versions
 # For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
 
-name: Python package
+name: vseq build
 
 on:
   push:
@@ -11,6 +11,8 @@ on:
 
 jobs:
   build:
+    env:
+      VSEQ_DATA_ROOT_DIRECTORY: ./data/
 
     runs-on: ubuntu-latest
     strategy:
@@ -27,8 +29,6 @@ jobs:
     - name: Install dependencies
       run: |
         mkdir data
-        touch VSEQ.env
-        echo "VSEQ_DATA_ROOT_DIRECTORY=./data/"
         python -m pip install --upgrade --editable .
     - name: Lint with flake8
       run: |
