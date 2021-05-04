@@ -34,6 +34,8 @@ class TokenMap:
         self.add_delimit = add_delimit
         self.add_unknown = add_unknown
         self.add_blank = add_blank
+        self.prefix = ""
+        self.suffix = ""
 
         if add_start:
             tokens.append(START_TOKEN)
