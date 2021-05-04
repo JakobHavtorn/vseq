@@ -119,7 +119,7 @@ test_loader = DataLoader(
     pin_memory=True,
 )
 
-print(token_map.tokens)
+rich.print(token_map)
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
 model = vseq.models.HMLM(

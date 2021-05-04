@@ -21,6 +21,8 @@ class HMLM(BaseModel):
         sizes: Union[int, List[int]],
         num_layers: Optional[int] = None,
         layer_norm: bool = False,
+        dropout_rate_e: float = 0.5,
+        dropout_rate_h: float = 0.5,
     ):
         super().__init__()
 
@@ -34,22 +36,23 @@ class HMLM(BaseModel):
         self.sizes = sizes if num_layers is None else [sizes] * num_layers
         self.num_layers = len(sizes) if num_layers is None else num_layers
         self.layer_norm = layer_norm
+        self.dropout_rate_e = dropout_rate_e
+        self.dropout_rate_h = dropout_rate_h
 
         self.slices = [(0, self.sizes[0])] + [(self.sizes[i], self.sizes[i + 1]) for i in range(len(self.sizes) - 1)]
 
-        self.dropout = nn.Dropout(p=0.5)
-
         self.embedding_in = nn.Embedding(num_embeddings, embedding_dim)
+        self.dropout_e = nn.Dropout(p=self.dropout_rate_e)
 
         self.hmlstm = HMLSTM(input_size=embedding_dim, sizes=self.sizes, num_layers=num_layers, layer_norm=layer_norm)
+        self.dropout_h = nn.Dropout(p=self.dropout_rate_h)
 
         self.weight = nn.Linear(sum(self.sizes), self.num_layers)
 
         self.embedding_out = nn.Linear(sum(self.sizes), sum(self.sizes))
+        self.relu = nn.ReLU()
 
         self.output = nn.Linear(sum(self.sizes), num_embeddings)
-
-        self.relu = nn.ReLU()
 
         self.loss = nn.CrossEntropyLoss()
 
@@ -83,11 +86,11 @@ class HMLM(BaseModel):
         target = x[:, 1:].clone().detach()
 
         emb = self.embedding_in(x[:, :-1])  # B * T * embedding_dim
-        emb = self.dropout(emb)
+        emb = self.dropout_e(emb)
         h, c, z, (h_out, c_out, z_out) = self.hmlstm(emb, h_init, c_init, z_init, **kwargs)  # B * T * hidden_size
 
         h = torch.cat(h, dim=2)  # B * T * sum(hidden_sizes)
-        h = self.dropout(h)
+        h = self.dropout_h(h)
 
         g = torch.sigmoid(self.weight(h))
 

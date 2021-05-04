@@ -77,8 +77,15 @@ class HMLSTMCell(nn.Module):
         # self.bias.data[-1] = 2.0 / math.sqrt(self.hidden_size)  # Bias towards UPDATE behaviour
 
     def forward(
-        self, c: Tensor, h_below: Tensor, h: Tensor, h_above: Tensor, z: Tensor, z_below: Tensor, a: float = 1
-    ) -> Tuple[Tensor, Tensor, Tensor]:
+        self,
+        c: TensorType["D", "B"],
+        h_below: TensorType["D", "B"],
+        h: TensorType["D", "B"],
+        h_above: TensorType["D", "B"],
+        z: TensorType[1, "B"],
+        z_below: TensorType[1, "B"],
+        a: float = 1,
+    ) -> Tuple[TensorType["D", "B"], TensorType["D", "B"], TensorType["D", 1]]:
         """Perform HM-LSTM forward pass.
 
         Update logic:
@@ -103,16 +110,16 @@ class HMLSTMCell(nn.Module):
             c_new[:, copy] = c[:, copy]
 
         Args:
-            c (torch.Tensor): Cell state of this cell at previous timestep
-            h_below (torch.Tensor): Hidden state of below cell at current timestep
-            h (torch.Tensor): Hidden state of this cell at previous timestep
-            h_above (torch.Tensor): Hidden state of above cell at previous timestep
-            z (torch.Tensor): Boundary detector of this cell at previous timestep
-            z_below (torch.Tensor): Boundary detector of below cell at current timestep
-            a (float, optional): Slop of the hard sigmoid activation of boundary detector. Defaults to 1.
+            c (torch.Tensor): Previous time step cell state for this layer
+            h_below (torch.Tensor): Current time step hidden state from layer below
+            h (torch.Tensor): Previous time step hidden state for this layer
+            h_above (torch.Tensor): Previous time step hidden state for layer above (if any, otherwise ignored)
+            z (torch.Tensor): Previous time step boundary detector from this layer
+            z_below (torch.Tensor): Current time step boundary detector from layer below
+            a (float, optional): Slope of hard sigmoid activation for boundary detector. Defaults to 1.
 
         Returns:
-            tuple: h_new, c_new, z_new
+            tuple: (h, c, z) for this time step
         """
         s_recurrent = torch.mm(self.U_11, h)  # torch.mm(self.W_10, h_below)
 
@@ -208,7 +215,16 @@ class LayerNormHMLSTMCell(nn.Module):
         for par in self.parameters():
             par.data.uniform_(-stdv, stdv)
 
-    def forward(self, c: Tensor, h_below: Tensor, h: Tensor, h_above: Tensor, z: Tensor, z_below: Tensor, a: float = 1):
+    def forward(
+        self,
+        c: TensorType["D", "B"],
+        h_below: TensorType["D", "B"],
+        h: TensorType["D", "B"],
+        h_above: TensorType["D", "B"],
+        z: TensorType[1, "B"],
+        z_below: TensorType[1, "B"],
+        a: float = 1,
+    ) -> Tuple[TensorType["D", "B"], TensorType["D", "B"], TensorType["D", 1]]:
         """Perform HM-LSTM forward pass.
 
         Update logic:
@@ -233,16 +249,16 @@ class LayerNormHMLSTMCell(nn.Module):
             c_new[:, copy] = c[:, copy]
 
         Args:
-            c ([type]): [description]
-            h_below ([type]): [description]
-            h ([type]): [description]
-            h_above ([type]): [description]
-            z ([type]): [description]
-            z_below ([type]): [description]
-            a (float, optional): [description]. Defaults to 1.
+            c (torch.Tensor): Previous time step cell state for this layer
+            h_below (torch.Tensor): Current time step hidden state from layer below
+            h (torch.Tensor): Previous time step hidden state for this layer
+            h_above (torch.Tensor): Previous time step hidden state for layer above (if any, otherwise ignored)
+            z (torch.Tensor): Previous time step boundary detector from this layer
+            z_below (torch.Tensor): Current time step boundary detector from layer below
+            a (float, optional): Slope of hard sigmoid activation for boundary detector. Defaults to 1.
 
         Returns:
-            tuple: h_new, c_new, z_new
+            tuple: (h, c, z) for this time step
         """
         s_recurrent = self.ln_11(torch.mm(self.U_11, h).T).T  # torch.mm(self.W_10, h_below)
 
@@ -251,7 +267,9 @@ class LayerNormHMLSTMCell(nn.Module):
         else:
             s_topdown = z * self.ln_21(torch.mm(self.U_21, h_above).T).T
 
-        s_bottomup = z_below * self.ln_10(torch.mm(self.W_10, h_below).T).T  # z * self.ln_11(torch.mm(self.U_11, h).T).T
+        s_bottomup = (
+            z_below * self.ln_10(torch.mm(self.W_10, h_below).T).T
+        )  # z * self.ln_11(torch.mm(self.U_11, h).T).T
 
         f_slice = s_recurrent + s_topdown + s_bottomup + 2.0 / math.sqrt(self.hidden_size)
 
@@ -304,10 +322,10 @@ class HMLSTM(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
-        h_init: Optional[List[torch.Tensor]] = None,
-        c_init: Optional[List[torch.Tensor]] = None,
-        z_init: Optional[List[torch.Tensor]] = None,
+        x: TensorType["B", "T", "D"],
+        h_init: Optional[List[TensorType["B", "T", "D"]]] = None,
+        c_init: Optional[List[TensorType["B", "T", "D"]]] = None,
+        z_init: Optional[List[TensorType["B", "T", 1]]] = None,
         a: float = 1,
     ):
         # x.size = (B, T, D)
@@ -318,17 +336,17 @@ class HMLSTM(nn.Module):
         if h_init is None:
             h = [[torch.zeros(self.sizes[l], batch_size, device=device)] for l in range(self.num_layers)]
         else:
-            h = [[h] for h in h_init]
+            h = [[h.permute(2, 1, 0)] for h in h_init]  # (B, T, D) to (D, T, B)
 
         if c_init is None:
             c = [[torch.zeros(self.sizes[l], batch_size, device=device)] for l in range(self.num_layers)]
         else:
-            c = [[c] for c in c_init]
+            c = [[c.permute(2, 1, 0)] for c in c_init]  # (B, T, D) to (D, T, B)
 
         if z_init is None:
             z = [[torch.zeros(1, batch_size, device=device)] for l in range(self.num_layers)]
         else:
-            z = [[z] for z in z_init]
+            z = [[z.permute(2, 1, 0)] for z in z_init]  # (B, T, D) to (D, T, B)
 
         # create a fictive top layer that gives `h=None` for all time steps.
         # used as `h_above` input for the actual top layer.
@@ -386,7 +404,7 @@ class HMLSTM(nn.Module):
         )
 
     def realized_operations(
-        self, z: List[TensorType["B", "T", 1]], x_sl: TensorType["B"], seq_mask: TensorType["B", "T"]
+        self, z: List[TensorType["B", "T", 1]], x_sl: TensorType["B", int], seq_mask: TensorType["B", "T", bool]
     ):
         """Return the boolean masks incidating where the different operations took place and compute the clockrates"""
         update_ops, copy_ops, flush_ops = [], [], []
