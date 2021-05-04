@@ -27,7 +27,7 @@ class TokenMap:
         add_blank: bool = False,
     ) -> None:
 
-        assert add_delimit != add_end and add_delimit != add_start, "Cannot use start, end and delimiter tokens at once"
+        assert not (add_delimit and (add_end or add_start)), "Cannot use start or end token with delimiter token."
 
         self.add_start = add_start
         self.add_end = add_end
