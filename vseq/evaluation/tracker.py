@@ -204,7 +204,7 @@ class Tracker:
 
         if self.start_time[source] is None:
             duration = "-"
-            s_per_step = "-"
+            steps_per_s = "-"
         else:
             duration = time() - self.start_time[source]
             steps_per_s = self.step[source] / duration

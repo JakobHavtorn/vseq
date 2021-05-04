@@ -4,10 +4,9 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.jit as jit
 
-from torch import Tensor
-from torch.nn import Module, Parameter
+from torch import sigmoid, tanh
+from torch.nn import Parameter
 from torchtyping import TensorType
 
 from vseq.modules.straight_through import BernoulliSTE, BinaryThresholdSTE
@@ -74,7 +73,6 @@ class HMLSTMCell(nn.Module):
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for par in self.parameters():
             par.data.uniform_(-stdv, stdv)
-        # self.bias.data[-1] = 2.0 / math.sqrt(self.hidden_size)  # Bias towards UPDATE behaviour
 
     def forward(
         self,
@@ -121,30 +119,30 @@ class HMLSTMCell(nn.Module):
         Returns:
             tuple: (h, c, z) for this time step
         """
-        s_recurrent = torch.mm(self.U_11, h)  # torch.mm(self.W_10, h_below)
+        s_recurrent = torch.mm(self.U_11, h)
 
         if self.is_top_layer:
             s_topdown = torch.zeros_like(s_recurrent)
         else:
             s_topdown = z * torch.mm(self.U_21, h_above)
 
-        s_bottomup = z_below * torch.mm(self.W_10, h_below)  # z * torch.mm(self.U_11, h)
+        s_bottomup = z_below * torch.mm(self.W_10, h_below)
 
         f_slice = s_recurrent + s_topdown + s_bottomup + self.bias.unsqueeze(1)
 
         forgetgate, ingate, outgate, cellgate = f_slice[:-1, :].chunk(chunks=4, dim=0)
         z_gate = f_slice[self.hidden_size * 4 : self.hidden_size * 4 + 1]
 
-        f = torch.sigmoid(forgetgate)
-        i = torch.sigmoid(ingate)
-        o = torch.sigmoid(outgate)
-        g = torch.tanh(cellgate)
+        f = sigmoid(forgetgate)
+        i = sigmoid(ingate)
+        o = sigmoid(outgate)
+        g = tanh(cellgate)
         z_hat = hard_sigmoid(z_gate, slope=a)
 
         one = torch.ones_like(f)
         c_new = z * (i * g) + (one - z) * (one - z_below) * c + (one - z) * z_below * (f * c + i * g)
         h_new = (
-            z * o * torch.tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * torch.tanh(c_new)
+            z * o * tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * tanh(c_new)
         )
 
         z_new = self.threshold_ste(z_hat)
@@ -260,33 +258,29 @@ class LayerNormHMLSTMCell(nn.Module):
         Returns:
             tuple: (h, c, z) for this time step
         """
-        s_recurrent = self.ln_11(torch.mm(self.U_11, h).T).T  # torch.mm(self.W_10, h_below)
+        s_recurrent = self.ln_11(torch.mm(self.U_11, h).T).T
 
         if self.is_top_layer:
             s_topdown = torch.zeros_like(s_recurrent)
         else:
             s_topdown = z * self.ln_21(torch.mm(self.U_21, h_above).T).T
 
-        s_bottomup = (
-            z_below * self.ln_10(torch.mm(self.W_10, h_below).T).T
-        )  # z * self.ln_11(torch.mm(self.U_11, h).T).T
+        s_bottomup = z_below * self.ln_10(torch.mm(self.W_10, h_below).T).T
 
-        f_slice = s_recurrent + s_topdown + s_bottomup + 2.0 / math.sqrt(self.hidden_size)
+        f_slice = s_recurrent + s_topdown + s_bottomup
 
         forgetgate, ingate, outgate, cellgate = f_slice[:-1, :].chunk(chunks=4, dim=0)
         z_gate = f_slice[self.hidden_size * 4 : self.hidden_size * 4 + 1]
 
-        f = torch.sigmoid(forgetgate)
-        i = torch.sigmoid(ingate)
-        o = torch.sigmoid(outgate)
-        g = torch.tanh(cellgate)
+        f = sigmoid(forgetgate)
+        i = sigmoid(ingate)
+        o = sigmoid(outgate)
+        g = tanh(cellgate)
         z_hat = hard_sigmoid(z_gate, slope=a)
 
         one = torch.ones_like(f)
         c_new = z * (i * g) + (one - z) * (one - z_below) * c + (one - z) * z_below * (f * c + i * g)
-        h_new = (
-            z * o * torch.tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * torch.tanh(c_new)
-        )
+        h_new = (z * o * tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * tanh(c_new))
 
         z_new = self.threshold_ste(z_hat)
 

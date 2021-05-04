@@ -105,8 +105,8 @@ class LSTMLM(BaseModel):
         # Compute log probs for p(x|z)
         # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
         # h, _ = self.lstm(e)
-        h, _ = self.lstm(e[:, :-1])
         # h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        h, _ = self.lstm(e[:, :-1])
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here

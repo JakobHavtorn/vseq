@@ -55,3 +55,9 @@ See `experiments/sweep_test.yaml`
 
 ## Implementation suggestions
 - [ ] Method or class to define and build `Dataloader`s with proper defaults e.g. `pin_memory == True`.
+
+
+## Resources
+
+Examples of how to write fairly fast custom recurrent cells with `TorchScript` can be found here: 
+https://github.com/pytorch/pytorch/blob/master/benchmarks/fastrnns/custom_lstms.py
