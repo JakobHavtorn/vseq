@@ -8,6 +8,7 @@ import torch.jit as jit
 
 from torch import Tensor
 from torch.nn import Module, Parameter
+from torchtyping import TensorType
 
 from vseq.modules.straight_through import BernoulliSTE, BinaryThresholdSTE
 
@@ -29,7 +30,7 @@ class HMLSTMCell(nn.Module):
         """Hierarchical Multilevel LSTM cell (HM-LSTM) as described in [1].
 
         Parameters:
-        W_hh is the state transition parameters from layer l-1 (bottom layer) to layer l
+        W_10 is the state transition parameters from layer l-1 (bottom layer) to layer l
         U_11 is the state transition parameters from layer l (current layer) to layer l
         U_21 is the state transition parameters from layer l+1 (top layer) to layer l
 
@@ -50,13 +51,13 @@ class HMLSTMCell(nn.Module):
         self.threshold_fn = threshold_fn
         self.is_top_layer = above_size is None
 
-        self.W_hh = Parameter(torch.FloatTensor(4 * self.hidden_size + 1, self.below_size))
-        self.U_11 = Parameter(torch.FloatTensor(4 * self.hidden_size + 1, self.hidden_size))
+        self.gates_size = 4 * self.hidden_size + 1
+
+        self.W_10 = Parameter(torch.FloatTensor(self.gates_size, self.below_size))
+        self.U_11 = Parameter(torch.FloatTensor(self.gates_size, self.hidden_size))
         if not self.is_top_layer:
-            self.U_21 = Parameter(
-                torch.FloatTensor(4 * self.hidden_size + 1, self.above_size if self.above_size else 1)
-            )
-        self.bias = Parameter(torch.FloatTensor(4 * self.hidden_size + 1))
+            self.U_21 = Parameter(torch.FloatTensor(self.gates_size, self.above_size))
+        self.bias = Parameter(torch.FloatTensor(self.gates_size))
 
         if threshold_fn == "threshold":
             self.threshold_ste = BinaryThresholdSTE(threshold=0.5)
@@ -73,10 +74,10 @@ class HMLSTMCell(nn.Module):
         stdv = 1.0 / math.sqrt(self.hidden_size)
         for par in self.parameters():
             par.data.uniform_(-stdv, stdv)
-        self.bias.data[-1] = 2.0 / math.sqrt(self.hidden_size)  # Bias towards UPDATE behaviour
+        # self.bias.data[-1] = 2.0 / math.sqrt(self.hidden_size)  # Bias towards UPDATE behaviour
 
     def forward(
-        self, c: Tensor, h_bottom: Tensor, h: Tensor, h_top: Tensor, z: Tensor, z_bottom: Tensor, a: float = 1
+        self, c: Tensor, h_below: Tensor, h: Tensor, h_above: Tensor, z: Tensor, z_below: Tensor, a: float = 1
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Perform HM-LSTM forward pass.
 
@@ -84,7 +85,7 @@ class HMLSTMCell(nn.Module):
             if z == 1: (FLUSH)
                 c_new = i * g
                 h_new = o * F.tanh(c_new)
-            elif z_bottom == 0: (COPY)
+            elif z_below == 0: (COPY)
                 c_new = c
                 h_new = h
             else: (UPDATE)
@@ -95,34 +96,34 @@ class HMLSTMCell(nn.Module):
             c_new = torch.zeros_like(f)
             z = z.expand_as(f)
             flush = z == 1
-            update = torch.logical_and(z == 0, z_bottom == 1)
-            copy = torch.logical_and(z == 0, z_bottom == 0)
+            update = torch.logical_and(z == 0, z_below == 1)
+            copy = torch.logical_and(z == 0, z_below == 0)
             c_new[:, flush] = (i[:, flush] * g[:, flush])
             c_new[:, update] = (f[:, update] * c[:, update] + i[:, update] * g[:, update])
             c_new[:, copy] = c[:, copy]
 
         Args:
             c (torch.Tensor): Cell state of this cell at previous timestep
-            h_bottom (torch.Tensor): Hidden state of below cell at current timestep
+            h_below (torch.Tensor): Hidden state of below cell at current timestep
             h (torch.Tensor): Hidden state of this cell at previous timestep
-            h_top (torch.Tensor): Hidden state of above cell at previous timestep
+            h_above (torch.Tensor): Hidden state of above cell at previous timestep
             z (torch.Tensor): Boundary detector of this cell at previous timestep
-            z_bottom (torch.Tensor): Boundary detector of below cell at current timestep
+            z_below (torch.Tensor): Boundary detector of below cell at current timestep
             a (float, optional): Slop of the hard sigmoid activation of boundary detector. Defaults to 1.
 
         Returns:
             tuple: h_new, c_new, z_new
         """
-        s_recur = torch.mm(self.W_hh, h_bottom)
+        s_recurrent = torch.mm(self.U_11, h)  # torch.mm(self.W_10, h_below)
 
         if self.is_top_layer:
-            s_topdown = torch.zeros_like(s_recur)
+            s_topdown = torch.zeros_like(s_recurrent)
         else:
-            s_topdown = z * torch.mm(self.U_21, h_top)
+            s_topdown = z * torch.mm(self.U_21, h_above)
 
-        s_bottomup = z * torch.mm(self.U_11, h)
+        s_bottomup = z_below * torch.mm(self.W_10, h_below)  # z * torch.mm(self.U_11, h)
 
-        f_slice = s_recur + s_topdown + s_bottomup + self.bias.unsqueeze(1)
+        f_slice = s_recurrent + s_topdown + s_bottomup + self.bias.unsqueeze(1)
 
         forgetgate, ingate, outgate, cellgate = f_slice[:-1, :].chunk(chunks=4, dim=0)
         z_gate = f_slice[self.hidden_size * 4 : self.hidden_size * 4 + 1]
@@ -134,9 +135,9 @@ class HMLSTMCell(nn.Module):
         z_hat = hard_sigmoid(z_gate, slope=a)
 
         one = torch.ones_like(f)
-        c_new = z * (i * g) + (one - z) * (one - z_bottom) * c + (one - z) * z_bottom * (f * c + i * g)
+        c_new = z * (i * g) + (one - z) * (one - z_below) * c + (one - z) * z_below * (f * c + i * g)
         h_new = (
-            z * o * torch.tanh(c_new) + (one - z) * (one - z_bottom) * h + (one - z) * z_bottom * o * torch.tanh(c_new)
+            z * o * torch.tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * torch.tanh(c_new)
         )
 
         z_new = self.threshold_ste(z_hat)
@@ -154,11 +155,12 @@ class LayerNormHMLSTMCell(nn.Module):
         below_size: int,
         above_size: Optional[int] = None,
         threshold_fn: str = "threshold",
+        elementwise_affine: bool = True,
     ):
         """Hierarchical Multilevel LSTM cell (HM-LSTM) as described in [1].
 
         Parameters:
-        W_hh is the state transition parameters from layer l-1 (bottom layer) to layer l
+        W_10 is the state transition parameters from layer l-1 (bottom layer) to layer l
         U_11 is the state transition parameters from layer l (current layer) to layer l
         U_21 is the state transition parameters from layer l+1 (top layer) to layer l
 
@@ -179,14 +181,16 @@ class LayerNormHMLSTMCell(nn.Module):
         self.threshold_fn = threshold_fn
         self.is_top_layer = above_size is None
 
-        self.W_hh = Parameter(torch.FloatTensor(4 * self.hidden_size + 1, self.below_size))
-        self.U_11 = Parameter(torch.FloatTensor(4 * self.hidden_size + 1, self.hidden_size))
-        if not self.is_top_layer:
-            self.U_21 = Parameter(torch.FloatTensor(4 * self.hidden_size + 1, self.above_size))
+        self.gates_size = 4 * self.hidden_size + 1
 
-        self.ln_hh = nn.LayerNorm(4 * self.hidden_size + 1)
-        self.ln_11 = nn.LayerNorm(4 * self.hidden_size + 1)
-        self.ln_12 = nn.LayerNorm(4 * self.hidden_size + 1)
+        self.W_10 = Parameter(torch.FloatTensor(self.gates_size, self.below_size))
+        self.U_11 = Parameter(torch.FloatTensor(self.gates_size, self.hidden_size))
+        if not self.is_top_layer:
+            self.U_21 = Parameter(torch.FloatTensor(self.gates_size, self.above_size))
+
+        self.ln_10 = nn.LayerNorm(self.gates_size, elementwise_affine=elementwise_affine)
+        self.ln_11 = nn.LayerNorm(self.gates_size, elementwise_affine=elementwise_affine)
+        self.ln_21 = nn.LayerNorm(self.gates_size, elementwise_affine=elementwise_affine)
 
         if threshold_fn == "threshold":
             self.threshold_ste = BinaryThresholdSTE()
@@ -204,14 +208,14 @@ class LayerNormHMLSTMCell(nn.Module):
         for par in self.parameters():
             par.data.uniform_(-stdv, stdv)
 
-    def forward(self, c: Tensor, h_bottom: Tensor, h: Tensor, h_top: Tensor, z: Tensor, z_bottom: Tensor, a: float = 1):
+    def forward(self, c: Tensor, h_below: Tensor, h: Tensor, h_above: Tensor, z: Tensor, z_below: Tensor, a: float = 1):
         """Perform HM-LSTM forward pass.
 
         Update logic:
             if z == 1: (FLUSH)
                 c_new = i * g
                 h_new = o * F.tanh(c_new)
-            elif z_bottom == 0: (COPY)
+            elif z_below == 0: (COPY)
                 c_new = c
                 h_new = h
             else: (UPDATE)
@@ -222,34 +226,34 @@ class LayerNormHMLSTMCell(nn.Module):
             c_new = torch.zeros_like(f)
             z = z.expand_as(f)
             flush = z == 1
-            update = torch.logical_and(z == 0, z_bottom == 1)
-            copy = torch.logical_and(z == 0, z_bottom == 0)
+            update = torch.logical_and(z == 0, z_below == 1)
+            copy = torch.logical_and(z == 0, z_below == 0)
             c_new[:, flush] = (i[:, flush] * g[:, flush])
             c_new[:, update] = (f[:, update] * c[:, update] + i[:, update] * g[:, update])
             c_new[:, copy] = c[:, copy]
 
         Args:
             c ([type]): [description]
-            h_bottom ([type]): [description]
+            h_below ([type]): [description]
             h ([type]): [description]
-            h_top ([type]): [description]
+            h_above ([type]): [description]
             z ([type]): [description]
-            z_bottom ([type]): [description]
+            z_below ([type]): [description]
             a (float, optional): [description]. Defaults to 1.
 
         Returns:
             tuple: h_new, c_new, z_new
         """
-        s_recur = self.ln_hh(torch.mm(self.W_hh, h_bottom).T).T
+        s_recurrent = self.ln_11(torch.mm(self.U_11, h).T).T  # torch.mm(self.W_10, h_below)
 
         if self.is_top_layer:
-            s_topdown = torch.zeros_like(s_recur)
+            s_topdown = torch.zeros_like(s_recurrent)
         else:
-            s_topdown = z * self.ln_12(torch.mm(self.U_21, h_top).T).T
+            s_topdown = z * self.ln_21(torch.mm(self.U_21, h_above).T).T
 
-        s_bottomup = z * self.ln_11(torch.mm(self.U_11, h).T).T
+        s_bottomup = z_below * self.ln_10(torch.mm(self.W_10, h_below).T).T  # z * self.ln_11(torch.mm(self.U_11, h).T).T
 
-        f_slice = s_recur + s_topdown + s_bottomup + 2.0 / math.sqrt(self.hidden_size)
+        f_slice = s_recurrent + s_topdown + s_bottomup + 2.0 / math.sqrt(self.hidden_size)
 
         forgetgate, ingate, outgate, cellgate = f_slice[:-1, :].chunk(chunks=4, dim=0)
         z_gate = f_slice[self.hidden_size * 4 : self.hidden_size * 4 + 1]
@@ -261,9 +265,9 @@ class LayerNormHMLSTMCell(nn.Module):
         z_hat = hard_sigmoid(z_gate, slope=a)
 
         one = torch.ones_like(f)
-        c_new = z * (i * g) + (one - z) * (one - z_bottom) * c + (one - z) * z_bottom * (f * c + i * g)
+        c_new = z * (i * g) + (one - z) * (one - z_below) * c + (one - z) * z_below * (f * c + i * g)
         h_new = (
-            z * o * torch.tanh(c_new) + (one - z) * (one - z_bottom) * h + (one - z) * z_bottom * o * torch.tanh(c_new)
+            z * o * torch.tanh(c_new) + (one - z) * (one - z_below) * h + (one - z) * z_below * o * torch.tanh(c_new)
         )
 
         z_new = self.threshold_ste(z_hat)
@@ -304,6 +308,7 @@ class HMLSTM(nn.Module):
         h_init: Optional[List[torch.Tensor]] = None,
         c_init: Optional[List[torch.Tensor]] = None,
         z_init: Optional[List[torch.Tensor]] = None,
+        a: float = 1,
     ):
         # x.size = (B, T, D)
         time_steps = x.size(1)
@@ -326,12 +331,13 @@ class HMLSTM(nn.Module):
             z = [[z] for z in z_init]
 
         # create a fictive top layer that gives `h=None` for all time steps.
-        # used as `h_top` input for the actual top layer.
+        # used as `h_above` input for the actual top layer.
         # h.append([torch.zeros(1, batch_size, device=device)] * time_steps)
         h.append([None] * time_steps)
 
-        # z_bottom for layer 0
+        # z_below for layer 0
         z_one = torch.ones(1, batch_size, device=device)
+        x = x.permute(2, 1, 0)  # (B, T, D) to (D, T, B)
 
         for t in range(time_steps):
             # input layer
@@ -339,10 +345,11 @@ class HMLSTM(nn.Module):
             h_tl, c_tl, z_tl = self.cells[l](
                 c=c[l][t],
                 h=h[l][t],
-                h_bottom=x[:, t, :].t(),
-                h_top=h[l + 1][t],
+                h_below=x[:, t, :],
+                h_above=h[l + 1][t],
                 z=z[l][t],
-                z_bottom=z_one,  # Never skip input by copying (forces UPDATE or FLUSH)
+                z_below=z_one,  # Never skip input by copying (forces UPDATE or FLUSH)
+                a=a,
             )
             h[l].append(h_tl)
             c[l].append(c_tl)
@@ -353,10 +360,11 @@ class HMLSTM(nn.Module):
                 h_tl, c_tl, z_tl = self.cells[l](
                     c=c[l][t],
                     h=h[l][t],
-                    h_bottom=h[l - 1][t + 1],
-                    h_top=h[l + 1][t],
+                    h_below=h[l - 1][t + 1],
+                    h_above=h[l + 1][t],
                     z=z[l][t],
-                    z_bottom=z[l - 1][t + 1],
+                    z_below=z[l - 1][t + 1],
+                    a=a,
                 )
                 h[l].append(h_tl)
                 c[l].append(c_tl)
@@ -372,10 +380,30 @@ class HMLSTM(nn.Module):
         z_out = [z[l][-1] for l in range(self.num_layers)]
         return (
             [torch.stack(hl, dim=1).permute(2, 1, 0) for hl in h],  # (B, T, D)
-            [torch.stack(cl, dim=1).permute(2, 1, 0) for cl in c],
-            [torch.stack(zl, dim=1).permute(2, 1, 0) for zl in z],
-            (h_out, c_out, z_out),
+            [torch.stack(cl, dim=1).permute(2, 1, 0) for cl in c],  # (B, T, D)
+            [torch.stack(zl, dim=1).permute(2, 1, 0) for zl in z],  # (B, T, 1)
+            (h_out, c_out, z_out),  # (B, D), (B, D), (B, 1)
         )
+
+    def realized_operations(
+        self, z: List[TensorType["B", "T", 1]], x_sl: TensorType["B"], seq_mask: TensorType["B", "T"]
+    ):
+        """Return the boolean masks incidating where the different operations took place and compute the clockrates"""
+        update_ops, copy_ops, flush_ops = [], [], []
+        update_rates, copy_rates, flush_rates = [], [], []
+        x_sl = x_sl.to(z[0].device)
+        for l, z_l in enumerate(z):
+            z_below = torch.ones_like(z[0]) if l == 0 else z[l - 1]
+
+            update_ops.append(((z_l[:, :-1, :] == 0) * (z_below[:, 1:, :] == 1)).squeeze())
+            copy_ops.append(((z_l[:, :-1, :] == 0) * (z_below[:, 1:, :] == 0)).squeeze())
+            flush_ops.append((z_l[:, :-1, :] == 1).squeeze())
+
+            update_rates.append((update_ops[l] * seq_mask[:, 1:]).sum(1) / x_sl)
+            copy_rates.append((copy_ops[l] * seq_mask[:, 1:]).sum(1) / x_sl)
+            flush_rates.append((flush_ops[l] * seq_mask[:, 1:]).sum(1) / x_sl)
+
+        return update_ops, copy_ops, flush_ops, update_rates, copy_rates, flush_rates
 
 
 if __name__ == "__main__":
@@ -411,23 +439,23 @@ if __name__ == "__main__":
     c = torch.randn(hidden_size, batch).to(device)
     h = torch.randn(hidden_size, batch).to(device)
     z = torch.randint(low=0, high=2, size=(1, batch)).to(device)
-    h_top = torch.randn(above_size, batch).to(device)
-    h_bottom = torch.randn(below_size, batch).to(device)
-    z_bottom = torch.randint(low=0, high=2, size=(1, batch)).to(device)
+    h_above = torch.randn(above_size, batch).to(device)
+    h_below = torch.randn(below_size, batch).to(device)
+    z_below = torch.randint(low=0, high=2, size=(1, batch)).to(device)
 
-    cell(c, h_bottom, h, h_top, z, z_bottom)
+    cell(c, h_below, h, h_above, z, z_below)
 
     timer = timeit.Timer("lstm(h, (h, c))", globals=dict(lstm=lstm, h=h.T, c=c.T))
     number, time_taken = timer.autorange()
     timings = timer.repeat(repeat=10, number=number)
     print(f"LSTM: {number=:d}, {min(timings):.3e} +- {np.std(timings):.3e} s")
 
-    timer = timeit.Timer("cell(c, h_bottom, h, h_top, z, z_bottom)", globals=globals())
+    timer = timeit.Timer("cell(c, h_below, h, h_above, z, z_below)", globals=globals())
     number, time_taken = timer.autorange()
     timings = timer.repeat(repeat=10, number=number)
     print(f"HM-LSTM: {number=:d}, {min(timings):.3e} +- {np.std(timings):.3e} s")
 
-    timer = timeit.Timer("lncell(c, h_bottom, h, h_top, z, z_bottom)", globals=globals())
+    timer = timeit.Timer("lncell(c, h_below, h, h_above, z, z_below)", globals=globals())
     number, time_taken = timer.autorange()
     timings = timer.repeat(repeat=10, number=number)
     print(f"HM-LSTM LayerNorm: {number=:d}, {min(timings):.3e} +- {np.std(timings):.3e} s")

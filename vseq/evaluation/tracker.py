@@ -193,16 +193,18 @@ class Tracker:
             steps_frac = f"{self.step[source]}/{self.max_steps[source]}"
         else:
             steps_frac = f"{self.step[source]}/-"
+
         if self.start_time[source] is None:
             duration = "-"
             s_per_step = "-"
         else:
             duration = time() - self.start_time[source]
-            s_per_step = self.step / duration
+            s_per_step = self.step[source] / duration
             s_per_step = f"{round(s_per_step, 3):.3f}Hz"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
+
         ps = f"{steps_frac} [not bold]([/]{duration}[not bold])[/] [bright_white not bold][{s_per_step}][/]"  # +42 format
 
         # metrics string

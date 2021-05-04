@@ -25,6 +25,8 @@ from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.utils.argparsing import str2bool
+from vseq.training.annealers import CosineAnnealer
+from vseq.utils.optimization import get_learning_rates_dict
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -33,20 +35,19 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=json.loads, help="extra kwargs for optimizer")
+parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=json.loads, help="kwargs for optimizer")
 parser.add_argument("--embedding_dim", default=128, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--num_layers", default=3, type=int, help="number of LSTM layers")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 # parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=350, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
-
 
 if args.seed is None:
     args.seed = get_random_seed()
@@ -67,13 +68,11 @@ rich.print(vars(args))
 
 token_map = TokenMap(tokens=PENN_TREEBANK_ALPHABET, add_start=False, add_end=False, add_delimit=True, add_unknown=True)
 penn_treebank_transform = Compose(
-    TextCleaner(
-        cleaner_fcn=lambda s: s.replace("<unk>", UNKNOWN_TOKEN)
-    ),
+    TextCleaner(cleaner_fcn=lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
     EncodeInteger(
         token_map=token_map,
         tokenizer=char_tokenizer,
-    )
+    ),
 )
 batcher = TextBatcher()
 
@@ -101,7 +100,7 @@ train_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=True,
     batch_size=args.batch_size,
-    pin_memory=True
+    pin_memory=True,
 )
 val_loader = DataLoader(
     dataset=val_dataset,
@@ -109,7 +108,7 @@ val_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=args.batch_size,
-    pin_memory=True
+    pin_memory=True,
 )
 test_loader = DataLoader(
     dataset=test_dataset,
@@ -117,7 +116,7 @@ test_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=args.batch_size,
-    pin_memory=True
+    pin_memory=True,
 )
 
 print(token_map.tokens)
@@ -140,10 +139,14 @@ print(model)
 # x = x.to(device)
 # print(model.summary(input_example=x, x_sl=x_sl))
 
-optimizer = args.optimizer_json.pop('optimizer')
+optimizer = args.optimizer_json.pop("optimizer")
 optimizer = getattr(torch.optim, optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_json)
 
+lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode="max", factor=0.1, patience=10, threshold=1e-4, cooldown=0, verbose=True
+)
+slope_annealer = CosineAnnealer(start_value=1, end_value=5, n_steps=100)
 
 tracker = Tracker()
 
@@ -153,7 +156,7 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl)
+        loss, metrics, outputs = model(x, x_sl, a=slope_annealer.value)
 
         optimizer.zero_grad()
         loss.backward()
@@ -166,7 +169,7 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl)
+            loss, metrics, outputs = model(x, x_sl, a=slope_annealer.value)
 
             tracker.update(metrics)
 
@@ -177,6 +180,10 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
+    lrs = get_learning_rates_dict(optimizer)
+    lr_schedule.step(tracker.metrics[PENN_TREEBANK_VALID]["ll"].value)
 
     # Log tracker metrics
-    tracker.log()
+    tracker.log(hard_sigmoid_slope=slope_annealer.value, **lrs)
+
+    slope_annealer.step()

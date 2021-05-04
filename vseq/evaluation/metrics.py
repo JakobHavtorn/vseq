@@ -49,6 +49,33 @@ def max_value(metrics: List[Metric]):
     return max(metrics, key=lambda m: m.value)
 
 
+class AccuracyMetric(Metric):
+    _str_value_fmt = "<10.3"
+    get_best = max_value
+
+    def __init__(
+        self,
+        predictions: Union[torch.Tensor, float],
+        labels: Union[torch.Tensor, float],
+        name: str = "accuracy",
+        tags: Set[str] = None,
+    ):
+        """Standard classification accuracy"""
+        super().__init__(name, tags)
+        predictions = detach(predictions)
+        labels = detach(labels)
+        self.correct = (predictions == labels).sum().item()
+        self.total = labels.size(0)
+
+    @property
+    def value(self):
+        return self.correct / self.total
+
+    def update(self, metric: Metric):
+        self.correct += metric.correct
+        self.total += metric.total
+
+
 class RunningMeanMetric(Metric):
     _str_value_fmt = "<10.3"
 
@@ -104,33 +131,6 @@ class RunningMeanMetric(Metric):
         self.weight_by = d
 
 
-class AccuracyMetric(Metric):
-    _str_value_fmt = "<10.3"
-    get_best = max_value
-
-    def __init__(
-        self,
-        predictions: Union[torch.Tensor, float],
-        labels: Union[torch.Tensor, float],
-        name: str = "accuracy",
-        tags: Set[str] = None,
-    ):
-        """Classification accuracy"""
-        super().__init__(name, tags)
-        predictions = detach(predictions)
-        labels = detach(labels)
-        self.correct = (predictions == labels).sum().item()
-        self.total = labels.size(0)
-
-    @property
-    def value(self):
-        return self.correct / self.total
-
-    def update(self, metric: Metric):
-        self.correct += metric.correct
-        self.total += metric.total
-
-
 class LossMetric(RunningMeanMetric):
     base_tags = {"losses"}
     get_best = min_value
@@ -178,6 +178,7 @@ class KLMetric(RunningMeanMetric):
 class BitsPerDimMetric(RunningMeanMetric):
     base_tags = set()
     get_best = min_value
+    _str_value_fmt = "<5.3"
 
     def __init__(
         self,
@@ -200,6 +201,7 @@ class PerplexityMetric(BitsPerDimMetric):
 
     base_tags = set()
     get_best = min_value
+    _str_value_fmt = "<8.3"
 
     def __init__(
         self,
