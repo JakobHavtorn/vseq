@@ -1,5 +1,6 @@
 import argparse
 import logging
+from vseq.data.loaders import TextLoader
 
 import torch
 import wandb
@@ -78,8 +79,9 @@ penn_treebank_transform = EncodeInteger(
     tokenizer=word_tokenizer,
 )
 batcher = TextBatcher()
+loader = TextLoader('txt', cache=True)
 
-modalities = [("txt", penn_treebank_transform, batcher)]
+modalities = [(loader, penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,

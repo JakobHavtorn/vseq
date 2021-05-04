@@ -20,8 +20,8 @@ class TokenMap:
     def __init__(
         self,
         tokens: List,
-        add_start: bool = True,
-        add_end: bool = True,
+        add_start: bool = False,
+        add_end: bool = False,
         add_delimit: bool = False,
         add_unknown: bool = False,
         add_blank: bool = False,

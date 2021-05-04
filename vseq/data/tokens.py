@@ -12,3 +12,4 @@ SPACE = " "
 APOSTROPHE = "'"
 
 ENGLISH_STANDARD = list(string.ascii_lowercase + SPACE + APOSTROPHE)
+PENN_TREEBANK_ALPHABET = ENGLISH_STANDARD + [".", "-", "&", "$", "N"]
