@@ -5,7 +5,10 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from haste_pytorch import LayerNormLSTM
+try:
+    from haste_pytorch import LayerNormLSTM
+except ModuleNotFoundError:
+    print("Module `haste_pytorch` not installed preventing use of LayerNormalized LSTM cells")
 
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 from vseq.evaluation.metrics import LossMetric

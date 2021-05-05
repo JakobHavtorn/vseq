@@ -3,8 +3,6 @@
 import os
 import logging
 
-import rootpath
-
 
 ROOT_PATH = __file__.removesuffix("/vseq/settings.py")
 ENV_FILE = os.path.join(ROOT_PATH, "VSEQ.env")
