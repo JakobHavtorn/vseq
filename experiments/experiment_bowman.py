@@ -105,6 +105,7 @@ train_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=True,
     batch_size=args.batch_size,
+    pin_memory=True
 )
 val_loader = DataLoader(
     dataset=val_dataset,
@@ -112,6 +113,7 @@ val_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=args.batch_size,
+    pin_memory=True
 )
 test_loader = DataLoader(
     dataset=test_dataset,
@@ -119,6 +121,7 @@ test_loader = DataLoader(
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=args.batch_size,
+    pin_memory=True
 )
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)

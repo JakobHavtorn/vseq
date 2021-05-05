@@ -1,14 +1,18 @@
 from types import SimpleNamespace
 from typing import Tuple, List
 
-from vseq.evaluation.metrics import LossMetric
-
 import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from vseq.utils.operations import sequence_mask
+try:
+    from haste_pytorch import LayerNormLSTM
+except ModuleNotFoundError:
+    print("Module `haste_pytorch` not installed preventing use of LayerNormalized LSTM cells")
+
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
+from vseq.evaluation.metrics import LossMetric
+from vseq.utils.operations import sequence_mask
 
 from .base_model import BaseModel
 
@@ -17,29 +21,43 @@ class LSTMLM(BaseModel):
     def __init__(
         self,
         num_embeddings: int,
-        embedding_dim: int,
-        hidden_size: int,
         delimiter_token_idx: int,
+        embedding_dim: int = 464,
+        hidden_size: int = 373,
+        num_layers: int = 1,
+        layer_norm: bool = False,
+        **lstm_kwargs,
     ):
+        """Simple LSTM-based Language Model with learnable input token embeddings and multiple LSTM layers.
+
+        Args:
+            num_embeddings (int): Number of input tokens.
+            delimiter_token_idx (int): Index of the delimiter token (combined start+end token) in the input.
+            embedding_dim (int, optional): Dimensionality of the embedding space. Defaults to 464 (c.f. Bowman)
+            hidden_size (int, optional): Dimensionality of the hidden space (LSTM gates). Defaults to 373 (c.f. Bowman)
+            num_layers (int, optional): Number of LSTM layers. Defaults to 1 (c.f. Bowman)
+        """
         super().__init__()
 
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.delimiter_token_idx = delimiter_token_idx
+        self.layer_norm = layer_norm
+        self.lstm_kwargs = lstm_kwargs
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        self.lstm = nn.LSTM(
+        rnn_layer = LayerNormLSTM if layer_norm else nn.LSTM
+
+        self.lstm = rnn_layer(
             input_size=embedding_dim,
             hidden_size=hidden_size,
-            num_layers=1,
-            bias=True,
             batch_first=False,
-            dropout=0,
-            bidirectional=False,
+            **lstm_kwargs
         )
 
         self.output = nn.Linear(hidden_size, num_embeddings)
@@ -88,10 +106,10 @@ class LSTMLM(BaseModel):
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
-        h, _ = self.lstm(e)
-
-        h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
+        # h, _ = self.lstm(e)
+        # h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        h, _ = self.lstm(e[:, :-1])
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here

@@ -8,19 +8,27 @@ metric:
   name: ptb_valid.best_ll
   goal: maximize
 parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
-  lr:  # continuous uniform
-    distribution: uniform
-    min: 0.0001
-    max: 0.01
+  lr:
+    values: [0.3, 0.1, 0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001, 0.00003, 0.00001]
   batch_size:  # categorical
     values: [8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]
   embedding_dim:
     values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
   hidden_size:
     values: [4, 8, 16, 32, 64, 128, 192, 256, 384, 512]
+  num_layers:
+    values: [1, 2, 3, 4]
+  layer_norm:
+    values: [True, False]
   word_dropout:
     distribution: uniform
     min: 0.0
     max: 1.0
+  optimizer_json:
+    values:
+      - '{"optimizer": "Adam"}'
+      - '{"optimizer": "AdamW", "weight_decay": 0.01}'
+      - '{"optimizer": "SGD", "momentum": 0.9, "nesterov": true}'
+      - '{"optimizer": "SGD", "momentum": 0.9, "nesterov": true, "weight_decay": 0.01}'
   loss_reduction:
     values: ['nats_per_dim', 'nats_per_example']

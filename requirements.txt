@@ -1,28 +1,18 @@
 black
 blessed
-gpustat
-ipdb
-ipython
-jupyter
-jupyterlab-git
-nbstripout
 numpy
-pandas
 pylint
 pytest
 pytest-cov
 pytest-html
 pyyaml
 rich
-rootpath
 scikit-learn
 seaborn
 torch==1.8.1
 torchaudio
 torchtext
+torchtyping
 torchvision
 tqdm
-uniplot
 wandb
-# datasets
-# transformers

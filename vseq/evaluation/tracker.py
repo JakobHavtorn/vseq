@@ -204,6 +204,7 @@ class Tracker:
 
         if self.start_time[source] is None:
             duration = "-"
+            steps_per_s = "-"
         else:
             duration = time() - self.start_time[source]
             steps_per_s = self.step[source] / duration
@@ -215,7 +216,7 @@ class Tracker:
         ps = f"{steps_frac} [bright_white not bold]({duration}, {steps_per_s})[/]"  # +26 format
 
         # metrics string
-        sep = "[magenta]|[/magenta]"  # +19 format pr metric
+        sep = "[magenta]|[/]"  # +19 format pr metric
         ms = "".join([f"{sep} {metric.name} = {metric.str_value}" for metric in self.metrics[source].values()])
 
         # source string

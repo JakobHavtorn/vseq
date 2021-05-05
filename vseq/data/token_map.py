@@ -88,3 +88,7 @@ class TokenMap:
 
     def __len__(self):
         return len(self.tokens)
+
+    def __repr__(self):
+        token_str = f"tokens={self.tokens}" if len(self.tokens) < 50 else f"|tokens|={len(self.tokens)}"
+        return f"TokenMap({token_str})"

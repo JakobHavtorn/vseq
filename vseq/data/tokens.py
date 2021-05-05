@@ -1,7 +1,5 @@
 import string
 
-from vseq.data.datapaths import PENN_TREEBANK_TEST
-
 START_TOKEN = "<"
 END_TOKEN = ">"
 DELIMITER_TOKEN = "|"
@@ -10,6 +8,10 @@ UNKNOWN_TOKEN = "¿"
 
 SPACE = " "
 APOSTROPHE = "'"
+PERIOD = "."
+HYPHEN = "-"
+AMPERSAND = "&"
 
 ENGLISH_STANDARD = list(string.ascii_lowercase + SPACE + APOSTROPHE)
-PENN_TREEBANK_ALPHABET = ENGLISH_STANDARD + [".", "-", "&", "$", "N"]
+
+PENN_TREEBANK_ALPHABET = ENGLISH_STANDARD + [PERIOD, HYPHEN, AMPERSAND, "$", "N"]

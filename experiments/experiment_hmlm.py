@@ -10,7 +10,6 @@ from torch.utils.data import DataLoader
 
 import vseq
 import vseq.data
-from vseq.data import tokenizers
 import vseq.models
 import vseq.utils
 import vseq.utils.device
@@ -18,42 +17,37 @@ import vseq.utils.device
 from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
-from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
+from vseq.data.tokens import DELIMITER_TOKEN, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
 from vseq.data.tokenizers import char_tokenizer, word_tokenizer
-from vseq.data.loaders import TextLoader
 from vseq.data.token_map import TokenMap
 from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.utils.argparsing import str2bool
+from vseq.training.annealers import CosineAnnealer
+from vseq.utils.optimization import get_learning_rates_dict
+
+
+LOGGER = logging.getLogger(name=__file__)
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=json.loads, help="extra kwargs for optimizer")
-parser.add_argument("--embedding_dim", default=464, type=int, help="dimensionality of embedding space")
-parser.add_argument("--hidden_size", default=373, type=int, help="dimensionality of hidden state in LSTM")
-parser.add_argument("--num_layers", default=1, type=int, help="number of LSTM layers")
-parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
+parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=json.loads, help="kwargs for optimizer")
+parser.add_argument("--embedding_dim", default=128, type=int, help="dimensionality of embedding space")
+parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in LSTM")
+parser.add_argument("--num_layers", default=3, type=int, help="number of LSTM layers")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
-parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
-parser.add_argument(
-    "--loss_reduction",
-    default="nats_per_dim",
-    type=str,
-    choices=["nats_per_dim", "nats_per_example"],
-    help="loss reduction",
-)
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+# parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
+parser.add_argument("--epochs", default=350, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 args, _ = parser.parse_known_args()
-
 
 if args.seed is None:
     args.seed = get_random_seed()
@@ -65,40 +59,39 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="lstmlm",
+    project="hmlm",
     group=None,
 )
 wandb.config.update(args)
 rich.print(vars(args))
 
-if args.token_level == "word":
-    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
-    token_map = TokenMap(tokens=tokens, add_delimit=True)
-    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
-else:
-    tokens = PENN_TREEBANK_ALPHABET
-    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
-    penn_treebank_transform = Compose(
-        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
-        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
-    )
 
+token_map = TokenMap(tokens=PENN_TREEBANK_ALPHABET, add_start=False, add_end=False, add_delimit=True, add_unknown=True)
+penn_treebank_transform = Compose(
+    TextCleaner(cleaner_fcn=lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
+    EncodeInteger(
+        token_map=token_map,
+        tokenizer=char_tokenizer,
+    ),
+)
 batcher = TextBatcher()
-loader = TextLoader('txt', cache=True)
 
-modalities = [(loader, penn_treebank_transform, batcher)]
+modalities = [("txt", penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
+    cache=args.cache_dataset,
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
     modalities=modalities,
+    cache=args.cache_dataset,
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
     modalities=modalities,
+    cache=args.cache_dataset,
 )
 
 train_loader = DataLoader(
@@ -126,27 +119,34 @@ test_loader = DataLoader(
     pin_memory=True,
 )
 
+rich.print(token_map)
 
 delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
-model = vseq.models.LSTMLM(
+model = vseq.models.HMLM(
     num_embeddings=len(token_map),
     embedding_dim=args.embedding_dim,
-    hidden_size=args.hidden_size,
-    layer_norm=args.layer_norm,
-    delimiter_token_idx=delimiter_token_idx,
+    sizes=args.hidden_size,
+    num_layers=args.num_layers,
+    layer_norm=args.layer_norm
+    # delimiter_token_idx=delimiter_token_idx,
 )
+
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
-x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
+# x, x_sl = next(iter(train_loader))[0]
+# x = x.to(device)
+# print(model.summary(input_example=x, x_sl=x_sl))
 
-optimizer = args.optimizer_json.pop('optimizer')
+optimizer = args.optimizer_json.pop("optimizer")
 optimizer = getattr(torch.optim, optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_json)
 
+lr_schedule = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, mode="max", factor=0.1, patience=10, threshold=1e-4, cooldown=0, verbose=True
+)
+slope_annealer = CosineAnnealer(start_value=1, end_value=5, n_steps=100)
 
 tracker = Tracker()
 
@@ -156,7 +156,7 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout, loss_reduction=args.loss_reduction)
+        loss, metrics, outputs = model(x, x_sl, a=slope_annealer.value)
 
         optimizer.zero_grad()
         loss.backward()
@@ -169,17 +169,21 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, loss_reduction=args.loss_reduction)
+            loss, metrics, outputs = model(x, x_sl, a=slope_annealer.value)
 
             tracker.update(metrics)
 
         for (x, x_sl), metadata in tracker(test_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, loss_reduction=args.loss_reduction)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
+    lrs = get_learning_rates_dict(optimizer)
+    lr_schedule.step(tracker.metrics[PENN_TREEBANK_VALID]["ll"].value)
 
     # Log tracker metrics
-    tracker.log()
+    tracker.log(hard_sigmoid_slope=slope_annealer.value, **lrs)
+
+    slope_annealer.step()
