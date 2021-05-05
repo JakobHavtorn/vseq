@@ -1,0 +1,11 @@
+# datasets
+# transformers
+gpustat
+haste_pytorch
+ipdb
+ipython
+jupyter
+jupyterlab-git
+nbstripout
+pandas
+uniplot
