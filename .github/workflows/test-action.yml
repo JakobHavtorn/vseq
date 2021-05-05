@@ -34,7 +34,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        mkdir data
+        python -m pip install -U pip
         python -m pip install --upgrade --editable .
 
     - name: Test with pytest
