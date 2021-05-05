@@ -3,7 +3,6 @@
 black
 blessed
 gpustat
-haste_pytorch
 ipdb
 ipython
 jupyter
@@ -25,6 +24,7 @@ torchaudio
 torchtext
 torchtyping
 torchvision
+haste_pytorch
 tqdm
 uniplot
 wandb
