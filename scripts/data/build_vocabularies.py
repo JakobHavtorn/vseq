@@ -15,7 +15,7 @@ from vseq.data.datapaths import (
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--datasets", type=str, nargs="+", default="all")
+parser.add_argument("--datasets", type=str, nargs="+", default=["all"])
 args = parser.parse_args()
 
 
