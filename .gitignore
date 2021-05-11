@@ -146,9 +146,9 @@ wandb
 VSEQ.env
 
 # data files
-.wav
-.flac
-.mp3
+*.wav
+*.flac
+*.mp3
 
 # miscellaneous
 miscellaneous
