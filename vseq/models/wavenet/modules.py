@@ -9,53 +9,32 @@ References:
 
 import torch
 
-
-class DilatedCausalConv1d(torch.nn.Module):
-    """Dilated Causal Convolution for WaveNet"""
-
-    def __init__(self, channels, dilation=1):
-        super().__init__()
-
-        self.conv = torch.nn.Conv1d(
-            channels,
-            channels,
-            kernel_size=2,
-            stride=1,
-            dilation=dilation,
-            padding=0,
-            bias=False,
-        )
-
-    def init_weights_for_test(self):
-        for m in self.modules():
-            if isinstance(m, torch.nn.Conv1d):
-                m.weight.data.fill_(1)
-
-    def forward(self, x):
-        output = self.conv(x)
-
-        return output
+from torchtyping import TensorType
 
 
 class CausalConv1d(torch.nn.Module):
-    """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and same padding)"""
+    """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and left same padding)
+    
+    """
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels: int, out_channels: int, receptive_field: int):
         super().__init__()
-
-        # padding=1 for same size(length) between input and output for causal convolution
-        self.conv = torch.nn.Conv1d(in_channels, out_channels, kernel_size=2, stride=1, padding=1, bias=False)
+        self.receptive_field = receptive_field
+        self.conv = torch.nn.Conv1d(in_channels, out_channels, kernel_size=2, bias=False)
+        # TODO Add activation function and bias?
 
     def init_weights_for_test(self):
         for m in self.modules():
             if isinstance(m, torch.nn.Conv1d):
                 m.weight.data.fill_(1)
+                # m.bias.data.fill_(0)
 
-    def forward(self, x):
+    def forward(self, x: TensorType["B", "C", "T", float], pad: bool = True):
+        if pad:
+            # Pad with receptive field and remove last input (causal convolution)
+            x = torch.nn.functional.pad(x, (self.receptive_field, -1))
         output = self.conv(x)
-
-        # remove last timestep for causal convolution
-        return output[:, :, :-1]
+        return output
 
 
 class ResidualBlock(torch.nn.Module):
@@ -66,13 +45,15 @@ class ResidualBlock(torch.nn.Module):
             res_channels (int): number of residual channel for input, output
             skip_channels (int): number of skip channel for output
             dilation (int): amount of dilation
+
+        TODO Should we have a single 1x1 convolution from which we form the "output" and the "skip connection", or
+             should of these have their own?
         """
         super().__init__()
 
-        self.dilated = DilatedCausalConv1d(res_channels, dilation=dilation)
-        self.conv_res = torch.nn.Conv1d(res_channels, res_channels, 1)
-        self.conv_skip = torch.nn.Conv1d(res_channels, skip_channels, 1)
-
+        self.dilated = torch.nn.Conv1d(res_channels, res_channels, kernel_size=2, dilation=dilation)
+        self.conv1x1_res = torch.nn.Conv1d(res_channels, res_channels, kernel_size=1)
+        # self.conv1x1_skip = torch.nn.Conv1d(res_channels, skip_channels, kernel_size=1)
         self.gate_tanh = torch.nn.Tanh()
         self.gate_sigmoid = torch.nn.Sigmoid()
 
@@ -82,21 +63,23 @@ class ResidualBlock(torch.nn.Module):
         :param skip_size: The last output size for loss and prediction
         :return:
         """
-        output = self.dilated(x)
+        gate_in = self.dilated(x)
 
         # PixelCNN gate
-        gated_tanh = self.gate_tanh(output)
-        gated_sigmoid = self.gate_sigmoid(output)
-        gated = gated_tanh * gated_sigmoid
+        gated_tanh = self.gate_tanh(gate_in)
+        gated_sigmoid = self.gate_sigmoid(gate_in)
+        gate_out = gated_tanh * gated_sigmoid
 
         # Residual network
-        output = self.conv_res(gated)
-        input_cut = x[:, :, -output.size(2) :]
-        output += input_cut
+        # import IPython; IPython.embed()
+        conv1x1_out = self.conv1x1_res(gate_out)
+        residual = x[:, :, -conv1x1_out.size(2) :]  # Remove superfluous timesteps
+        output = conv1x1_out + residual
 
         # Skip connection
-        skip = self.conv_skip(gated)
-        skip = skip[:, :, -skip_size:]
+        skip = conv1x1_out[:, :, -skip_size:]
+        # skip = self.conv1x1_skip(gate_out)
+        # skip = skip[:, :, -skip_size:]
 
         return output, skip
 
@@ -146,7 +129,7 @@ class ResidualStack(torch.nn.Module):
         output = x
         skip_connections = []
 
-        for res_block in self.res_blocks:
+        for i, res_block in enumerate(self.res_blocks):
             # output is the next input
             output, skip = res_block(output, skip_size)
             skip_connections.append(skip)

@@ -1,14 +1,15 @@
 """WaveNet main model"""
 
-import tqdm
-
-from collections import namedtuple
+from types import SimpleNamespace
 from typing import List
 
+import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributions as D
+
+from torchtyping import TensorType
 
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 from vseq.utils.operations import sequence_mask
@@ -17,13 +18,10 @@ from .modules import CausalConv1d, ResidualStack, DenseNet
 from ..base_model import BaseModel
 
 
-Output = namedtuple("Output", ["loss", "ll", "logits", "categorical"])
-
-
 class InputSizeError(Exception):
-    def __init__(self, input_size, receptive_field, output_size):
+    def __init__(self, input_size, receptive_field):
         message = "Input size has to be larger than receptive_field\n"
-        message += f"Input size: {input_size}, Receptive fields size: {receptive_field}, Output size: {output_size}"
+        message += f"Input size: {input_size}, Receptive fields size: {receptive_field}"
         super().__init__(message)
 
 
@@ -55,7 +53,8 @@ class WaveNet(BaseModel):
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             layer_size (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             stack_size (int): Number of stacks of residual blocks with skip connections to the output.
-            res_channels (int): Number of channels in residual blocks. `skip_channels` is also set to `res_channels`.
+            res_channels (int): Number of channels in residual blocks (and embedding if in_channels > 1).
+                               `skip_channels` is also set to `res_channels`.
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -72,10 +71,10 @@ class WaveNet(BaseModel):
 
         if in_channels > 1:
             self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
-            self.causal = CausalConv1d(res_channels, res_channels)
+            self.causal = CausalConv1d(res_channels, res_channels, receptive_field=self.receptive_field)
         else:
             self.embedding = None
-            self.causal = CausalConv1d(in_channels, res_channels)
+            self.causal = CausalConv1d(in_channels, res_channels, receptive_field=self.receptive_field)
 
         self.res_stack = ResidualStack(
             layer_size=layer_size, stack_size=stack_size, res_channels=res_channels, skip_channels=res_channels
@@ -89,16 +88,12 @@ class WaveNet(BaseModel):
     def calc_receptive_field(layer_size, stack_size):
         layers = [2 ** i for i in range(0, layer_size)] * stack_size
         receptive_field = np.sum(layers)
+        receptive_field = receptive_field + 2  # Plus two for causal conv
         return int(receptive_field)
 
-    def calc_output_size(self, x):
-        output_size = int(x.size(2)) - self.receptive_field
-        self.check_input_size(x, output_size)
-        return output_size
-
-    def check_input_size(self, x, output_size):
-        if output_size < 1:
-            raise InputSizeError(int(x.size(2)), self.receptive_field, output_size)
+    def check_input_size(self, x: TensorType["B", "C", "T"]):
+        if x.size(2) <= self.receptive_field:
+            raise InputSizeError(int(x.size(2)), self.receptive_field)
 
     def _get_target(self, x: torch.FloatTensor):
         target = x.squeeze(-1)  # (B, T, C) to (B, T)
@@ -115,11 +110,9 @@ class WaveNet(BaseModel):
             x_sl (torch.LongTensor): Sequence lengths in the batch
             output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T)
         """
-        target = target[:, self.receptive_field :]  # Causal
         ll = - self.nll_criterion(output, target)
 
         # Mask and reduce likelihood
-        x_sl = x_sl - self.receptive_field
         mask = sequence_mask(x_sl, device=ll.device)
         ll *= mask
         loss = - ll.sum() / x_sl.sum()  # mean T, mean B, negate
@@ -127,7 +120,7 @@ class WaveNet(BaseModel):
         ll = ll.sum(1)
         return loss, ll
 
-    def forward(self, x, x_sl):
+    def forward(self, x: TensorType["B", "T", "C", float], x_sl: TensorType["B", int]):
         """Reconstruct an input and compute the log-likelihood loss.
 
         The duration of x has to be longer than the receptive field.
@@ -145,10 +138,10 @@ class WaveNet(BaseModel):
 
         x = x.transpose(1, 2)  # (B, C, T)
 
-        output_size = self.calc_output_size(x)
+        self.check_input_size(x)
 
         output = self.causal(x)
-        skip_connections = self.res_stack(output, skip_size=output_size)
+        skip_connections = self.res_stack(output, skip_size=x.size(2))
         output = torch.sum(skip_connections, dim=0)
         output = self.densenet(output)
 
@@ -161,18 +154,27 @@ class WaveNet(BaseModel):
             LLMetric(ll),
             BitsPerDimMetric(ll, reduce_by=x_sl - 1)
         ]
-        output = Output(loss=loss, ll=ll, logits=output, categorical=categorical)
+        output = SimpleNamespace(loss=loss, ll=ll, logits=output, categorical=categorical, target=target)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
 
-        x = torch.zeros(n_samples, 1, self.receptive_field + 1, device=self.device)  # (bath, channel, timestep)
-        output_size = self.calc_output_size(x)
+        if self.in_channels == 1:
+            # start with floats of zeros
+            x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
+        else:
+            # start with embeddings of the zeros
+            x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
+            x = self.embedding(x)  # (B, T, C)
 
+        x = x.transpose(1, 2)  # (B, C, T)
+
+        outputs = []
         for _ in tqdm.tqdm(range(n_frames)):
-            output = self.causal(x[..., -self.receptive_field - 1:])
 
-            skip_connections = self.res_stack(output, skip_size=output_size)
+            output = self.causal(x, pad=False)
+
+            skip_connections = self.res_stack(output, skip_size=1)
 
             output = torch.sum(skip_connections, dim=0)
 
@@ -181,9 +183,19 @@ class WaveNet(BaseModel):
             categorical = D.Categorical(logits=output.transpose(1, 2))
 
             x_new = categorical.sample()  # Value in {0, ..., 255}
-            x_new = x_new / (self.out_classes - 1)  # To [0, 1]
-            x_new = x_new * 2 - 1  # To [-1, 1]
+            outputs.append(x_new)
 
-            x = torch.cat([x, x_new.unsqueeze(1)], dim=2)
+            # prepare prediction as next input
+            if self.in_channels == 1:
+                x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
+                x_new = x_new / (self.out_classes - 1)  # To [0, 1]
+                x_new = x_new * 2 - 1  # To [-1, 1]
+            else:
+                x_new = self.embedding(x_new)  # (B, T, C) (1, 1, C)
 
-        return x
+            x_new = x_new.transpose(1, 2)  # (B, C, T)
+
+            x = torch.cat([x[:, :, 1:], x_new], dim=2)  # FIFO along T
+
+        outputs = torch.hstack(outputs)
+        return outputs
