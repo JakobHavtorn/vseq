@@ -18,9 +18,9 @@ import vseq.utils.device
 from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
+from vseq.data.loaders import TextLoader
 from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
 from vseq.data.tokenizers import char_tokenizer, word_tokenizer
-from vseq.data.loaders import TextLoader
 from vseq.data.token_map import TokenMap
 from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
@@ -39,13 +39,6 @@ parser.add_argument("--num_layers", default=1, type=int, help="number of LSTM la
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
-parser.add_argument(
-    "--loss_reduction",
-    default="nats_per_dim",
-    type=str,
-    choices=["nats_per_dim", "nats_per_example"],
-    help="loss reduction",
-)
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -156,7 +149,7 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout, loss_reduction=args.loss_reduction)
+        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout)
 
         optimizer.zero_grad()
         loss.backward()
@@ -169,14 +162,14 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, loss_reduction=args.loss_reduction)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
         for (x, x_sl), metadata in tracker(test_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, loss_reduction=args.loss_reduction)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 

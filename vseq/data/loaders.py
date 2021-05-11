@@ -34,8 +34,8 @@ class AudioMetaData(MetaData):
     channels: int
     bits_per_sample: int
     encoding: str
-    example_id: str
     file_path: str
+    example_id: str = None
 
 
 @dataclass
