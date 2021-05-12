@@ -121,11 +121,6 @@ wandb.watch(model, log="all", log_freq=len(train_loader))
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 
-(x, x_sl), metadata = next(iter(train_loader))
-x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
-
-
 tracker = Tracker()
 
 for epoch in tracker.epochs(args.epochs):
