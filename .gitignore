@@ -149,6 +149,7 @@ VSEQ.env
 *.wav
 *.flac
 *.mp3
+*.png
 
 # miscellaneous
 miscellaneous
