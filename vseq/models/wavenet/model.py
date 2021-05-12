@@ -39,14 +39,16 @@ class WaveNet(BaseModel):
         The total number of residual blocks (layers) used is equal to the layer_size times the stack_size.
         This is `k` in Figure 4 in the paper.
 
-                       |----------------------------------------|     *residual*
-                       |                                        |
-                       |    |-- conv -- tanh --|                |
-            -> dilate -|----|                  * ----|-- 1x1 -- + -->	*input*
-                            |-- conv -- sigm --|     |
-                                                    1x1
-                                                     |
-            ---------------------------------------> + ------------->	*skip*
+        An illustration of the model:
+
+                             |---------------------------------------------------| *residual*
+                             |                                                   |
+                             |             |-- tanh --|                          |
+                 -> *input* ---> dilate ---|          * ---> 1x1 ---|----------- + ---> *input*
+                                           |-- sigm --|             |                  
+                                                                    |                  
+                                                                    |                  
+                 -> *skip* ---------------------------------------- + ----------------> *skip*
 
         Args:
             in_channels (int): Number of channels in the input data.

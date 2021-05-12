@@ -1,11 +1,4 @@
-"""Mdules for WaveNet
-
-References:
-    https://arxiv.org/pdf/1609.03499.pdf
-    https://github.com/ibab/tensorflow-wavenet
-    https://qiita.com/MasaEguchi/items/cd5f7e9735a120f27e2a
-    https://github.com/musyoku/wavenet/issues/4
-"""
+"""Mdules for WaveNet"""
 
 import torch
 
@@ -13,9 +6,7 @@ from torchtyping import TensorType
 
 
 class CausalConv1d(torch.nn.Module):
-    """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and left same padding)
-    
-    """
+    """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and left same padding)"""
 
     def __init__(self, in_channels: int, out_channels: int, receptive_field: int):
         super().__init__()
@@ -46,8 +37,8 @@ class ResidualBlock(torch.nn.Module):
             skip_channels (int): number of skip channel for output
             dilation (int): amount of dilation
 
-        TODO Should we have a single 1x1 convolution from which we form the "output" and the "skip connection", or
-             should of these have their own?
+        TODO Should we have a single 1x1 convolution from which we form the "output" and the "skip" connection, or
+             should each of these have their own convolution?
         """
         super().__init__()
 
@@ -59,9 +50,9 @@ class ResidualBlock(torch.nn.Module):
 
     def forward(self, x, skip_size):
         """
-        :param x:
-        :param skip_size: The last output size for loss and prediction
-        :return:
+        Args:
+            x (torch.Tensor): Input
+            skip_size (int): The last output size for loss and prediction
         """
         gate_in = self.dilated(x)
 
@@ -110,9 +101,8 @@ class ResidualStack(torch.nn.Module):
 
     def build_dilations(self):
         """Return a list of dilations {2, 4, 8, 16, ...} with a dilation for each of the residual blocks"""
-        dilations = []
-
         # 5 = stack[layer1, layer2, layer3, layer4, layer5]
+        dilations = []
         for s in range(0, self.stack_size):
             # 10 = layer[dilation=1, dilation=2, 4, 8, 16, 32, 64, 128, 256, 512]
             for l in range(0, self.layer_size):
@@ -122,9 +112,9 @@ class ResidualStack(torch.nn.Module):
 
     def forward(self, x, skip_size):
         """
-        :param x:
-        :param skip_size: The last output size for loss and prediction
-        :return:
+        Args:
+            x (torch.Tensor): Input
+            skip_size (int): The last output size for loss and prediction
         """
         output = x
         skip_connections = []
@@ -144,22 +134,22 @@ class DenseNet(torch.nn.Module):
         Args:
             in_channels (int): Number of input channels
             out_channels (int): Number of output classes
-        """        
+        """
         super().__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        self.conv1 = torch.nn.Conv1d(in_channels, in_channels, 1)
-        self.conv2 = torch.nn.Conv1d(in_channels, out_channels, 1)
-
-        self.relu = torch.nn.ReLU()
+        self.relu1 = torch.nn.ReLU()
+        self.conv1 = torch.nn.Conv1d(in_channels, in_channels, kernel_size=1)
+        self.relu2 = torch.nn.ReLU()
+        self.conv2 = torch.nn.Conv1d(in_channels, out_channels, kernel_size=1)
         self.log_softmax = torch.nn.LogSoftmax(dim=1)
 
     def forward(self, x):
-        output = self.relu(x)
+        output = self.relu1(x)
         output = self.conv1(output)
-        output = self.relu(output)
+        output = self.relu2(output)
         output = self.conv2(output)
 
         output = self.log_softmax(output)

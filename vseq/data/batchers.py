@@ -33,6 +33,24 @@ class Batcher:
         raise NotImplementedError()
 
 
+class TensorBatcher(Batcher):
+    def __init__(self):
+        """Generic concatenating batcher for equally sized tensors of arbitrary dimensions"""
+        super().__init__()
+
+    def collate(self, batch: List[torch.Tensor]):
+        """Concatenate a number of equally sized tensors (B, D1, D2, D3, ...)"""
+        sequence_lengths = [tensor.numel() for tensor in batch]
+        shapes = [tensor.shape for tensor in batch]
+
+        assert all(sequence_lengths[0] == seq_len for seq_len in sequence_lengths)
+        assert all(shapes[0] == shape for shape in shapes)
+
+        collated_batch = torch.cat(batch, dim=0)
+
+        return collated_batch, torch.LongTensor(sequence_lengths)
+
+
 class AudioBatcher(Batcher):
     def __init__(self) -> None:
         super().__init__()
@@ -44,11 +62,11 @@ class AudioBatcher(Batcher):
         T = max(sequence_lengths)
         N = len(batch)
 
-        padded_batch = torch.zeros((N, T), dtype=batch[0].dtype)
+        collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
-            padded_batch[i, :seq_len] = batch[i]
+            collated_batch[i, :seq_len] = batch[i]
 
-        return padded_batch, torch.LongTensor(sequence_lengths)
+        return collated_batch, torch.LongTensor(sequence_lengths)
 
     def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:
@@ -71,11 +89,11 @@ class SpectrogramBatcher(Batcher):
         N = len(batch)
         F = batch[0].shape[0]
 
-        padded_batch = torch.zeros((N, F, T), dtype=torch.float32)
+        collated_batch = torch.zeros((N, F, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
-            padded_batch[i, :, :seq_len] = batch[i]
+            collated_batch[i, :, :seq_len] = batch[i]
 
-        return padded_batch, torch.LongTensor(sequence_lengths)
+        return collated_batch, torch.LongTensor(sequence_lengths)
 
 
 class TextBatcher(Batcher):
@@ -88,11 +106,11 @@ class TextBatcher(Batcher):
 
         T = max(sequence_lengths)
 
-        padded_batch = []
+        collated_batch = []
         for t, text in zip(sequence_lengths, batch):
-            padded_batch.append(text + [self.pad_value] * (T - t))
+            collated_batch.append(text + [self.pad_value] * (T - t))
 
-        return torch.LongTensor(padded_batch), torch.LongTensor(sequence_lengths)
+        return torch.LongTensor(collated_batch), torch.LongTensor(sequence_lengths)
 
     def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:
