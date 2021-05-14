@@ -20,31 +20,29 @@ class CausalConv1d(torch.nn.Module):
                 m.weight.data.fill_(1)
                 # m.bias.data.fill_(0)
 
+    def causal_padding(self, x):
+        """Pad with receptive field and remove last input (causal convolution)"""
+        return torch.nn.functional.pad(x, (self.receptive_field, -1))
+
     def forward(self, x: TensorType["B", "C", "T", float], pad: bool = True):
         if pad:
-            # Pad with receptive field and remove last input (causal convolution)
-            x = torch.nn.functional.pad(x, (self.receptive_field, -1))
+            x = self.causal_padding(x)
         output = self.conv(x)
         return output
 
 
 class ResidualBlock(torch.nn.Module):
-    def __init__(self, res_channels, skip_channels, dilation):
+    def __init__(self, res_channels, dilation):
         """Residual block
 
         Args:
             res_channels (int): number of residual channel for input, output
-            skip_channels (int): number of skip channel for output
             dilation (int): amount of dilation
-
-        TODO Should we have a single 1x1 convolution from which we form the "output" and the "skip" connection, or
-             should each of these have their own convolution?
         """
         super().__init__()
 
         self.dilated = torch.nn.Conv1d(res_channels, res_channels, kernel_size=2, dilation=dilation)
-        self.conv1x1_res = torch.nn.Conv1d(res_channels, res_channels, kernel_size=1)
-        # self.conv1x1_skip = torch.nn.Conv1d(res_channels, skip_channels, kernel_size=1)
+        self.conv1x1 = torch.nn.Conv1d(res_channels, res_channels, kernel_size=1)
         self.gate_tanh = torch.nn.Tanh()
         self.gate_sigmoid = torch.nn.Sigmoid()
 
@@ -62,28 +60,24 @@ class ResidualBlock(torch.nn.Module):
         gate_out = gated_tanh * gated_sigmoid
 
         # Residual network
-        # import IPython; IPython.embed()
-        conv1x1_out = self.conv1x1_res(gate_out)
+        conv1x1_out = self.conv1x1(gate_out)
         residual = x[:, :, -conv1x1_out.size(2) :]  # Remove superfluous timesteps
         output = conv1x1_out + residual
 
         # Skip connection
         skip = conv1x1_out[:, :, -skip_size:]
-        # skip = self.conv1x1_skip(gate_out)
-        # skip = skip[:, :, -skip_size:]
 
         return output, skip
 
 
 class ResidualStack(torch.nn.Module):
-    def __init__(self, layer_size, stack_size, res_channels, skip_channels):
+    def __init__(self, layer_size, stack_size, res_channels):
         """Stack residual blocks by layer and stack size
 
         Args:
             layer_size (int): Number of stacked residual blocks (k). Dilations chosen as 2, 4, 8, 16, 32, 64...
             stack_size (int): Number of stacks of residual blocks with skip connections to the output.
             res_channels (int): Number of channels in the residual connections.
-            skip_channels (int): Number of channels in the skip connections (to sum to give output).
         """
         super().__init__()
 
@@ -94,7 +88,7 @@ class ResidualStack(torch.nn.Module):
 
         res_blocks = torch.nn.ModuleList()
         for dilation in self.dilations:
-            block = ResidualBlock(res_channels, skip_channels, dilation)
+            block = ResidualBlock(res_channels, dilation)
             res_blocks.append(block)
 
         self.res_blocks = res_blocks
@@ -127,7 +121,7 @@ class ResidualStack(torch.nn.Module):
         return torch.stack(skip_connections)
 
 
-class DenseNet(torch.nn.Module):
+class OutConv1d(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         """The last network of WaveNet. Outputs log probabilities of frame classes.
 

@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from typing import List
+from torch.tensor import Tensor
 
 import tqdm
 import numpy as np
@@ -14,7 +15,7 @@ from torchtyping import TensorType
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 from vseq.utils.operations import sequence_mask
 
-from .modules import CausalConv1d, ResidualStack, DenseNet
+from .modules import CausalConv1d, ResidualStack, OutConv1d
 from ..base_model import BaseModel
 
 
@@ -32,7 +33,7 @@ class WaveNet(BaseModel):
         out_classes: int = 256,
         layer_size: int = 10,
         stack_size: int = 5,
-        res_channels: int = 512
+        res_channels: int = 512,
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
@@ -45,9 +46,9 @@ class WaveNet(BaseModel):
                              |                                                   |
                              |             |-- tanh --|                          |
                  -> *input* ---> dilate ---|          * ---> 1x1 ---|----------- + ---> *input*
-                                           |-- sigm --|             |                  
-                                                                    |                  
-                                                                    |                  
+                                           |-- sigm --|             |
+                                                                    |
+                                                                    |
                  -> *skip* ---------------------------------------- + ----------------> *skip*
 
         Args:
@@ -56,7 +57,6 @@ class WaveNet(BaseModel):
             layer_size (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             stack_size (int): Number of stacks of residual blocks with skip connections to the output.
             res_channels (int): Number of channels in residual blocks (and embedding if in_channels > 1).
-                               `skip_channels` is also set to `res_channels`.
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -69,7 +69,7 @@ class WaveNet(BaseModel):
         self.res_channels = res_channels
         self.out_classes = out_classes
 
-        self.receptive_field = self.calc_receptive_field(layer_size, stack_size)
+        self.receptive_field = self.compute_receptive_field(layer_size, stack_size)
 
         if in_channels > 1:
             self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
@@ -78,49 +78,52 @@ class WaveNet(BaseModel):
             self.embedding = None
             self.causal = CausalConv1d(in_channels, res_channels, receptive_field=self.receptive_field)
 
-        self.res_stack = ResidualStack(
-            layer_size=layer_size, stack_size=stack_size, res_channels=res_channels, skip_channels=res_channels
-        )
+        self.res_stack = ResidualStack(layer_size=layer_size, stack_size=stack_size, res_channels=res_channels)
 
-        self.densenet = DenseNet(res_channels, out_classes)
+        self.out_convs = OutConv1d(res_channels, out_classes)
 
         self.nll_criterion = torch.nn.NLLLoss(reduction="none")
 
     @staticmethod
-    def calc_receptive_field(layer_size, stack_size):
+    def compute_receptive_field(layer_size: int, stack_size: int):
+        """Compute and return the receptive field of a WaveNet model"""
         layers = [2 ** i for i in range(0, layer_size)] * stack_size
         receptive_field = np.sum(layers)
         receptive_field = receptive_field + 2  # Plus two for causal conv
         return int(receptive_field)
 
     def check_input_size(self, x: TensorType["B", "C", "T"]):
+        """Require input to be longer than the model's receptive field"""
         if x.size(2) <= self.receptive_field:
             raise InputSizeError(int(x.size(2)), self.receptive_field)
 
-    def _get_target(self, x: torch.FloatTensor):
+    def _get_target(self, x: TensorType["B", "T", 1]):
+        """Convert a PCM audio waveform to quantized integer targets for NLL loss"""
         target = x.squeeze(-1)  # (B, T, C) to (B, T)
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
         target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
         target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
         return target
 
-    def compute_loss(self, target: torch.IntTensor, x_sl: List[int], output: torch.FloatTensor):
-        """To compute the loss, the inputs must be compared to outputs shifted by the receptive field.
+    def compute_loss(
+        self,
+        target: TensorType["B", "T", int],
+        x_sl: TensorType["B", int],
+        output: TensorType["B", "T", "C", float],
+    ):
+        """Compute the loss as negative log-likelihood per frame, masked and mormalized according to sequence lengths.
 
         Args:
-            target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) (may be dequantized with [0, 1) noise)
-            x_sl (torch.LongTensor): Sequence lengths in the batch
-            output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T)
+            target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) of quantized integers.
+            x_sl (torch.LongTensor): Sequence lengths of examples in the batch.
+            output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
         """
-        ll = - self.nll_criterion(output, target)
-
-        # Mask and reduce likelihood
-        mask = sequence_mask(x_sl, device=ll.device)
-        ll *= mask
-        loss = - ll.sum() / x_sl.sum()  # mean T, mean B, negate
-        # loss = - ll.sum(1).mean()  # mean T, mean B, negate
-        ll = ll.sum(1)
-        return loss, ll
+        nll = self.nll_criterion(output, target)
+        mask = sequence_mask(x_sl, device=nll.device)
+        nll *= mask
+        nll = nll.sum(1)  # sum T
+        loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
+        return loss, -nll
 
     def forward(self, x: TensorType["B", "T", "C", float], x_sl: TensorType["B", int]):
         """Reconstruct an input and compute the log-likelihood loss.
@@ -145,22 +148,18 @@ class WaveNet(BaseModel):
         output = self.causal(x)
         skip_connections = self.res_stack(output, skip_size=x.size(2))
         output = torch.sum(skip_connections, dim=0)
-        output = self.densenet(output)
+        output = self.out_convs(output)
 
         loss, ll = self.compute_loss(target, x_sl, output)
 
         categorical = D.Categorical(logits=output.transpose(1, 2))
 
-        metrics = [
-            LossMetric(loss, weight_by=ll.numel()),
-            LLMetric(ll),
-            BitsPerDimMetric(ll, reduce_by=x_sl - 1)
-        ]
+        metrics = [LossMetric(loss, weight_by=ll.numel()), LLMetric(ll), BitsPerDimMetric(ll, reduce_by=x_sl)]
         output = SimpleNamespace(loss=loss, ll=ll, logits=output, categorical=categorical, target=target)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
-
+        """Generate samples from the WaveNet starting from a zero vector"""
         if self.in_channels == 1:
             # start with floats of zeros
             x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
@@ -175,15 +174,11 @@ class WaveNet(BaseModel):
         for _ in tqdm.tqdm(range(n_frames)):
 
             output = self.causal(x, pad=False)
-
             skip_connections = self.res_stack(output, skip_size=1)
-
             output = torch.sum(skip_connections, dim=0)
-
-            output = self.densenet(output)
+            output = self.out_convs(output)
 
             categorical = D.Categorical(logits=output.transpose(1, 2))
-
             x_new = categorical.sample()  # Value in {0, ..., 255}
             outputs.append(x_new)
 
