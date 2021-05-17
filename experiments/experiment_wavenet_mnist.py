@@ -23,7 +23,6 @@ from vseq.utils.device import get_device
 from vseq.utils.rand import set_seed, get_random_seed
 
 
-torch.autograd.set_detect_anomaly(True)
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
