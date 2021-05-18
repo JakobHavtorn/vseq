@@ -1,14 +1,13 @@
 import os
 import uuid
-from time import time
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Callable, Union
 
 import torchaudio
 
 
-def memoize(func):
+def memoize(func: Callable):
     cache = dict()
 
     def memoized_func(example_id):
@@ -47,7 +46,7 @@ class TextMetaData(MetaData):
     line_idx: int = None
 
 
-def load_text(file_path):
+def load_text(file_path: str):
     with open(file_path, "r") as text_file:
         text = text_file.read()
 
@@ -60,7 +59,7 @@ def load_text(file_path):
     return text, metadata
 
 
-def load_audio(file_path, sum_channels: bool = False):
+def load_audio(file_path: str, sum_channels: bool = False):
     metadata = torchaudio.info(file_path)
     audio, _ = torchaudio.load(file_path)
 
@@ -80,7 +79,7 @@ def load_audio(file_path, sum_channels: bool = False):
 
 class Loader():
 
-    def __init__(self, extension: Union[None, str], cache=False):
+    def __init__(self, extension: Union[None, str], cache: bool = False):
         """
         Base Loader for any data type.
 
@@ -113,7 +112,7 @@ class Loader():
 
 class AudioLoader(Loader):
 
-    def __init__(self, extension, cache=False, sum_channels: bool = True):
+    def __init__(self, extension: Union[None, str], cache: bool = False, sum_channels: bool = True):
         """
         Loader for audio data.
 
@@ -132,7 +131,7 @@ class AudioLoader(Loader):
 
 class TextLoader(Loader):
 
-    def __init__(self, extension, cache=False):
+    def __init__(self, extension: Union[None, str], cache: bool = False):
         """
         Loader for text data.
 
