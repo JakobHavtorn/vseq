@@ -85,18 +85,15 @@ modalities = [(loader, penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 
 train_loader = DataLoader(
@@ -189,19 +186,19 @@ for epoch in tracker.epochs(args.epochs):
     prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
 
     # Perform interpolation in latent space
-    n_interps = args.n_interpolations
-    x = ["she did n't want to be with him", "i want to talk to you"]
+    n_steps = args.n_interpolations
+    x = ["a group of senior executives plans to sell the company", "the company disclosed the expected revenue for next year"]
     x = [penn_treebank_transform(_x) for _x in x]
     x, x_sl = batcher(x)
-
     _, q_z = model.infer(x.to(device), x_sl)
-    z_samples = q_z.mean.unsqueeze(-1).repeat(1, 1, 1, n_interps)  # Create interpolation axis
-    alpha = torch.linspace(0, 1, n_interps).to(z_samples.device)
-    z_interps = z_samples[0] * (1 - alpha) + z_samples[1] * alpha
-    z_interps = z_interps.permute(2, 0, 1)
-    (x, x_sl), log_prob = model.generate(z=z_interps, use_mode=True)
 
-    text = token_map.decode_batch(x, x_sl, join_separator=" ")
+    z_samples = q_z.mean.unsqueeze(-1).repeat(1, 1, 1, n_steps)  # Create interpolation axis (B, T, D, I)
+    alpha = torch.linspace(0, 1, n_steps).to(z_samples.device)  # (I)
+    z_interps = z_samples[0::2] * (1 - alpha) + z_samples[1::2] * alpha  # (B/2, T, D, I)
+    z_interps = z_interps.view(z_interps.size(0) * z_interps.size(3), z_interps.size(1), z_interps.size(2))  # (B*I, T, D)
+    (x_hat, x_hat_sl), log_prob = model.generate(z=z_interps, use_mode=True)
+
+    text = token_map.decode_batch(x_hat, x_hat_sl, join_separator=" ")
     data = [(i, t) for i, t in enumerate(text)]
     interpolations_table = wandb.Table(columns=["Idx", "Samples"], data=data)
 
