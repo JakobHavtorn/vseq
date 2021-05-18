@@ -187,7 +187,10 @@ for epoch in tracker.epochs(args.epochs):
 
     # Perform interpolation in latent space
     n_steps = args.n_interpolations
-    x = ["a group of senior executives plans to sell the company", "the company disclosed the expected revenue for next year"]
+    x = [
+        "a group of senior executives plans to sell the company",
+        "the company disclosed the expected revenue for next year"
+    ]
     x = [penn_treebank_transform(_x) for _x in x]
     x, x_sl = batcher(x)
     _, q_z = model.infer(x.to(device), x_sl)

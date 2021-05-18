@@ -67,9 +67,15 @@ class EncodeInteger(Transform):
 
 
 class DecodeInteger(Transform):
-    def __init__(self):
+    def __init__(self, join_token, token_map):
         super().__init__()
-        raise NotImplementedError()
+        self.join_token = join_token
+        self.token_map = token_map
+
+    def forward(self, x: str):
+        x = self.token_map.decode(x)
+        x = self.join_token.join(x)
+        return x
 
 
 class RandomSegment(Transform):
