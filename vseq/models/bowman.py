@@ -8,9 +8,9 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-import vseq.modules
-import vseq.modules.activations
 
+from vseq.modules import HighwayStackDense
+from vseq.modules.activations import InverseSoftplus
 from vseq.utils.operations import sequence_mask
 from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
 
@@ -41,7 +41,7 @@ class Bowman(BaseModel):
         self.trainable_prior = trainable_prior
 
         self.std_activation = nn.Softplus(beta=np.log(2))
-        self.std_activation_inverse = vseq.modules.activations.InverseSoftplus(beta=np.log(2))
+        self.std_activation_inverse = InverseSoftplus(beta=np.log(2))
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
@@ -59,13 +59,13 @@ class Bowman(BaseModel):
 
         if n_highway_blocks > 0:
             self.h_to_z = nn.Sequential(
-                vseq.modules.HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks),
+                HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks),
                 nn.Linear(hidden_size, 2 * latent_dim),
             )
             self.z_to_h = nn.Sequential(
                 nn.Linear(latent_dim, hidden_size),
                 nn.Tanh(),
-                vseq.modules.HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks)
+                HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks)
             )
         else:
             self.h_to_z = nn.Linear(hidden_size, 2 * latent_dim)
