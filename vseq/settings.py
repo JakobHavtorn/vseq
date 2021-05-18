@@ -71,8 +71,7 @@ SOURCE_DIRECTORY = os.path.join(DATA_ROOT_DIRECTORY, "source")
 VOCAB_DIRECTORY = os.path.join(DATA_ROOT_DIRECTORY, "vocabularies")
 
 # set wandb directory to inside data directory
-DEFAULT_WANDB_DIR = os.path.join(DATA_ROOT_DIRECTORY, "wandb")
-WANDB_DIR = get_vseq_envvar("WANDB_DIR", default=DEFAULT_WANDB_DIR, reflect=True)
+WANDB_DIR = get_vseq_envvar("WANDB_DIR", default=DATA_ROOT_DIRECTORY, reflect=True)
 
 # make directories
 for path in [DATA_DIRECTORY, SOURCE_DIRECTORY, VOCAB_DIRECTORY, WANDB_DIR]:
