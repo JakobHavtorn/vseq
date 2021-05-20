@@ -2,6 +2,7 @@ import argparse
 import logging
 
 import torch
+import torchaudio
 import wandb
 import rich
 
@@ -28,9 +29,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=2e-3, type=float, help="base learning rate")
 parser.add_argument(
-    "--layer_size", default=2, type=int, help="number of layers per stack"
+    "--layer_size", default=10, type=int, help="number of layers per stack"
 )
-parser.add_argument("--stack_size", default=2, type=int, help="number of stacks")
+parser.add_argument("--stack_size", default=3, type=int, help="number of stacks")
 parser.add_argument(
     "--res_channels",
     default=64,
@@ -68,6 +69,9 @@ parser.add_argument(
 )
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
+parser.add_argument("--save_freq", default=5, type=int, help="number of epochs to go between saves")
+parser.add_argument("--delete_last_model", default=False, type=str2bool, help="if True, delete the last model saved")
+
 args, _ = parser.parse_known_args()
 
 if args.seed is None:
@@ -85,10 +89,12 @@ else:
     raise ValueError()
 
 
+model_name_str = f"wavenet-sigmoid-{args.layer_size}-{args.stack_size}-{args.res_channels}"
+print(f"Initializing model with name: {model_name_str}")
 wandb.init(
     entity="vseq",
     project="wavenet",
-    group=None,
+    group="sinusoids",
 )
 wandb.config.update(args)
 rich.print(vars(args))
@@ -174,26 +180,55 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
         if epoch % 5 == 1:
-            _gen = model.generate(n_samples=1, n_frames=16000)
 
-            example_dict = {
-                f"examples - epoch {epoch:03}": [
-                    wandb.Audio(
-                        x[0].cpu().numpy(), sample_rate=8000, caption="Synthetic Data"
-                    ),
-                    wandb.Audio(
-                        ((output.logits.argmax(1)[0] - 128) / 128.0).cpu().numpy(),
-                        sample_rate=8000,
-                        caption="Reconstruction",
-                    ),
-                    wandb.Audio(
-                        _gen.squeeze().cpu().numpy(),
-                        sample_rate=8000,
-                        caption="Generated",
-                    ),
-                ],
-            }
+            # save samples
+            _gen = model.generate(n_samples=10, n_frames=32000)
+            _gen = _gen.unsqueeze(-1).to(torch.uint8).cpu()
+            for i in range(len(x)):
+                torchaudio.save(
+                    f"./wavenet_samples/{model_name_str}-epoch-{epoch}-sample_{i}.wav",
+                    _gen[i],
+                    sample_rate=8000,
+                    channels_first=False,
+                    encoding="ULAW",
+                )
+            torchaudio.save(
+                f"./wavenet_samples/{model_name_str}-epoch-{epoch}-reconstruction.wav",
+                    ((output.logits.argmax(1)[0] - 128) / 128.0).cpu(),
+                    sample_rate=8000,
+                    channels_first=False,
+                    encoding="ULAW",
+            )
+            torchaudio.save(
+                f"./wavenet_samples/{model_name_str}-epoch-{epoch}-synthetic.wav",
+                    x[0].cpu().numpy(),
+                    sample_rate=8000,
+                    channels_first=False,
+                    encoding="ULAW",
+            )
 
-            tracker.log(**example_dict)
-        else:
-            tracker.log()
+
+            # # old model generation script
+            # _gen = model.generate(n_samples=1, n_frames=16000)
+
+            # example_dict = {
+            #     f"examples - epoch {epoch:03}": [
+            #         wandb.Audio(
+            #             x[0].cpu().numpy(), sample_rate=8000, caption="Synthetic Data"
+            #         ),
+            #         wandb.Audio(
+            #             ((output.logits.argmax(1)[0] - 128) / 128.0).cpu().numpy(),
+            #             sample_rate=8000,
+            #             caption="Reconstruction",
+            #         ),
+            #         wandb.Audio(
+            #             _gen.squeeze().cpu().numpy(),
+            #             sample_rate=8000,
+            #             caption="Generated",
+            #         ),
+            #     ],
+            # }
+
+            # tracker.log(**example_dict)
+        # else:
+        tracker.log()
