@@ -108,11 +108,12 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch
     Returns:
         Tensor: The sequence mask of shape NT.
     """
-    device = seq_lens.device if device is None else device
-    if not isinstance(seq_lens, torch.Tensor):
-        seq_lens = torch.LongTensor(seq_lens) if device == torch.device('cpu') else torch.cuda.LongTensor(seq_lens)
-    elif device != seq_lens.device:
-        seq_lens = seq_lens.to(device)
+    if isinstance(seq_lens, torch.Tensor):
+        device = seq_lens.device if device is None else device
+        if device != seq_lens.device:
+            seq_lens = seq_lens.to(device)
+    else:
+        seq_lens = torch.tensor(seq_lens, device=device, dtype=int)
 
     N = seq_lens.size(0)
     T = max_len or seq_lens.max()
