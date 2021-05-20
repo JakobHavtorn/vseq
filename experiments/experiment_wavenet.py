@@ -1,3 +1,4 @@
+import os
 import argparse
 import logging
 
@@ -36,6 +37,8 @@ parser.add_argument("--num_workers", default=8, type=int, help="number of datalo
 parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+parser.add_argument("--save_freq", default=10, type=int, help="number of epochs to go between saves")
+parser.add_argument("--delete_last_model", default=False, type=str2bool, help="if True, delete the last model saved")
 
 args, _ = parser.parse_known_args()
 
@@ -54,17 +57,21 @@ else:
     raise ValueError()
 
 
+model_name_str = f"wavenet-{args.layer_size}-{args.stack_size}-{args.res_channels}"
+print(f"Initializing model with name: {model_name_str}")
 wandb.init(
     entity="vseq",
     project="wavenet",
-    group=None,
+    group=args.wandb_group,
 )
 wandb.config.update(args)
 rich.print(vars(args))
 
 
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8))
+    wavenet_transform = Compose(
+        RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8)
+    )
 elif args.input_coding == "frames":
     wavenet_transform = Compose(RandomSegment(length=16000))
 
@@ -149,9 +156,14 @@ for epoch in tracker.epochs(args.epochs):
         x = x.unsqueeze(-1).to(torch.uint8).cpu()
         for i in range(len(x)):
             torchaudio.save(
-                f"./wavenet_samples/model-{args.layer_size}-{args.stack_size}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
+                f"./wavenet_samples/{model_name_str}-epoch-{epoch}-sample_{i}.wav",
                 x[i],
                 sample_rate=16000,
                 channels_first=False,
                 encoding="ULAW",
             )
+    if epoch != 0 and epoch % args.save_freq == 0:  # epoch 10, 20, ...
+        if args.delete_last_model and os.path.exists(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}"):
+            # delete past model 
+            os.removedirs(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}")
+        model.save(f"./models/{model_name_str}-epoch-{epoch}")

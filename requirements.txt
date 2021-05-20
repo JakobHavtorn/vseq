@@ -16,3 +16,4 @@ torchtyping
 torchvision
 tqdm
 wandb
+soundfile
