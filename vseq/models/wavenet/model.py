@@ -72,13 +72,21 @@ class WaveNet(BaseModel):
         self.receptive_field = self.compute_receptive_field(layer_size, stack_size)
 
         if in_channels > 1:
-            self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
-            self.causal = CausalConv1d(res_channels, res_channels, receptive_field=self.receptive_field)
+            self.embedding = nn.Embedding(
+                num_embeddings=in_channels, embedding_dim=res_channels
+            )
+            self.causal = CausalConv1d(
+                res_channels, res_channels, receptive_field=self.receptive_field
+            )
         else:
             self.embedding = None
-            self.causal = CausalConv1d(in_channels, res_channels, receptive_field=self.receptive_field)
+            self.causal = CausalConv1d(
+                in_channels, res_channels, receptive_field=self.receptive_field
+            )
 
-        self.res_stack = ResidualStack(layer_size=layer_size, stack_size=stack_size, res_channels=res_channels)
+        self.res_stack = ResidualStack(
+            layer_size=layer_size, stack_size=stack_size, res_channels=res_channels
+        )
 
         self.out_convs = OutConv1d(res_channels, out_classes)
 
@@ -102,7 +110,9 @@ class WaveNet(BaseModel):
         target = x.squeeze(-1)  # (B, T, C) to (B, T)
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
         target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
-        target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
+        target = target.floor().to(
+            torch.int64
+        )  # To integer (floor because of added noise for dequantization)
         return target
 
     def compute_loss(
@@ -119,7 +129,7 @@ class WaveNet(BaseModel):
             output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
         """
         nll = self.nll_criterion(output, target)
-        mask = sequence_mask(x_sl, device=nll.device)
+        mask = sequence_mask(x_sl, device=nll.device, max_len=target.size(1))
         nll *= mask
         nll = nll.sum(1)  # sum T
         loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
@@ -140,7 +150,6 @@ class WaveNet(BaseModel):
         else:
             target = x.clone()
             x = self.embedding(x)  # (B, T, C)
-
         x = x.transpose(1, 2)  # (B, C, T)
 
         self.check_input_size(x)
@@ -154,18 +163,28 @@ class WaveNet(BaseModel):
 
         categorical = D.Categorical(logits=output.transpose(1, 2))
 
-        metrics = [LossMetric(loss, weight_by=ll.numel()), LLMetric(ll), BitsPerDimMetric(ll, reduce_by=x_sl)]
-        output = SimpleNamespace(loss=loss, ll=ll, logits=output, categorical=categorical, target=target)
+        metrics = [
+            LossMetric(loss, weight_by=ll.numel()),
+            LLMetric(ll),
+            BitsPerDimMetric(ll, reduce_by=x_sl),
+        ]
+        output = SimpleNamespace(
+            loss=loss, ll=ll, logits=output, categorical=categorical, target=target
+        )
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
         """Generate samples from the WaveNet starting from a zero vector"""
         if self.in_channels == 1:
             # start with floats of zeros
-            x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
+            x = torch.zeros(
+                n_samples, self.receptive_field, 1, device=self.device
+            )  # (B, T, C)
         else:
             # start with embeddings of the zeros
-            x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
+            x = torch.zeros(
+                n_samples, self.receptive_field, device=self.device, dtype=torch.int64
+            )  # (B, T)
             x = self.embedding(x)  # (B, T, C)
 
         x = x.transpose(1, 2)  # (B, C, T)
