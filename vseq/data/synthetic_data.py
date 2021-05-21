@@ -13,19 +13,19 @@ class SimpleSinusoidDataset(Dataset):
         sample_length: int = 64000,
         amplitude: float = 0.5,
         frequency: List[float] = [440],
-        framerate: int = 8000,
+        sample_rate: int = 8000,
         cycle_amplitude: Union[bool, int] = False,
     ):
         super().__init__()
         self.amplitude = amplitude
         self.frequency = frequency
-        self.framerate = framerate
+        self.sample_rate = sample_rate
         self.sample_length = sample_length
         self.n_samples = n_samples
 
         self.source = "gen_sine"
 
-        self.periods = np.array([framerate / freq for freq in frequency])
+        self.periods = np.array([sample_rate / freq for freq in frequency])
 
         # Do actual generation here
 

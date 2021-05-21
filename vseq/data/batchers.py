@@ -20,7 +20,9 @@ class Batcher:
         """
         raise NotImplementedError()
 
-    def sort(self, batch: List[Tuple[Any, Any]], sort_modality_idx: Optional[int] = None):
+    def sort(
+        self, batch: List[Tuple[Any, Any]], sort_modality_idx: Optional[int] = None
+    ):
         """Sort the order of examples within the batch optionally specifying which modality to sort if more than one.
 
         Args:
@@ -97,18 +99,24 @@ class SpectrogramBatcher(Batcher):
 
 
 class TextBatcher(Batcher):
-    def __init__(self, pad_value: int = 0) -> None:
+    def __init__(
+        self, pad_value: int = 0, min_sample_length: Optional[int] = None
+    ) -> None:
         self.pad_value = pad_value
+        self.min_sample_length = min_sample_length
 
     def collate(self, batch: List[torch.Tensor]):
         """Pad batch of int (encoded text) to maximum temporal length and return LongTensors"""
         sequence_lengths = [len(text) for text in batch]
 
         T = max(sequence_lengths)
+        if self.min_sample_length is not None:
+            T = max(T, self.min_sample_length)
 
-        collated_batch = []
-        for t, text in zip(sequence_lengths, batch):
-            collated_batch.append(text + [self.pad_value] * (T - t))
+        collated_batch = [
+            text + [self.pad_value] * (T - t)
+            for t, text in zip(sequence_lengths, batch)
+        ]
 
         return torch.LongTensor(collated_batch), torch.LongTensor(sequence_lengths)
 
