@@ -5,6 +5,7 @@ from vseq.evaluation.metrics import LossMetric
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.distributions as D
 
 from vseq.utils.operations import sequence_mask
@@ -52,7 +53,6 @@ class LSTMEncoder(BaseModel):
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
         # Define output distribution
-        seq_mask = sequence_mask(x_sl, dtype=float, device=h.device)
-        z = self.output(h) * seq_mask.unsqueeze(2)
-
+        seq_mask = sequence_mask(x_sl, dtype=torch.float32, device=h.device)
+        z = F.tanh(self.output(h)) * seq_mask.unsqueeze(2)
         return z

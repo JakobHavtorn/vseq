@@ -5,3 +5,6 @@ from vseq.models.wavenet.model import WaveNet
 from vseq.models.base_model import BaseModel
 from vseq.models.lstm_encoder import LSTMEncoder
 from vseq.models.bahdanau_attention_decoder import BahdanauAttentionDecoder
+from vseq.models.bahdanau_attention_onepass_decoder import BahdanauAttentionOnepassDecoder
+from vseq.models.multihead_attention_decoder import MultiheadAttentionDecoder
+from vseq.models.outer_product_reconstruct import OPReconstruct

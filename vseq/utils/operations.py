@@ -81,7 +81,12 @@ def log_sum_exp(tensor, axis=-1, dim=None, sum_op=torch.mean):
     return torch.log(sum_op(torch.exp(tensor - maximum), axis=axis, keepdim=False) + 1e-8) + maximum
 
 
-def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch.bool, device: torch.device = None):
+def sequence_mask(
+    seq_lens: Union[list, torch.Tensor],
+    max_len=None, dtype=torch.bool, 
+    device: torch.device = None,
+    invert=False
+):
     """
     Creates a binary sequence mask where all entries up to seq_lens are 1 and the remaining are 0.
 
@@ -102,6 +107,8 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch
     N = seq_lens.size(0)
     T = max_len or seq_lens.max()
     seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat((N, 1)) < seq_lens.unsqueeze(1)
+    if invert:
+        seq_mask = torch.logical_not(seq_mask)
     return seq_mask.to(dtype)
 
 
