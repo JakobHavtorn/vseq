@@ -134,6 +134,25 @@ class MuLawDecode(Transform):
         return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu
 
 
+# Mel
+# InverseMel
+# STFT
+# InverseSTFT (Griffin-Lim)
+
+class Binarize(Transform):
+    def __init__(self, resample: bool = False, threshold: float = None):
+        super().__init__()
+        assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
+        self.resample = resample
+        self.threshold = threshold
+
+    def forward(self, x):
+        if self.resample:
+            return torch.bernoulli(x)
+
+        return x > self.threshold
+
+
 class Quantize(Transform):
     def __init__(
         self,
@@ -169,20 +188,6 @@ class Quantize(Transform):
 
     def forward(self, x: torch.Tensor):
         return torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
-
-
-class Binarize(Transform):
-    def __init__(self, resample: bool = False, threshold: float = None):
-        super().__init__()
-        assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
-        self.resample = resample
-        self.threshold = threshold
-
-    def forward(self, x):
-        if self.resample:
-            return torch.bernoulli(x)
-
-        return x > self.threshold
 
 
 class Dequantize(Transform):

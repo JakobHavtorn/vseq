@@ -12,6 +12,15 @@ pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --ed
 nbstripout --install
 ```
 
+## Test
+
+To run testsm, execute
+
+```bash
+pytest -sv --cov --cov-report=term tests
+```
+
+
 ## Minimal experiment example
 ```python
 ```
