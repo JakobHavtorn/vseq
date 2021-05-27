@@ -5,11 +5,7 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-try:
-    from haste_pytorch import LayerNormLSTM
-except ModuleNotFoundError:
-    print("Module `haste_pytorch` not installed preventing use of LayerNormalized LSTM cells")
-
+from vseq.modules.custom_recurrent import LSTM as LSTMLayerNorm
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 from vseq.evaluation.metrics import LossMetric
 from vseq.utils.operations import sequence_mask
@@ -51,7 +47,7 @@ class LSTMLM(BaseModel):
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        rnn_layer = LayerNormLSTM if layer_norm else nn.LSTM
+        rnn_layer = LSTMLayerNorm if layer_norm else nn.LSTM
 
         self.lstm = rnn_layer(
             input_size=embedding_dim,

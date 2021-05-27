@@ -1,7 +1,6 @@
-# datasets
-# transformers
+datasets
+transformers
 gpustat
-haste_pytorch
 ipdb
 ipython
 jupyter
