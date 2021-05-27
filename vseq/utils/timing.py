@@ -1,4 +1,3 @@
-from vseq.modules.custom_recurrent import LSTMCellLayerNorm
 import warnings
 import timeit as timeit_module
 
@@ -33,7 +32,24 @@ def timeit(
     inner_duration: float = 0.2,
     repeats: int = 10
 ):
-    """Time the execution of `statement` using the `timeit` package similar to the IPython magic `%timeit`.
+    r"""Time the execution of `statement` using the `timeit` package similar to the IPython magic `%timeit`.
+
+    Example::
+
+        import random
+
+        def a():
+            return random.random() + random.random()
+
+        timeit(a)
+
+        >>> namespace(min=1.844983547925949e-07,
+                      max=2.3509945720434188e-07,
+                      mean=1.979972431436181e-07,
+                      median=1.9188937079161407e-07,
+                      std=1.4883481745944718e-08,
+                      number=1000000,
+                      repeats=10)
 
     Args:
         statement (Union[str, Callable]): Statement to `exec` or a callable.
