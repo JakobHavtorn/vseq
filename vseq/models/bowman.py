@@ -108,12 +108,13 @@ class Bowman(BaseModel):
         kl = kl_dwise.sum(2).squeeze()  # (B,)
         log_prob = log_prob_twise.sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
-        loss = -(log_prob - beta * kl).mean()  # (1,)
+        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        # loss = -(log_prob - beta * kl).mean()  # (1,)
         # loss = - log_prob.sum() / x_sl.sum() + beta * kl.mean()  # (1,)
         return loss, elbo, log_prob, kl
 
     def forward(
-        self, x, x_sl, word_dropout_rate: float = 0.75, beta: float = 1
+        self, x,  x_sl, word_dropout_rate: float = 0.75, beta: float = 1
     ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
