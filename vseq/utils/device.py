@@ -31,7 +31,7 @@ def get_gpu_memory_usage() -> pd.DataFrame:
     gpu_df["free"] = gpu_df["free"].map(lambda x: int(x.rstrip(" [MiB]")))
     gpu_df["used"] = gpu_df["used"].map(lambda x: int(x.rstrip(" [MiB]")))
 
-    print("GPU usage:\n{}".format(gpu_df))
+    print("GPU usage (MB):\n{}".format(gpu_df))
     return gpu_df
 
 
@@ -46,7 +46,7 @@ def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.d
     if require_unused:
         gpu_df = gpu_df[gpu_df.used < 10]
     
-    gpu_df = gpu_df.sort_values(by="free")
+    gpu_df = gpu_df.sort_values(by="free", ascending=False)
 
     global_device_ids = gpu_df.iloc[:n_gpus].index.to_list()
     local_device_idx = np.argsort(global_device_ids)
@@ -55,6 +55,7 @@ def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.d
     if len(devices) < n_gpus:
         raise RuntimeError(f"Found {len(devices)} (free) GPUs but required {n_gpus}")
 
+    print(f"Selected global device(s): {global_device_ids}")
     return devices[0] if len(devices) == 1 else devices
 
 
