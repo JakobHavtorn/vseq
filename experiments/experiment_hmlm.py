@@ -137,9 +137,9 @@ model = vseq.models.HMLM(
 wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
-# x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
+x, x_sl = next(iter(train_loader))[0]
+x = x.to(device)
+model.summary(input_data=x, x_sl=x_sl)
 
 optimizer = args.optimizer_json.pop("optimizer")
 optimizer = getattr(torch.optim, optimizer)

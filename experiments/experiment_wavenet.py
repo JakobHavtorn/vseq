@@ -107,14 +107,14 @@ model = vseq.models.WaveNet(
 )
 model = model.to(device)
 print(model)
+(x, x_sl), metadata = next(iter(train_loader))
+model.summary(input_data=x, x_sl=x_sl)
+x = x.to(device)
 rich.print(model.receptive_field)
 wandb.watch(model, log="all", log_freq=len(train_loader))
+
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-
-# (x, x_sl), metadata = next(iter(train_loader))
-# x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
 
 
 tracker = Tracker()

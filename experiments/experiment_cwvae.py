@@ -130,14 +130,13 @@ model = model.to(device)
 print(model)
 wandb.watch(model, log='all', log_freq=len(train_loader))
 
-optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
-
+model.summary(input_data=x, x_sl=x_sl)
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
+
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 tracker = Tracker()
 

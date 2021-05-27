@@ -2,12 +2,13 @@ import inspect
 import logging
 import os
 
+from typing import Any, Optional, List, Iterable, Union
+
 import torch
 import torch.nn as nn
+import torchinfo
 
 import vseq.models
-
-from vseq.utils.summary import summary
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -119,21 +120,32 @@ class BaseModel(nn.Module):
         return s
 
     def summary(
-        self,
-        input_example=None,
-        input_size=None,
-        batch_size=1,
-        input_dtype=torch.FloatTensor,
-        device=None,
-        **forward_kwargs,
+        self: nn.Module,
+        input_size: Optional[Union[Iterable[int]]] = None,
+        input_data: Optional[Iterable[torch.Tensor]] = None,
+        batch_dim: Optional[int] = None,
+        col_names: Optional[Iterable[str]] = None,
+        col_width: int = 40,
+        depth: int = 5,
+        device: Optional[torch.device] = None,
+        dtypes: Optional[List[torch.dtype]] = None,
+        row_settings: Optional[Iterable[str]] = None,
+        verbose: int = 1,
+        **kwargs: Any,
+
     ):
         """Return a summary of the model"""
-        return summary(
-            self,
-            input_example=input_example,
+        return torchinfo.summary(
+            model=self,
             input_size=input_size,
-            batch_size=batch_size,
-            input_dtype=input_dtype,
+            input_data=input_data,
+            batch_dim=batch_dim,
+            col_names=col_names,
+            col_width=col_width,
+            depth=depth,
             device=device,
-            **forward_kwargs,
+            dtypes=dtypes,
+            row_settings=row_settings,
+            verbose=verbose,
+            **kwargs,
         )

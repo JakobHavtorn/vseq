@@ -132,12 +132,11 @@ model = model.to(device)
 print(model)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
+model.summary(input_data=x, x_sl=x_sl)
 
 optimizer = args.optimizer_json.pop('optimizer')
 optimizer = getattr(torch.optim, optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_json)
-
 
 tracker = Tracker()
 
