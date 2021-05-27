@@ -4,7 +4,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from vseq.modules.custom_recurrent import LSTMCell, LSTMCellLayerNorm, LSTMLayerL2R, LSTMLayerR2L, LSTMLayerBidirectional, LSTMStack1, LSTMStack2, LSTM
+from vseq.modules.custom_recurrent import LSTMCell, LSTMLayerL2R, LSTM
 from vseq.utils.timing import timeit, report_timings
 from vseq.utils.device import get_free_gpus
 
@@ -135,7 +135,7 @@ def test_script_stacked_lnlstm(seq_len, batch, input_size, hidden_size, num_laye
 def test_script_lstm_layer_norm_script_layer(seq_len, batch, input_size, hidden_size, num_layers):
     inp = torch.randn(seq_len, batch, input_size)
     states = LSTMState(torch.randn(num_layers, batch, hidden_size), torch.randn(num_layers, batch, hidden_size))
-    lstm_script = LSTM(input_size, hidden_size, layer_norm=True)
+    lstm_script = LSTM(input_size, hidden_size, num_layers=num_layers, layer_norm=True)
 
    # just a smoke test
     out, out_state = lstm_script(inp, states)
