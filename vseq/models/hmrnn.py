@@ -47,7 +47,7 @@ class HMLM(BaseModel):
         self.hmlstm = HMLSTM(input_size=embedding_dim, sizes=self.sizes, num_layers=num_layers, layer_norm=layer_norm)
         self.dropout_h = nn.Dropout(p=self.dropout_rate_h)
 
-        self.weight = nn.Linear(sum(self.sizes), self.num_layers)
+        self.weight = nn.Sequential(nn.Linear(sum(self.sizes), self.num_layers), nn.Sigmoid())
 
         self.embedding_out = nn.Linear(sum(self.sizes), sum(self.sizes))
         self.relu = nn.ReLU()
@@ -86,14 +86,14 @@ class HMLM(BaseModel):
         y = x[:, 1:].clone().detach()
         x, x_sl = x[:, :-1], x_sl - 1
 
-        emb = self.embedding_in(x[:, :-1])  # B * T * embedding_dim
+        emb = self.embedding_in(x)  # B * T * embedding_dim
         emb = self.dropout_e(emb)
         h, c, z, (h_out, c_out, z_out) = self.hmlstm(emb, h_init, c_init, z_init, **kwargs)  # B * T * hidden_size
 
         h = torch.cat(h, dim=2)  # B * T * sum(hidden_sizes)
         h = self.dropout_h(h)
 
-        g = torch.sigmoid(self.weight(h))
+        g = self.weight(h)
 
         g = [g[..., i : i + 1].expand(*g.shape[:2], self.sizes[i]) for i in range(self.num_layers)]  # Expand to size h
         g = torch.cat(g, dim=2)
