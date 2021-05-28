@@ -52,7 +52,7 @@ class LSTMLM(BaseModel):
                 input_size=embedding_dim,
                 hidden_size=hidden_size,
                 batch_first=False,
-                jit_compile=True,
+                jit_compile=False,
                 layer_norm=layer_norm,
                 **lstm_kwargs,
             )
