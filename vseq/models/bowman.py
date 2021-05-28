@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-
 from vseq.modules import HighwayStackDense
 from vseq.modules.activations import InverseSoftplus
 from vseq.utils.operations import sequence_mask
@@ -108,7 +107,7 @@ class Bowman(BaseModel):
         kl = kl_dwise.sum(2).squeeze()  # (B,)
         log_prob = log_prob_twise.sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
-        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        loss = -(log_prob - beta * kl).sum() / (x_sl - 1).sum()  # (1,)
         # loss = -(log_prob - beta * kl).mean()  # (1,)
         # loss = - log_prob.sum() / x_sl.sum() + beta * kl.mean()  # (1,)
         return loss, elbo, log_prob, kl
@@ -119,7 +118,6 @@ class Bowman(BaseModel):
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
-        # kl_dwise, _, _ = kl_divergence_mc(q_z, p_z, z)
         kl_dwise = torch.distributions.kl_divergence(q_z, p_z)
 
         log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
@@ -149,7 +147,7 @@ class Bowman(BaseModel):
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
         # Encode input sequence
-        x, x_sl = x[:, 1:], x_sl - 1  # Remove start token
+        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
         e = self.embedding(x)
         e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_t, c_t) = self.lstm_encode(e)
@@ -173,22 +171,25 @@ class Bowman(BaseModel):
 
         # Prepare inputs (x) and targets (y)
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
+        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+
         if self.training and word_dropout_rate > 0:
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
             mask[:, 0] = False  # We never mask the start token - or do we?
             x = x.clone()  # We can't modify x in-place
             x[mask] = self.mask_token_idx
+
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
+        e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_n, c_n) = self.lstm_decode(e, (h_0, c_0))
 
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
-        seq_mask = sequence_mask(x_sl - 1, dtype=float, device=p_logits.device)
+        seq_mask = sequence_mask(x_sl, dtype=float, device=p_logits.device)
         p_x = D.Categorical(logits=p_logits)
         log_prob = p_x.log_prob(y) * seq_mask
         # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB

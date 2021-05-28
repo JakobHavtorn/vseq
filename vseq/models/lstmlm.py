@@ -56,8 +56,15 @@ class LSTMLM(BaseModel):
                 layer_norm=layer_norm,
                 **lstm_kwargs,
             )
+            # Simple cell scripted  20.30Hz
+            # Advanced scripted cell (ScriptModule) 15.57Hz epoch 3
+            # Advanced cell with outer jit.script() 15.58Hz epoch 3
+            # Advanced cell (not scripted) 17.19Hx
         else:
             self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_size, batch_first=False, **lstm_kwargs)
+            # native: 42.62Hz
+            # own not compiled: 20.53Hz
+            # own jit compiled 21.83Hz
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
@@ -86,6 +93,7 @@ class LSTMLM(BaseModel):
         """
         # Prepare inputs (x) and targets (y)
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
+        x = x[:, :-1]  # Remove end token
 
         if self.training and word_dropout_rate > 0:
             mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
@@ -96,7 +104,7 @@ class LSTMLM(BaseModel):
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        h, _ = self.lstm(e[:, :-1])
+        h, _ = self.lstm(e)
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
