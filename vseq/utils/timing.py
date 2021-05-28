@@ -30,7 +30,8 @@ def timeit(
     timer=timeit_module.default_timer,
     globals: dict = None,
     inner_duration: float = 0.2,
-    repeats: int = 10
+    repeats: int = 10,
+    number: Optional[int] = None
 ):
     r"""Time the execution of `statement` using the `timeit` package similar to the IPython magic `%timeit`.
 
@@ -58,18 +59,20 @@ def timeit(
         globals (dict, optional): Namespace for timing. Defaults to None.
         inner_duration (float, optional): Minimum number of seconds to use iterating over `statement`. Defaults to 0.2.
         repeats (int, optional): Number of times to repeat the inner loop.
+        number (int, optional): Overrules the `inner_duration` argument and directly sets the `number` of inner iters.
 
     Returns:
         SimpleNamespace: Namespace with min, max, mean, median, std, number and repeats attributes
     """
     timer = timeit_module.Timer(statement, setup=setup, timer=timer, globals=globals)
 
-    # Autorange twice to overcome overhead
-    number, time_taken = timer.autorange()
-    number, time_taken = timer.autorange()
+    if number is None:
+        # Autorange twice to overcome overhead
+        number, time_taken = timer.autorange()
+        number, time_taken = timer.autorange()
 
-    multiplier = inner_duration // time_taken + 1
-    number = int(multiplier * number)
+        multiplier = inner_duration // time_taken + 1
+        number = int(multiplier * number)
 
     # Time
     timings = timer.repeat(repeat=repeats, number=number)
