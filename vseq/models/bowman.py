@@ -1,5 +1,7 @@
 from types import SimpleNamespace
-from typing import Tuple, List
+from typing import Tuple, List, Union
+
+from torchtyping.tensor_type import TensorType
 from vseq.evaluation.metrics import KLMetric, LossMetric, PerplexityMetric
 
 import math
@@ -8,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-from vseq.modules import HighwayStackDense
+from vseq.modules import HighwayStackDense, WordDropout
 from vseq.modules.activations import InverseSoftplus
 from vseq.utils.operations import sequence_mask
 from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
@@ -25,8 +27,9 @@ class Bowman(BaseModel):
         latent_dim: int,
         n_highway_blocks: int,
         delimiter_token_idx: int,
+        word_dropout_rate: float = 0.0,
         random_prior_variance: bool = False,
-        trainable_prior: bool = False
+        trainable_prior: bool = False,
     ):
         super().__init__()
 
@@ -38,6 +41,7 @@ class Bowman(BaseModel):
         self.delimiter_token_idx = delimiter_token_idx
         self.random_prior_variance = random_prior_variance
         self.trainable_prior = trainable_prior
+        self.word_dropout_rate = word_dropout_rate
 
         self.std_activation = nn.Softplus(beta=np.log(2))
         self.std_activation_inverse = InverseSoftplus(beta=np.log(2))
@@ -64,7 +68,7 @@ class Bowman(BaseModel):
             self.z_to_h = nn.Sequential(
                 nn.Linear(latent_dim, hidden_size),
                 nn.Tanh(),
-                HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks)
+                HighwayStackDense(n_features=hidden_size, n_blocks=n_highway_blocks),
             )
         else:
             self.h_to_z = nn.Linear(hidden_size, 2 * latent_dim)
@@ -93,7 +97,8 @@ class Bowman(BaseModel):
         else:
             self.register_buffer("prior_logits", prior_logits)
 
-        # TODO WordDropout as module
+        self.word_dropout = WordDropout(self.word_dropout_rate, mask_value=self.mask_token_idx)
+
         # TODO Likelihood as module
         # TODO Stochastic layer as module (incl. reparameterization (and KL?))
 
@@ -113,14 +118,14 @@ class Bowman(BaseModel):
         return loss, elbo, log_prob, kl
 
     def forward(
-        self, x,  x_sl, word_dropout_rate: float = 0.75, beta: float = 1
+        self, x: TensorType["B", "T", int], x_sl: TensorType["B", int], beta: float = 1,
     ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Perform inference and generative passes on input x of shape (B, T)"""
         z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
         kl_dwise = torch.distributions.kl_divergence(q_z, p_z)
 
-        log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
+        log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl)
 
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl, beta=beta)
 
@@ -130,7 +135,7 @@ class Bowman(BaseModel):
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl - 1),
-            PerplexityMetric(elbo, reduce_by=x_sl - 1)
+            PerplexityMetric(elbo, reduce_by=x_sl - 1),
         ]
 
         outputs = SimpleNamespace(
@@ -147,7 +152,7 @@ class Bowman(BaseModel):
 
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
         # Encode input sequence
-        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+        # x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
         e = self.embedding(x)
         e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_t, c_t) = self.lstm_encode(e)
@@ -161,7 +166,7 @@ class Bowman(BaseModel):
         z = q_z.rsample()
         return z, q_z  # (B, T=1, D)
 
-    def reconstruct(self, z: torch.Tensor, x: torch.Tensor, x_sl: torch.Tensor, word_dropout_rate: float = 0.75):
+    def reconstruct(self, z: torch.Tensor, x: torch.Tensor, x_sl: torch.Tensor):
         """
         Computes log-likelihood for x under p(x|z).
         """
@@ -173,18 +178,13 @@ class Bowman(BaseModel):
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
 
-        if self.training and word_dropout_rate > 0:
-            mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
-            mask[:, 0] = False  # We never mask the start token - or do we?
-            x = x.clone()  # We can't modify x in-place
-            x[mask] = self.mask_token_idx
-
+        # Dropout and embed
+        x = self.word_dropout(x)
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
         e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)
         h, (h_n, c_n) = self.lstm_decode(e, (h_0, c_0))
-
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
         # Define output distribution
@@ -239,16 +239,3 @@ class Bowman(BaseModel):
         log_prob = torch.cat(log_prob).T * seq_mask.to(float)
 
         return (x, x_sl), log_prob
-
-
-class WordDropout(nn.Module):
-    def __init__(self, unknown_idx, dropout_rate=0.75):
-        super().__init__()
-        self.dropout_rate = dropout_rate
-        self.keep_rate = 1 - self.dropout_rate
-
-    def forward(self, x: torch.Tensor):
-        """Dropout entire timesteps in x of shape (T, B, 1)"""
-        mask = torch.bernoulli(torch.ones(x.shape[0]) * self.keep_rate)
-        x *= mask
-        return x
