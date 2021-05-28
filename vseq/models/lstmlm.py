@@ -23,6 +23,7 @@ class LSTMLM(BaseModel):
         hidden_size: int = 373,
         num_layers: int = 1,
         layer_norm: bool = False,
+        word_dropout_rate: float = 0.0,
         **lstm_kwargs,
     ):
         """Simple LSTM-based Language Model with learnable input token embeddings and multiple LSTM layers.
@@ -42,6 +43,7 @@ class LSTMLM(BaseModel):
         self.num_layers = num_layers
         self.delimiter_token_idx = delimiter_token_idx
         self.layer_norm = layer_norm
+        self.word_dropout_rate = word_dropout_rate
         self.lstm_kwargs = lstm_kwargs
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.

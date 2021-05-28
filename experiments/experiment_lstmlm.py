@@ -39,7 +39,6 @@ parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropo
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
-parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -126,6 +125,7 @@ model = vseq.models.LSTMLM(
     hidden_size=args.hidden_size,
     layer_norm=args.layer_norm,
     dropout=args.dropout,
+    word_dropout_rate=args.word_dropout,
     delimiter_token_idx=delimiter_token_idx,
 )
 
@@ -148,7 +148,7 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout)
+        loss, metrics, outputs = model(x, x_sl)
 
         optimizer.zero_grad()
         loss.backward()
