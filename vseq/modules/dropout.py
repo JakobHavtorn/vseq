@@ -16,7 +16,6 @@ class WordDropout(nn.Module):
     def forward(self, x: TensorType["B", "T", -1]):
         """Dropout entire timesteps in x of shape (B, T, *D)"""
         if self.training and self.dropout_rate > 0:
-            # import IPython; IPython.embed()
             mask = torch.bernoulli(torch.full((x.size(0), x.size(1)), self.dropout_rate, device=x.device)).to(bool)
             mask[:, 0] = self.mask_first_timestep
             x = x.clone()  # We can't modify x in-place
