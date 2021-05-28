@@ -2,15 +2,35 @@
 
 ## Install 
 
+
+Install primary environment relying on pre-innstalled system CUDA.
+
 ```bash
-# Reinstall
 conda deactivate
 conda env remove -n vseq -y
 conda create -y -n vseq python==3.9
 conda activate vseq
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
+```
+
+Install primary environment using Conda to get CUDA.
+
+```
+conda deactivate
+conda env remove -n vseq -y
+conda create -y -n vseq python==3.8
+conda activate vseq
+conda install -y pytorch torchvision torchaudio torchtext cudatoolkit=11.1 -c pytorch -c nvidia
+pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
+```
+
+Install extra requirements
+
+```bash
+pip install -r requirements-extra.txt
 nbstripout --install
 ```
+
 
 ## Test
 
