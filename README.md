@@ -37,6 +37,23 @@ This repo uses [Python type-hints](https://docs.python.org/3/library/typing.html
 It also extends this with the [`torchtyping`](https://github.com/patrick-kidger/torchtyping) package which allows defining the shape, data type, layout and names of axis of `torch.Tensors` by using a new `TensorType[...]` type.
 
 
+## wandb
+
+We track experiments using wandb.
+
+### Enable/Disable
+
+- `wandb online`, `WANDB_MODE=online` or `wandb.init(mode="online")` - runs in online mode, the default
+- `wandb offline`, `WANDB_MODE=offline` or `wandb.init(mode="offline")` - runs in offline mode, writes all data to disk for later syncing to a server
+- `wandb disabled`, `WANDB_MODE=disabled` or `wandb.init(mode="disabled")` - makes all calls to wandb api's noop's, while maintaining core functionality such as wandb.config and wandb.summary in case you have logic that reads from these dicts.
+- `wandb enabled`, `WANDB_MODE=` or `wandb.init(mode="enabled")`- sets the mode to back online
+
+### Clean
+
+In the `wandb` directory `/some/path/wandb` run:
+- `wandb sync --clean` to clean out all previously synced runs.
+- `wandb sync --clean-old-hours INT` to clean out all runs older than `INT` hours.
+
 ### wandb sweeps
 
 See `experiments/sweep_test.yaml`
@@ -44,14 +61,6 @@ See `experiments/sweep_test.yaml`
 > `wandb sweep experiments/sweeps/sweep_test.yaml`
 
 > `wandb agent <sweep-id>`
-
-## Enable/Disable
-
-- `wandb online`, `WANDB_MODE=online` or `wandb.init(mode="online")` - runs in online mode, the default
-- `wandb offline`, `WANDB_MODE=offline` or `wandb.init(mode="offline")` - runs in offline mode, writes all data to disk for later syncing to a server
-- `wandb disabled`, `WANDB_MODE=disabled` or `wandb.init(mode="disabled")` - makes all calls to wandb api's noop's, while maintaining core functionality such as wandb.config and wandb.summary in case you have logic that reads from these dicts.
-- `wandb enabled`, `WANDB_MODE=` or `wandb.init(mode="enabled")`- sets the mode to back online
-
 
 ## Implementation suggestions
 - [ ] Method or class to define and build `Dataloader`s with proper defaults e.g. `pin_memory == True`.

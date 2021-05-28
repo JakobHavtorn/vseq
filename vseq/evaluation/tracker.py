@@ -1,3 +1,5 @@
+import re
+
 from datetime import datetime
 from blessed import Terminal
 from collections import defaultdict
@@ -13,12 +15,24 @@ from torch.utils.data import DataLoader
 from .metrics import Metric
 
 
+FORMATTING_PATTERN = r"\[([^\]]+)\]"
+FORMATTING_REGEX = re.compile(FORMATTING_PATTERN)
+
+
+def length_of_formatting(string: str):
+    return sum(len(s) + 2 for s in FORMATTING_REGEX.findall(string))
+
+
+def length_without_formatting(string: str):
+    return len(string) - length_of_formatting(string)
+
+
 def source_string(source):
     return f"{source[:18]}.." if len(source) > 20 else f"{source}"
 
 
 def rank_string(rank):
-    return f"[grey30]rank {rank:2d} [/grey30]"
+    return f"[grey30]rank {rank:2d}[/grey30]"
 
 
 class Tracker:
@@ -144,7 +158,7 @@ class Tracker:
 
         if self.is_ddp and self.rank == 0:
             for rank in reversed(range(self.world_size)):
-                rich.print(rank_string(rank) + source_string(self.source) + " " * self.last_log_line_len, flush=True)
+                rich.print(rank_string(rank) + " " + source_string(self.source) + " " * self.last_log_line_len, flush=True)
             rich.print(f"Running DDP with world_size={self.world_size}", flush=True, end="\r")
 
         if self.is_ddp:
@@ -215,31 +229,30 @@ class Tracker:
 
         ps = f"{steps_frac} [bright_white not bold]({duration}, {steps_per_s})[/]"  # +26 format
 
-        # metrics string
-        sep = "[magenta]|[/]"  # +19 format pr metric
-        ms = "".join([f"{sep} {metric.name} = {metric.str_value}" for metric in self.metrics[source].values()])
-
         # source string
         ss = source_string(source)
 
+        # metrics string
+        sep = " [magenta]|[/]"  # +19 format pr metric
+        ms = "".join([f"{sep} {metric.name} = {metric.str_value}" for metric in self.metrics[source].values()]) + sep
+
         # full log string
         sp = f"{ss} - {ps}"
-        s = f"{sp:<{self.min_indent + 26}s}{ms}"
+        s = f"{sp:<{self.min_indent + length_of_formatting(sp)}s}{ms}"
 
         if self.is_ddp:
-            end = "\r" if self.rank == 0 else "\n"
-            s = rank_string(self.rank) + s
-
             # TODO Instead of rich, print with regular print and add colors manually.
             #      The current implementation has a race condition on placing the cursor
             #      and printing the line with rich. This is merged to one print call without rich.
+            # print(self.terminal.move_y(self.terminal.height - self.rank - 1) + s, end='\r')#, flush=True)
+            end = "\r" if self.rank == 0 else "\n"
+            s = rank_string(self.rank) + " " + s
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
                 rich.print(s, end=end, flush=True)
-            # print(self.terminal.move_y(self.terminal.height - self.rank - 1) + s, end='\r')#, flush=True)
         else:
             rich.print(s, end=end, flush=True)
 
-        self.last_log_line_len = len(s.strip()) - 26 - len(self.metrics[source]) * 19
+        self.last_log_line_len = length_without_formatting(s)
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""

@@ -1,5 +1,4 @@
 import argparse
-import logging
 import json
 
 import torch
@@ -10,7 +9,6 @@ from torch.utils.data import DataLoader
 
 import vseq
 import vseq.data
-from vseq.data import tokenizers
 import vseq.models
 import vseq.utils
 import vseq.utils.device
