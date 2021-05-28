@@ -129,6 +129,7 @@ model = vseq.models.Bowman(
     latent_dim=args.latent_dim,
     n_highway_blocks=args.n_highway_blocks,
     delimiter_token_idx=delimiter_token_idx,
+    word_dropout_rate=args.word_dropout,
     random_prior_variance=args.random_prior_variance,
     trainable_prior=args.trainable_prior,
 )
@@ -136,9 +137,9 @@ model = model.to(device)
 print(model)
 wandb.watch(model, log='all', log_freq=len(train_loader))
 
-x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-model.summary(input_data=x, x_sl=x_sl)
+# x, x_sl = next(iter(train_loader))[0]
+# x = x.to(device)
+# model.summary(input_data=x, x_sl=x_sl)
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
 
@@ -153,7 +154,7 @@ for epoch in tracker.epochs(args.epochs):
     for b, ((x, x_sl), metadata) in enumerate(tracker(train_loader)):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=args.word_dropout)
+        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
 
         optimizer.zero_grad()
         loss.backward()
@@ -167,14 +168,14 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
 
             tracker.update(metrics)
 
         for (x, x_sl), metadata in tracker(test_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
 
             tracker.update(metrics)
 

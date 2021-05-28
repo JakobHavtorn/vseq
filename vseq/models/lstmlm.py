@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
+from vseq.modules import WordDropout
 from vseq.modules.custom_recurrent import LSTM as LSTMLayerNorm
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 from vseq.evaluation.metrics import LossMetric
@@ -49,61 +50,48 @@ class LSTMLM(BaseModel):
 
         rnn_layer = LSTMLayerNorm if layer_norm else nn.LSTM
 
-        self.lstm = rnn_layer(
-            input_size=embedding_dim,
-            hidden_size=hidden_size,
-            batch_first=False,
-            **lstm_kwargs
-        )
+        self.lstm = rnn_layer(input_size=embedding_dim, hidden_size=hidden_size, batch_first=False, **lstm_kwargs)
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
-        # TODO WordDropout as module
+        self.word_dropout = WordDropout(self.word_dropout_rate, mask_value=self.mask_token_idx)
 
-    def forward(
-        self, x, x_sl, word_dropout_rate: float = 0.75, loss_reduction: str = 'nats_per_dim') -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
+    def forward(self, x, x_sl) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Autoregressively predict next step of input x of shape (B, T)"""
 
         log_prob_twise, p_x = self.reconstruct(x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
         log_prob = log_prob_twise.sum(1)  # (B,)
-        loss = - log_prob.sum() / (x_sl - 1).sum()
+        loss = -log_prob.sum() / (x_sl - 1).sum()
 
         metrics = [
             LossMetric(loss, weight_by=log_prob.numel()),
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl - 1),
-            PerplexityMetric(log_prob, reduce_by=x_sl - 1)
+            PerplexityMetric(log_prob, reduce_by=x_sl - 1),
         ]
 
-        outputs = SimpleNamespace(
-            loss=loss,
-            ll=log_prob,
-            p_x=p_x  # NOTE Save 700 MB by not returning p_x
-        )
+        outputs = SimpleNamespace(loss=loss, ll=log_prob, p_x=p_x)  # NOTE Save 700 MB by not returning p_x
         return loss, metrics, outputs
 
-    def reconstruct(self, x: torch.Tensor, x_sl: torch.Tensor, word_dropout_rate: float = 0.75):
+    def reconstruct(self, x: torch.Tensor, x_sl: torch.Tensor):
         """
         Computes log-likelihood for x.
         """
-        # Prepare inputs (x) and targets (y)
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
-        if self.training and word_dropout_rate > 0:
-            mask = torch.bernoulli(torch.full(x.shape, word_dropout_rate)).to(bool)
-            mask[:, 0] = False  # We never mask the start token - or do we?
-            x = x.clone()  # We can't modify x in-place
-            x[mask] = self.mask_token_idx
+        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+
+        x = self.word_dropout(x)
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl - 1, batch_first=True)  # x_sl - 1 --> remove end token
+        # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)  # x_sl --> remove end token
         # h, _ = self.lstm(e)
         # h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
-        h, _ = self.lstm(e[:, :-1])
+        h, _ = self.lstm(e)
 
         # Define output distribution
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
-        seq_mask = sequence_mask(x_sl - 1, dtype=float, device=p_logits.device)
+        seq_mask = sequence_mask(x_sl, dtype=float, device=p_logits.device)
         p_x = D.Categorical(logits=p_logits)
         log_prob = p_x.log_prob(y) * seq_mask
         # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB
