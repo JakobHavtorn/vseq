@@ -83,17 +83,14 @@ modalities = [(loader, penn_treebank_transform, batcher)]
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 
 train_loader = DataLoader(
