@@ -23,14 +23,13 @@ inference, prior, and generating models."""
 
 
 class VRNN(nn.Module):
-    def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int, num_layers: int = 1, bias: bool = True):
+    def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int, bias: bool = True):
         super(VRNN, self).__init__()
 
         self.x_dim = x_dim
         self.h_dim = h_dim
         self.z_dim = z_dim
         self.o_dim = o_dim
-        self.num_layers = num_layers
 
         # feature-extracting transformations
         self.phi_x = nn.Sequential(nn.Linear(x_dim, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim), nn.ReLU())
@@ -54,7 +53,7 @@ class VRNN(nn.Module):
         # self.dec_mean = nn.Sequential(nn.Linear(h_dim, x_dim), nn.Sigmoid())
 
         # recurrence
-        self.rnn = nn.GRU(2 * h_dim, h_dim, num_layers=num_layers, bias=bias)
+        self.gru_cell = nn.GRUCell(2 * h_dim, h_dim, bias=bias)
 
     def forward(self, x):
 
@@ -66,16 +65,16 @@ class VRNN(nn.Module):
         # x features
         phi_x = self.phi_x(x)
 
-        h = torch.zeros(self.num_layers, x.size(1), self.h_dim, device=x.device)
+        h = torch.zeros(x.size(1), self.h_dim, device=x.device)
         for t in range(x.size(0)):
 
             # prior
-            prior_t = self.prior(h[-1])
+            prior_t = self.prior(h)
             prior_mean_t = self.prior_mean(prior_t)
             prior_std_t = self.prior_std(prior_t)
 
             # encoder
-            enc_t = self.enc(torch.cat([phi_x[t], h[-1]], 1))
+            enc_t = self.enc(torch.cat([phi_x[t], h], 1))
             enc_mean_t = self.enc_mean(enc_t)
             enc_std_t = self.enc_std(enc_t)
 
@@ -86,13 +85,15 @@ class VRNN(nn.Module):
             phi_z_t = self.phi_z(z_t)
 
             # decoder
-            dec_t = self.dec(torch.cat([phi_z_t, h[-1]], 1))
+            dec_t = self.dec(torch.cat([phi_z_t, h], 1))
             dec_logits_t = self.dec_logits(dec_t)
             # dec_mean_t = self.dec_mean(dec_t)
             # dec_std_t = self.dec_std(dec_t)
 
-            # recurrence
-            _, h = self.rnn(torch.cat([phi_x[t], phi_z_t], 1).unsqueeze(0), h)
+            # gru cell
+            # input of shape (batch, input_size)
+            # hidden of shape (batch, hidden_size)
+            h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)
 
             # computing losses
             kld_t = self._kld_gauss(enc_mean_t, enc_std_t, prior_mean_t, prior_std_t)
@@ -116,11 +117,11 @@ class VRNN(nn.Module):
 
         sample = torch.zeros(t_max, self.x_dim)
 
-        h = torch.zeros(self.num_layers, n_samples, self.h_dim)
+        h = torch.zeros(n_samples, self.h_dim)
         for t in range(t_max):
 
             # prior
-            prior_t = self.prior(h[-1])
+            prior_t = self.prior(h)
             prior_mean_t = self.prior_mean(prior_t)
             prior_std_t = self.prior_std(prior_t)
 
@@ -129,15 +130,15 @@ class VRNN(nn.Module):
             phi_z_t = self.phi_z(z_t)
 
             # decoder
-            dec_t = self.dec(torch.cat([phi_z_t, h[-1]], 1))
+            dec_t = self.dec(torch.cat([phi_z_t, h], 1))
             dec_logits = self.dec_logits(dec_t)
             p_x_z = torch.distributions.Categorical(dec_logits)
             dec_sample_t = p_x_z.logits.argmax(dim=-1) if use_mode else p_x_z.sample()
 
             phi_x_t = self.phi_x(dec_sample_t)
 
-            # recurrence
-            _, h = self.rnn(torch.cat([phi_x_t, phi_z_t], 1).unsqueeze(0), h)
+            # gru cell
+            _, h = self.gru_cell(torch.cat([phi_x_t, phi_z_t], 1), h)
 
             sample[t] = dec_sample_t
 
@@ -163,7 +164,6 @@ class VRNNLM(BaseModel):
         embedding_dim: int = 300,
         hidden_size: int = 256,
         latent_size: int = 64,
-        num_layers: int = 1,
     ):
         super().__init__()
         self.num_embeddings = num_embeddings
@@ -171,7 +171,6 @@ class VRNNLM(BaseModel):
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
         self.latent_size = latent_size
-        self.num_layers = num_layers
 
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
@@ -181,8 +180,6 @@ class VRNNLM(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=num_embeddings,
-            num_layers=num_layers,
-            bias=False,
         )
 
     def compute_elbo(
