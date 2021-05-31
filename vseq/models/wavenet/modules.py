@@ -71,18 +71,18 @@ class ResidualBlock(torch.nn.Module):
 
 
 class ResidualStack(torch.nn.Module):
-    def __init__(self, layer_size, stack_size, res_channels):
+    def __init__(self, n_layers, n_stacks, res_channels):
         """Stack residual blocks by layer and stack size
 
         Args:
-            layer_size (int): Number of stacked residual blocks (k). Dilations chosen as 2, 4, 8, 16, 32, 64...
-            stack_size (int): Number of stacks of residual blocks with skip connections to the output.
+            n_layers (int): Number of stacked residual blocks (k). Dilations chosen as 2, 4, 8, 16, 32, 64...
+            n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
             res_channels (int): Number of channels in the residual connections.
         """
         super().__init__()
 
-        self.layer_size = layer_size
-        self.stack_size = stack_size
+        self.n_layers = n_layers
+        self.n_stacks = n_stacks
 
         self.dilations = self.build_dilations()
 
@@ -97,9 +97,9 @@ class ResidualStack(torch.nn.Module):
         """Return a list of dilations {2, 4, 8, 16, ...} with a dilation for each of the residual blocks"""
         # 5 = stack[layer1, layer2, layer3, layer4, layer5]
         dilations = []
-        for s in range(0, self.stack_size):
+        for s in range(0, self.n_stacks):
             # 10 = layer[dilation=1, dilation=2, 4, 8, 16, 32, 64, 128, 256, 512]
-            for l in range(0, self.layer_size):
+            for l in range(0, self.n_layers):
                 dilations.append(2 ** l)
 
         return dilations

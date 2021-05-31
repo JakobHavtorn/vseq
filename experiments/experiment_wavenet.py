@@ -26,8 +26,8 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=4, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--layer_size", default=10, type=int, help="number of layers per stack")
-parser.add_argument("--stack_size", default=4, type=int, help="number of stacks")
+parser.add_argument("--n_layers", default=10, type=int, help="number of layers per stack")
+parser.add_argument("--n_stacks", default=4, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
@@ -99,8 +99,8 @@ val_loader = DataLoader(
 )
 
 model = vseq.models.WaveNet(
-    layer_size=args.layer_size,
-    stack_size=args.stack_size,
+    n_layers=args.n_layers,
+    n_stacks=args.n_stacks,
     in_channels=args.in_channels,
     res_channels=args.res_channels,
     out_classes=256,
@@ -149,7 +149,7 @@ for epoch in tracker.epochs(args.epochs):
         x = x.unsqueeze(-1).to(torch.uint8).cpu()
         for i in range(len(x)):
             torchaudio.save(
-                f"./wavenet_samples/model-{args.layer_size}-{args.stack_size}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
+                f"./wavenet_samples/model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
                 x[i],
                 sample_rate=16000,
                 channels_first=False,

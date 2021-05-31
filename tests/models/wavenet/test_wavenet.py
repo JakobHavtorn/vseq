@@ -10,8 +10,8 @@ import pytest
 from vseq.models.wavenet.model import WaveNet, InputSizeError
 
 
-LAYER_SIZE = 5  # 10 in paper
-STACK_SIZE = 2  # 5 in paper
+N_LAYERS = 5  # 10 in paper
+N_STACKS = 2  # 5 in paper
 IN_CHANNELS = 1  # 256 in paper. quantized and one-hot input.
 RES_CHANNELS = 512  # 512 in paper
 OUT_CLASSES = 256
@@ -29,8 +29,8 @@ def generate_dummy(dummy_length):
 @pytest.fixture
 def wavenet():
     net = WaveNet(
-        layer_size=LAYER_SIZE,
-        stack_size=STACK_SIZE,
+        n_layers=N_LAYERS,
+        n_stacks=N_STACKS,
         in_channels=IN_CHANNELS,
         res_channels=RES_CHANNELS,
         out_classes=OUT_CLASSES,
