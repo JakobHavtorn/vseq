@@ -68,12 +68,12 @@ class VRNN(nn.Module):
         h = torch.zeros(x.size(1), self.h_dim, device=x.device)
         for t in range(x.size(0)):
 
-            # prior
+            # prior p(z)
             prior_t = self.prior(h)
             prior_mean_t = self.prior_mean(prior_t)
             prior_std_t = self.prior_std(prior_t)
 
-            # encoder
+            # encoder q(z|x)
             enc_t = self.enc(torch.cat([phi_x[t], h], 1))
             enc_mean_t = self.enc_mean(enc_t)
             enc_std_t = self.enc_std(enc_t)
@@ -84,7 +84,7 @@ class VRNN(nn.Module):
             # z features
             phi_z_t = self.phi_z(z_t)
 
-            # decoder
+            # decoder p(x|z)
             dec_t = self.dec(torch.cat([phi_z_t, h], 1))
             dec_logits_t = self.dec_logits(dec_t)
             # dec_mean_t = self.dec_mean(dec_t)
@@ -209,6 +209,75 @@ class VRNNLM(BaseModel):
         p_x_z = torch.distributions.Categorical(logits=o_logits)
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_x_z.logits.device)
         log_prob_twise = p_x_z.log_prob(y) * seq_mask
+        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta)
+
+        metrics = [
+            LossMetric(loss, weight_by=elbo.numel()),
+            LLMetric(elbo, name="elbo"),
+            LLMetric(log_prob, name="rec"),
+            KLMetric(kl),
+            BitsPerDimMetric(elbo, reduce_by=x_sl),
+            PerplexityMetric(elbo, reduce_by=x_sl),
+        ]
+
+        outputs = SimpleNamespace(
+            loss=loss,
+            elbo=elbo,
+            rec=log_prob,
+            kl=kl,
+            p_x_z=p_x_z,
+            q_z_x=q_z_x,
+            p_z=p_z,
+            z=z,
+        )
+        return loss, metrics, outputs
+
+
+class VRNNMIDI(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 88,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+
+        self.vrnn = VRNN(
+            x_dim=input_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+        )
+
+    def compute_elbo(
+        self,
+        log_prob_twise: TensorType["B", "T"],
+        kl_twise: TensorType["B", "T", "latent_size"],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+    ):
+        """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
+        kl = kl_twise.sum((1, 2))  # (B,)
+        log_prob = log_prob_twise.sum((1, 2))  # (B,)
+        elbo = log_prob - kl  # (B,)
+        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        return loss, elbo, log_prob, kl
+
+    def forward(self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1):
+        # Prepare inputs (x) and targets (y)
+        y = x[:, 1:].clone().detach()  # Remove start token and form target
+        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+
+        z, o_logits, q_z_x, p_z, kl_twise = self.vrnn(x)
+
+        # Compute loss
+        # import IPython; IPython.embed()
+        p_x_z = torch.distributions.Bernoulli(logits=o_logits)
+        seq_mask = sequence_mask(x_sl, dtype=float, device=p_x_z.logits.device)
+        log_prob_twise = p_x_z.log_prob(y) * seq_mask.unsqueeze(-1)
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta)
 
         metrics = [

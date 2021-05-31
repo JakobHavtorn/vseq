@@ -14,27 +14,20 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import TextBatcher
-from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
-from vseq.data.loaders import TextLoader
-from vseq.data.tokens import DELIMITER_TOKEN, ENGLISH_STANDARD, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
-from vseq.data.tokenizers import char_tokenizer, word_tokenizer
-from vseq.data.token_map import TokenMap
-from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
-from vseq.data.vocabulary import load_vocabulary
+from vseq.data.batchers import SpectrogramBatcher
+from vseq.data.datapaths import MIDI_PIANO_TEST, MIDI_PIANO_TRAIN, MIDI_PIANO_VALID
+from vseq.data.loaders import NumpyLoader
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
-from vseq.utils.argparsing import str2bool
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=64, type=int, help="batch size")
+parser.add_argument("--batch_size", default=16, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--dropout", default=0.0, type=float, help="inter GRU layer dropout probability")
-parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -59,33 +52,22 @@ wandb.init(
 wandb.config.update(args)
 rich.print(vars(args))
 
-if args.token_level == "word":
-    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
-    token_map = TokenMap(tokens=tokens, add_delimit=True)
-    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
-else:
-    tokens = PENN_TREEBANK_ALPHABET
-    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
-    penn_treebank_transform = Compose(
-        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
-        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
-    )
+batcher = SpectrogramBatcher()
+loader = NumpyLoader("npy", cache=True)
 
-batcher = TextBatcher()
-loader = TextLoader('txt', cache=True)
-
-modalities = [(loader, penn_treebank_transform, batcher)]
+modalities = [(loader, None, batcher)]
 
 train_dataset = BaseDataset(
-    source=PENN_TREEBANK_TRAIN,
+    source=MIDI_PIANO_TRAIN,
     modalities=modalities,
 )
+train_dataset.examples = train_dataset.examples * 100
 val_dataset = BaseDataset(
-    source=PENN_TREEBANK_VALID,
+    source=MIDI_PIANO_VALID,
     modalities=modalities,
 )
 test_dataset = BaseDataset(
-    source=PENN_TREEBANK_TEST,
+    source=MIDI_PIANO_TEST,
     modalities=modalities,
 )
 
@@ -115,13 +97,10 @@ test_loader = DataLoader(
 )
 
 
-delimiter_token_idx = token_map.get_index(DELIMITER_TOKEN)
-model = vseq.models.VRNNLM(
-    num_embeddings=len(token_map),
-    embedding_dim=args.embedding_dim,
+model = vseq.models.VRNNMIDI(
+    input_size=88,
     hidden_size=args.hidden_size,
     latent_size=args.latent_size,
-    delimiter_token_idx=delimiter_token_idx,
 )
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
@@ -140,6 +119,7 @@ for epoch in tracker.epochs(args.epochs):
     model.train()
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
+        # rich.print(metadata)
 
         loss, metrics, outputs = model(x, x_sl)
 
@@ -165,6 +145,4 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-
-    # Log tracker metrics
     tracker.log()

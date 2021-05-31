@@ -4,6 +4,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable, Union
 
+import numpy as np
+import torch
 import torchaudio
 
 
@@ -77,6 +79,15 @@ def load_audio(file_path: str, sum_channels: bool = False):
     return audio, metadata
 
 
+def load_numpy(file_path: str, length_dim: int = 0, **kwargs):
+    tensor = torch.from_numpy(np.load(file_path, **kwargs))
+    metadata = MetaData(
+        length=tensor.size(length_dim),
+        file_path=file_path,
+    )
+    return tensor, metadata
+
+
 class Loader():
 
     def __init__(self, extension: Union[None, str], cache: bool = False):
@@ -126,7 +137,9 @@ class AudioLoader(Loader):
     def load(self, example_id):
         """Load a single audio file."""
         file_path = example_id + self.suffix
-        return load_audio(file_path, self.sum_channels)
+        audio, metadata = load_audio(file_path, self.sum_channels)
+        metadata.example_id = example_id
+        return audio, metadata
 
 
 class TextLoader(Loader):
@@ -171,3 +184,25 @@ class TextLoader(Loader):
             batch_data[example_id] = (string, metadata)
 
         self.load.memory.update(batch_data)
+
+
+class NumpyLoader(Loader):
+
+    def __init__(self, extension: Union[None, str], cache: bool = False, length_dim: int = 0, **kwargs):
+        """
+        Loader for numpy data.
+
+        Args:
+            extension (str): Extension of data files (e.g., "wav" or "flac").
+            cache (bool): Whether to enable caching.
+        """
+        super().__init__(extension=extension, cache=cache)
+        self.length_dim = length_dim
+        self.kwargs = kwargs
+
+    def load(self, example_id):
+        """Load a single audio file."""
+        file_path = example_id + self.suffix
+        tensor, metadata = load_numpy(file_path, length_dim=self.length_dim, **self.kwargs)
+        metadata.example_id = example_id
+        return tensor, metadata
