@@ -21,6 +21,19 @@ PENN_TREEBANK_TRAIN = "ptb_train"
 PENN_TREEBANK_VALID = "ptb_valid"
 PENN_TREEBANK_TEST = "ptb_test"
 
+MIDI_PIANO_TRAIN = "midi_piano_train"
+MIDI_PIANO_VALID = "midi_piano_valid"
+MIDI_PIANO_TEST = "midi_piano_test"
+MIDI_CHORALES_TRAIN = "midi_jsb_chorales_train"
+MIDI_CHORALES_VALID = "midi_jsb_chorales_valid"
+MIDI_CHORALES_TEST = "midi_jsb_chorales_test"
+MIDI_NOTTINGHAM_TRAIN = "midi_jsb_nottingham_train"
+MIDI_NOTTINGHAM_VALID = "midi_jsb_nottingham_valid"
+MIDI_NOTTINGHAM_TEST = "midi_jsb_nottingham_test"
+MIDI_MUSEDATA_TRAIN = "midi_jsb_musedata_train"
+MIDI_MUSEDATA_VALID = "midi_jsb_musedata_valid"
+MIDI_MUSEDATA_TEST = "midi_jsb_musedata_test"
+
 
 DATAPATHS_MAPPING = {
     LIBRISPEECH_TRAIN: os.path.join(SOURCE_DIRECTORY, "librispeech", "train.txt"),
@@ -40,4 +53,17 @@ DATAPATHS_MAPPING = {
     PENN_TREEBANK_TRAIN: os.path.join(SOURCE_DIRECTORY, "penn_treebank", "train.txt"),
     PENN_TREEBANK_VALID: os.path.join(SOURCE_DIRECTORY, "penn_treebank", "valid.txt"),
     PENN_TREEBANK_TEST: os.path.join(SOURCE_DIRECTORY, "penn_treebank", "test.txt"),
+
+    MIDI_PIANO_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "piano", "train.txt"),
+    MIDI_PIANO_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "piano", "valid.txt"),
+    MIDI_PIANO_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "piano", "test.txt"),
+    MIDI_CHORALES_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_chorales", "train.txt"),
+    MIDI_CHORALES_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_chorales", "valid.txt"),
+    MIDI_CHORALES_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_chorales", "test.txt"),
+    MIDI_NOTTINGHAM_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_nottingham", "train.txt"),
+    MIDI_NOTTINGHAM_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_nottingham", "valid.txt"),
+    MIDI_NOTTINGHAM_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_nottingham", "test.txt"),
+    MIDI_MUSEDATA_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_musedata", "train.txt"),
+    MIDI_MUSEDATA_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_musedata", "valid.txt"),
+    MIDI_MUSEDATA_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "jsb_musedata", "test.txt"),
 }

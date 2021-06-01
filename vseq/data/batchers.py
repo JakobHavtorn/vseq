@@ -56,7 +56,7 @@ class AudioBatcher(Batcher):
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
-        """Zero pad batch of audio waveforms to maximum temporal length and concatenate"""
+        """Zero pad batch of audio waveforms (T,) to maximum temporal length and concatenate"""
         sequence_lengths = [audio.shape[0] for audio in batch]
 
         T = max(sequence_lengths)
@@ -82,18 +82,26 @@ class SpectrogramBatcher(Batcher):
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
-        """Zero pad batch of spectrograms (F, T) to maximum temporal length and concatenate"""
-        sequence_lengths = [spectrogram.shape[1] for spectrogram in batch]
+        """Zero pad batch of spectrograms (T, F) to maximum temporal length and concatenate"""
+        sequence_lengths = [spectrogram.shape[0] for spectrogram in batch]
 
         T = max(sequence_lengths)
         N = len(batch)
-        F = batch[0].shape[0]
+        F = batch[0].shape[1]
 
-        collated_batch = torch.zeros((N, F, T), dtype=batch[0].dtype)
+        collated_batch = torch.zeros((N, T, F), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
-            collated_batch[i, :, :seq_len] = batch[i]
+            collated_batch[i, :seq_len, :] = batch[i]
 
         return collated_batch, torch.LongTensor(sequence_lengths)
+
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
+        if sort_modality_idx is not None:
+            sort_key = lambda x: len(x[0][sort_modality_idx])
+        else:
+            sort_key = lambda x: len(x[0])
+
+        return sorted(batch, key=sort_key, reverse=True)
 
 
 class TextBatcher(Batcher):

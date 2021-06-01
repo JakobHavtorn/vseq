@@ -119,7 +119,7 @@ def test_hmlstm_forward(sizes):
         assert z[i].shape == (BATCH_SIZE, LENGTH, 1)
 
 
-def test_hmrnn_init():
+def test_hmlm_init():
     x, x_sl = generate_dummy_model_input()
     hmlm = HMLM(
         num_embeddings=NUM_EMBEDDINGS,

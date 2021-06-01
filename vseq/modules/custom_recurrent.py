@@ -21,10 +21,9 @@ from torch import Tensor
 from torch.nn import Parameter
 
 
-
 # ==========================================================================================
 # CELLS
-# 
+#
 # input: Tensor of shape (batch, input_size)
 # state: Tuple of Tensors of shape (batch, hidden_size)
 # ==========================================================================================
@@ -126,7 +125,7 @@ class LSTMCellLayerNorm(nn.Module):
 
 # ==========================================================================================
 # LAYERS
-# 
+#
 # input: Tensor of shape (seq_len, batch, input_size)
 # state: Tuple of Tensors of shape (num_directions, batch, hidden_size)
 # ==========================================================================================
@@ -134,9 +133,9 @@ class LSTMCellLayerNorm(nn.Module):
 
 # class LSTMLayerL2R(jit.ScriptModule):
 class LSTMLayerL2R(nn.Module):
-    def __init__(self, cell, *cell_args, **cell_kwargs):
+    def __init__(self, cell_type, *cell_args, **cell_kwargs):
         super().__init__()
-        self.cell = cell(*cell_args, **cell_kwargs)
+        self.cell = cell_type(*cell_args, **cell_kwargs)
 
     # @jit.script_method
     def forward(self, input: Tensor, state: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
@@ -154,9 +153,9 @@ class LSTMLayerL2R(nn.Module):
 
 # class LSTMLayerR2L(jit.ScriptModule):
 class LSTMLayerR2L(nn.Module):
-    def __init__(self, cell, *cell_args, **cell_kwargs):
+    def __init__(self, cell_type, *cell_args, **cell_kwargs):
         super().__init__()
-        self.cell = cell(*cell_args, **cell_kwargs)
+        self.cell = cell_type(*cell_args, **cell_kwargs)
 
     # @jit.script_method
     def forward(self, input: Tensor, state: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
@@ -175,12 +174,12 @@ class LSTMLayerR2L(nn.Module):
 
 # class LSTMLayerBidirectional(jit.ScriptModule):
 class LSTMLayerBidirectional(nn.Module):
-    def __init__(self, cell, *cell_args, **cell_kwargs):
+    def __init__(self, cell_type, *cell_args, **cell_kwargs):
         super().__init__()
         self.directions = nn.ModuleList(
             [
-                LSTMLayerL2R(cell, *cell_args, **cell_kwargs),
-                LSTMLayerR2L(cell, *cell_args, **cell_kwargs),
+                LSTMLayerL2R(cell_type, *cell_args, **cell_kwargs),
+                LSTMLayerR2L(cell_type, *cell_args, **cell_kwargs),
             ]
         )
 
@@ -206,26 +205,43 @@ class LSTMLayerBidirectional(nn.Module):
 
 # ==========================================================================================
 # STACKS
-# 
+#
 # input: Tensor of shape (seq_len, batch, input_size)
-# state: List of `num_layers` Tuple of Tensors of shape (num_directions, batch, hidden_size)
+# state: Tuple of Tensors of shape (num_layers * num_directions, batch, hidden_size)
 # ==========================================================================================
 
 
-def init_stacked_lstm(num_layers, layer, first_layer_kwargs, other_layer_kwargs):
+def init_stacked_recurrent_layers(num_layers, layer, first_layer_kwargs, other_layer_kwargs):
     layers = [layer(**first_layer_kwargs)] + [layer(**other_layer_kwargs) for _ in range(num_layers - 1)]
     return nn.ModuleList(layers)
 
 
-# class LSTMStack(jit.ScriptModule):
-class LSTMStack(nn.Module):
-    def __init__(self, num_layers, layer, first_layer_kwargs, other_layer_kwargs):
+class RecurrentStack(nn.Module):
+    def __init__(self, num_layers, num_directions, hidden_size):
         super().__init__()
-        self.layers = init_stacked_lstm(num_layers, layer, first_layer_kwargs, other_layer_kwargs)
+        self.num_layers = num_layers
+        self.num_directions = num_directions
+        self.hidden_size = hidden_size
+
+    @jit.export
+    def unpack_state(self, states: Tuple[Tensor, Tensor]):
+        # state:  tuple of (num_layers * num_directions, batch, hidden_size)
+        h_states = states[0].view(self.num_layers, self.num_directions, states[0].size(1), self.hidden_size).unbind(0)
+        c_states = states[1].view(self.num_layers, self.num_directions, states[1].size(1), self.hidden_size).unbind(0)
+        states = [(h_states[i], c_states[i]) for i in range(self.num_layers)]
+        # state:  List of `num_layers` Tuples of (num_directions, batch, hidden_size)
+        return states
+
+
+# class LSTMStack(jit.ScriptModule):
+class LSTMStack(RecurrentStack):
+    def __init__(self, num_layers, num_directions, hidden_size, layer_type, first_layer_kwargs, other_layer_kwargs):
+        super().__init__(num_layers, num_directions, hidden_size)
+        self.layers = init_stacked_recurrent_layers(num_layers, layer_type, first_layer_kwargs, other_layer_kwargs)
 
     # @jit.script_method
-    def forward(self, input: Tensor, states: List[Tuple[Tensor, Tensor]]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
-        # List[LSTMState]: One state per layer
+    def forward(self, input: Tensor, states: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+        states = self.unpack_state(states)
         output_states = jit.annotate(List[Tuple[Tensor, Tensor]], [])
         output = input
         for i, rnn_layer in enumerate(self.layers):
@@ -241,8 +257,10 @@ class LSTMStack(nn.Module):
 
 
 # class LSTMStackDropout(jit.ScriptModule):
-class LSTMStackDropout(nn.Module):
-    def __init__(self, num_layers, layer, first_layer_kwargs, other_layer_kwargs, dropout):
+class LSTMStackDropout(RecurrentStack):
+    def __init__(
+        self, num_layers, num_directions, hidden_size, layer_type, first_layer_kwargs, other_layer_kwargs, dropout
+    ):
         """Introduces a Dropout layer on the outputs of each LSTM layer except the last layer.
 
         Args:
@@ -251,31 +269,28 @@ class LSTMStackDropout(nn.Module):
             first_layer_kwargs ([type]): [description]
             other_layer_kwargs ([type]): [description]
         """
-        super().__init__()
-        self.layers = init_stacked_lstm(num_layers, layer, first_layer_kwargs, other_layer_kwargs)
-
-        self.num_layers = num_layers
-
-        # if num_layers == 1:
-        #     warnings.warn(
-        #         "dropout lstm adds dropout layers after all but last "
-        #         "recurrent layer, it expects num_layers greater than "
-        #         "1, but got num_layers = 1"
-        #     )
-
+        super().__init__(num_layers, num_directions, hidden_size)
+        self.layers = init_stacked_recurrent_layers(num_layers, layer_type, first_layer_kwargs, other_layer_kwargs)
         self.dropout_layer = nn.Dropout(dropout)
 
+        if num_layers == 1:
+            warnings.warn(
+                "dropout lstm adds dropout layers after all but last "
+                "recurrent layer, it expects num_layers greater than "
+                "1, but got num_layers = 1"
+            )
+
     # @jit.script_method
-    def forward(self, input: Tensor, states: List[Tuple[Tensor, Tensor]]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
-        # List[LSTMState]: One state per layer
+    def forward(self, input: Tensor, states: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+        states = self.unpack_state(states)
         output_states = jit.annotate(List[Tuple[Tensor, Tensor]], [])
         output = input
         for i, rnn_layer in enumerate(self.layers):
             state = states[i]
             output, out_state = rnn_layer(output, state)
             # Apply the dropout layer except the last layer
-            # if i < self.num_layers - 1:
-            output = self.dropout_layer(output)
+            if i < self.num_layers - 1:
+                output = self.dropout_layer(output)
             output_states += [out_state]
 
         # outputs: (seq_len, batch, num_directions * hidden_size)
@@ -296,9 +311,9 @@ class LSTM(nn.Module):
         dropout: Optional[float] = None,
         layer_norm: bool = False,
         batch_first: bool = False,
-        jit_compile: bool = False
+        jit_compile: bool = False,
     ):
-        """
+        """LSTM wrapper module for custom cells and stacks.
 
         Args:
             input_size: The number of expected features in the input `x`
@@ -315,11 +330,12 @@ class LSTM(nn.Module):
                 LSTM layer except the last layer, with dropout probability equal to
                 :attr:`dropout`. Default: 0
             bidirectional: If ``True``, becomes a bidirectional LSTM. Default: ``False``
-            proj_size: If ``> 0``, will use LSTM with projections of corresponding size. Default: 0
+            layer_norm: If ``True``, applies Layer Normalization to each of the LSTM gates.
+            jit_compile: If ``True``, calls `torch.jit.script` on the LSTM module.
         """
-        assert not batch_first
+        assert not batch_first, "Batch first not implemented"
         assert bool(dropout) * bidirectional == False, "Bidrectional with dropout not implemented"
-        assert bias
+        assert bias, "No bias is not supported"
 
         super().__init__()
 
@@ -335,21 +351,20 @@ class LSTM(nn.Module):
 
         self.num_directions = 1 + int(self.bidirectional)
 
+        stack_kwargs = dict()
         if bidirectional:
             stack_type = LSTMStack
             layer_type = LSTMLayerBidirectional
             n_dirs = 2
-            stack_kwargs = dict(num_layers=num_layers, layer=layer_type)
         elif dropout:
             stack_type = LSTMStackDropout
             layer_type = LSTMLayerL2R
             n_dirs = 1
-            stack_kwargs = dict(num_layers=num_layers, layer=layer_type, dropout=dropout)
+            stack_kwargs = dict(dropout=dropout)
         else:
             stack_type = LSTMStack
             layer_type = LSTMLayerL2R
             n_dirs = 1
-            stack_kwargs = dict(num_layers=num_layers, layer=layer_type)
 
         if layer_norm:
             cell_type = LSTMCellLayerNorm
@@ -357,17 +372,21 @@ class LSTM(nn.Module):
             cell_type = LSTMCell
 
         lstm = stack_type(
-            **stack_kwargs,
+            num_layers=self.num_layers,
+            num_directions=self.num_directions,
+            hidden_size=self.hidden_size,
+            layer_type=layer_type,
             first_layer_kwargs=dict(
-                cell=cell_type,
+                cell_type=cell_type,
                 input_size=input_size,
                 hidden_size=hidden_size,
             ),
             other_layer_kwargs=dict(
-                cell=cell_type,
+                cell_type=cell_type,
                 input_size=hidden_size * n_dirs,
                 hidden_size=hidden_size,
             ),
+            **stack_kwargs,
         )
 
         if jit_compile:
@@ -375,29 +394,13 @@ class LSTM(nn.Module):
         else:
             self.lstm = lstm
 
-    def forward(self, x: Tensor, states: Optional[List[Tuple[Tensor, Tensor]]] = None):
+    def forward(self, x: Tensor, states: Optional[Tuple[Tensor, Tensor]] = None):
         # x: (seq_len, batch, input_size)
         # states: (num_layers * num_directions, batch, hidden_size)
-        batch = x.size(1)
-
         if states is None:
-            states = [
-                (
-                    torch.zeros(self.num_directions, batch, self.hidden_size, device=x.device),
-                    torch.zeros(self.num_directions, batch, self.hidden_size, device=x.device),
-                )
-                for _ in range(self.num_layers)
-            ]
-        # else:
-        #     h_states = states[0].view(self.num_layers, self.num_directions, batch, self.hidden_size).unbind(0)
-        #     c_states = states[1].view(self.num_layers, self.num_directions, batch, self.hidden_size).unbind(0)
+            states = (
+                torch.zeros(self.num_layers * self.num_directions, x.size(1), self.hidden_size, device=x.device),
+                torch.zeros(self.num_layers * self.num_directions, x.size(1), self.hidden_size, device=x.device),
+            )
 
-        #     states = [
-        #         (
-        #             h_states[i], c_states[i]
-        #         )
-        #         for i in range(self.num_layers)
-        #     ]
-
-        # states: List(num_directions, batch, hidden_size))
         return self.lstm(x, states)

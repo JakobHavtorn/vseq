@@ -152,10 +152,9 @@ def test_script_lstm_layer_norm_script_layer(seq_len, batch, input_size, hidden_
 # )
 # def test_script_lstm_runtime_forward(seq_len, batch, input_size, hidden_size, num_layers, device):
 #     inp = torch.randn(seq_len, batch, input_size, device=device)
-#     lstm_script_state = [LSTMState(torch.randn(batch, hidden_size, device=device), torch.randn(batch, hidden_size, device=device)) for _ in range(num_layers)]
+#     lstm_script_state = [LSTMState(torch.randn(1, batch, hidden_size, device=device), torch.randn(1, batch, hidden_size, device=device)) for _ in range(num_layers)]
 #     lstm_script = LSTM(input_size, hidden_size, num_layers=num_layers).to(device)
 
-#     lstm_state = flatten_states(lstm_script_state)
 #     lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers).to(device)
 
 #     print()
@@ -185,10 +184,9 @@ def test_script_lstm_layer_norm_script_layer(seq_len, batch, input_size, hidden_
 # )
 # def test_script_lstm_runtime_backward(seq_len, batch, input_size, hidden_size, num_layers, device):
 #     inp = torch.randn(seq_len, batch, input_size, device=device)
-#     lstm_script_state = [LSTMState(torch.randn(batch, hidden_size, device=device), torch.randn(batch, hidden_size, device=device)) for _ in range(num_layers)]
+#     lstm_script_state = [LSTMState(torch.randn(1, batch, hidden_size, device=device), torch.randn(1, batch, hidden_size, device=device)) for _ in range(num_layers)]
 #     lstm_script = LSTM(input_size, hidden_size, num_layers=num_layers).to(device)
 
-#     lstm_state = flatten_states(lstm_script_state)
 #     lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers).to(device)
 
 #     print()
