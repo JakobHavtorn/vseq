@@ -8,6 +8,13 @@ from torchtyping import TensorType
 
 class WordDropout(nn.Module):
     def __init__(self, dropout_rate: float = 0.0, mask_value: Union[float, int] = 0, mask_first_timestep: bool = False):
+        """Dropout module that masks out all features for any sampled timestep.
+
+        Args:
+            dropout_rate (float, optional): Probability of sampling a timestep for dropout. Defaults to 0.0.
+            mask_value (Union[float, int], optional): Value to use for dropout masking. Defaults to 0.
+            mask_first_timestep (bool, optional): If `False`, do not mask out the first timestep. Defaults to False.
+        """
         super().__init__()
         self.dropout_rate = dropout_rate
         self.mask_value = mask_value
