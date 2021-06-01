@@ -90,8 +90,8 @@ class Bowman(BaseModel):
             m, v = torch.zeros(latent_dim), torch.ones(latent_dim)
             prior_variance = D.LogNormal(m, v).sample()
         else:
-            prior_variance = torch.ones(latent_dim)
-        prior_logits = torch.cat([torch.zeros(latent_dim), prior_variance])
+            prior_log_sigma = self.std_activation_inverse(torch.ones(latent_dim))
+        prior_logits = torch.cat([torch.zeros(latent_dim), prior_log_sigma])
         if self.trainable_prior:
             self.prior_logits = nn.Parameter(prior_logits)
         else:
@@ -104,7 +104,8 @@ class Bowman(BaseModel):
 
     def prior(self):
         """Return the prior distribution without a batch dimension"""
-        mu, sigma = self.prior_logits.chunk(2, dim=0)
+        mu, log_sigma = self.prior_logits.chunk(2, dim=0)
+        sigma = self.std_activation(log_sigma)
         return D.Normal(mu, sigma)
 
     def compute_elbo(self, log_prob_twise, kl_dwise, x_sl, beta: float = 1):
