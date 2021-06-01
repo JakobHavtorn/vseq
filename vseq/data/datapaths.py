@@ -63,7 +63,7 @@ DATAPATHS_MAPPING = {
     MIDI_NOTTINGHAM_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "nottingham", "train.txt"),
     MIDI_NOTTINGHAM_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "nottingham", "valid.txt"),
     MIDI_NOTTINGHAM_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "nottingham", "test.txt"),
-    MIDI_MUSEDATA_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "musedata", "train.txt"),
-    MIDI_MUSEDATA_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "musedata", "valid.txt"),
-    MIDI_MUSEDATA_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "musedata", "test.txt"),
+    MIDI_MUSEDATA_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "train.txt"),
+    MIDI_MUSEDATA_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "valid.txt"),
+    MIDI_MUSEDATA_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "test.txt"),
 }
