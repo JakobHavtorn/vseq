@@ -1,20 +1,22 @@
 import argparse
 import logging
 
+from functools import partial
+
 import torch
-import torchaudio
+import torchvision
 import wandb
 import rich
+import matplotlib.pyplot as plt
 
 from torch.utils.data import DataLoader
 
+import vseq
 import vseq.models
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import AudioBatcher
-from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
-from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import Compose, Quantize, RandomSegment, Scale, MuLawEncode
+from vseq.data.batchers import TensorBatcher
+from vseq.data.transforms import Compose, Quantize, Scale, Reshape
 from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
@@ -24,12 +26,12 @@ from vseq.utils.rand import set_seed, get_random_seed
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=4, type=int, help="batch size")
+parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--n_layers", default=10, type=int, help="number of layers per stack")
-parser.add_argument("--n_stacks", default=4, type=int, help="number of stacks")
+parser.add_argument("--n_layers", default=7, type=int, help="number of layers per stack")
+parser.add_argument("--n_stacks", default=6, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
-parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
+parser.add_argument("--input_coding", default="quantized", type=str, choices=["quantized", "frames"], help="input encoding")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
@@ -46,7 +48,7 @@ set_seed(args.seed)
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
-if args.input_coding == "mu_law":
+if args.input_coding == "quantized":
     args.in_channels = 256
 elif args.input_coding == "frames":
     args.in_channels = 1
@@ -57,29 +59,35 @@ else:
 wandb.init(
     entity="vseq",
     project="wavenet",
-    group=None,
+    group="mnist",
 )
 wandb.config.update(args)
 rich.print(vars(args))
 
 
-if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8))
+if args.input_coding == "quantized":
+    wavenet_transform = Compose(torchvision.transforms.ToTensor(), Scale(-1, 1), Reshape(784), Quantize(bits=8))
 elif args.input_coding == "frames":
-    wavenet_transform = Compose(RandomSegment(length=16000))
+    wavenet_transform = Compose(torchvision.transforms.ToTensor(), Scale(-1, 1), Reshape(784))
 
-modalities = [
-    (AudioLoader("flac"), wavenet_transform, AudioBatcher()),
-]
+train_dataset = torchvision.datasets.MNIST(
+    root=vseq.settings.DATA_DIRECTORY, train=True, transform=wavenet_transform, download=True
+)
+train_dataset.source = 'mnist_train'
+train_dataset.batchers = [TensorBatcher()]
+train_dataset.sort = False
+train_dataset.num_modalities = 1
+train_dataset.collate = partial(BaseDataset.collate, train_dataset)
 
-train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
-    modalities=modalities,
+valid_dataset = torchvision.datasets.MNIST(
+    root=vseq.settings.DATA_DIRECTORY, train=False, transform=wavenet_transform, download=True
 )
-val_dataset = BaseDataset(
-    source=LIBRISPEECH_DEV_CLEAN,
-    modalities=modalities,
-)
+valid_dataset.source = 'mnist_val'
+valid_dataset.batchers = [TensorBatcher()]
+valid_dataset.sort = False
+valid_dataset.num_modalities = 1
+valid_dataset.collate = partial(BaseDataset.collate, valid_dataset)
+
 
 train_loader = DataLoader(
     dataset=train_dataset,
@@ -89,9 +97,9 @@ train_loader = DataLoader(
     batch_size=args.batch_size,
     pin_memory=True,
 )
-val_loader = DataLoader(
-    dataset=val_dataset,
-    collate_fn=val_dataset.collate,
+valid_loader = DataLoader(
+    dataset=valid_dataset,
+    collate_fn=valid_dataset.collate,
     num_workers=args.num_workers,
     shuffle=False,
     batch_size=args.batch_size,
@@ -112,11 +120,6 @@ wandb.watch(model, log="all", log_freq=len(train_loader))
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 
-# (x, x_sl), metadata = next(iter(train_loader))
-# x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
-
-
 tracker = Tracker()
 
 for epoch in tracker.epochs(args.epochs):
@@ -135,7 +138,7 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker.steps(val_loader):
+        for (x, x_sl), metadata in tracker.steps(valid_loader):
             x = x.to(device)
 
             loss, metrics, output = model(x, x_sl)
@@ -145,13 +148,8 @@ for epoch in tracker.epochs(args.epochs):
         tracker.log()
 
         # save samples
-        x = model.generate(n_samples=32, n_frames=96000)
-        x = x.unsqueeze(-1).to(torch.uint8).cpu()
+        x = model.generate(n_samples=32, n_frames=784)
+        x = x.view(32, 28, 28).cpu()
         for i in range(len(x)):
-            torchaudio.save(
-                f"./wavenet_samples/model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
-                x[i],
-                sample_rate=16000,
-                channels_first=False,
-                encoding="ULAW",
-            )
+            plt.imshow(x[i])
+            plt.savefig(f"./wavenet_samples/mnist-model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.png")

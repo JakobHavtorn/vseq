@@ -70,13 +70,7 @@ class LSTMLM(BaseModel):
 
         log_prob_twise, p_x = self.reconstruct(x=x, x_sl=x_sl, word_dropout_rate=word_dropout_rate)
         log_prob = log_prob_twise.sum(1)  # (B,)
-
-        if loss_reduction == 'nats_per_dim':
-            loss = - log_prob.sum() / (x_sl - 1).sum()
-        elif loss_reduction == 'nats_per_example':
-            loss = - log_prob.mean()
-        else:
-            raise ValueError(f'Unknown reduction {loss_reduction}')
+        loss = - log_prob.sum() / (x_sl - 1).sum()
 
         metrics = [
             LossMetric(loss, weight_by=log_prob.numel()),

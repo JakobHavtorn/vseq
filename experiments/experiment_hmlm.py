@@ -16,6 +16,7 @@ import vseq.utils.device
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
+from vseq.data.loaders import TextLoader
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.tokens import DELIMITER_TOKEN, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
 from vseq.data.tokenizers import char_tokenizer, word_tokenizer
@@ -75,8 +76,9 @@ penn_treebank_transform = Compose(
     ),
 )
 batcher = TextBatcher()
+loader = TextLoader('txt', cache=True)
 
-modalities = [("txt", penn_treebank_transform, batcher)]
+modalities = [(loader, penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,

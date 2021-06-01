@@ -35,6 +35,16 @@ class Compose:
         return format_string
 
 
+class Reshape(Transform):
+    def __init__(self, *shape: int):
+        super().__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        return x.view(batch_size, *self.shape)
+
+
 class TextCleaner(Transform):
     def __init__(self, cleaner_fcn: Callable):
         super().__init__()
@@ -97,7 +107,7 @@ class Scale(Transform):
 
 class MuLawEncode(Transform):
     def __init__(self, bits: int = 8):
-        """Encode PCM audio via µ-law companding to some number of bits (8 by default)"""
+        """Encode PCM audio in [-1, 1] via µ-law companding to some number of bits (8 by default)"""
         super().__init__()
         self.bits = bits
         self.mu = 2 ** bits - 1
