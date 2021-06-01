@@ -20,7 +20,7 @@ Denote the latent state at timestep $t$ and level $l$ by $s_t^l$ and the input f
   - with $k=2$
     - $s^1_1 = s^1_1, \quad s^1_2 = s^1_2, \ldots$
     - $s^2_{1:2} = s^2_2,\quad s^2_{3:4} = s^2_4, \ldots$ 
-    - $s^2_{1:4} = s^2_4,\quad s^2_{5:8} = s^2_8, \ldots$ 
+    - $s^3_{1:4} = s^3_4,\quad s^3_{5:8} = s^3_8, \ldots$ 
 
 - Joint distribution
 
