@@ -140,7 +140,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 tracker = Tracker()
 
-beta_annealer = CosineAnnealer(n_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
+beta_annealer = CosineAnnealer(anneal_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
 for epoch in tracker.epochs(args.epochs):
 
     model.train()

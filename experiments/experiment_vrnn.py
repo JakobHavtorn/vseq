@@ -1,5 +1,6 @@
 import argparse
 import json
+from vseq.training.annealers import CosineAnnealer
 
 import torch
 import wandb
@@ -34,6 +35,8 @@ parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionali
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--dropout", default=0.0, type=float, help="inter GRU layer dropout probability")
+parser.add_argument("--anneal_steps", default=5000, type=int, help="number of steps to anneal beta")
+parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -135,19 +138,22 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 tracker = Tracker()
 
+beta_annealer = CosineAnnealer(anneal_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
+
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl)
+        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         tracker.update(metrics)
+        beta_annealer.step()
 
     model.eval()
     with torch.no_grad():
@@ -165,6 +171,4 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-
-    # Log tracker metrics
-    tracker.log()
+    tracker.log(beta=beta_annealer.value)
