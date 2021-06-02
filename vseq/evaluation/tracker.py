@@ -246,6 +246,7 @@ class Tracker:
             # print(self.terminal.move_y(self.terminal.height - self.rank - 2) + s, end='\r')#, flush=True)
             end = "\r" if self.rank == 0 else "\n"
             s = rank_string(self.rank) + " " + s
+            s_len = length_without_formatting(s)
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
                 rich.print(s, end=end, flush=True)
         else:
