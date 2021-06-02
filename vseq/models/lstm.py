@@ -25,29 +25,38 @@ from .base_model import BaseModel
 
 
 class OutConv(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, num_classes: int):
+    def __init__(
+        self, input_dim: int, output_dim: int, num_classes: int, conv_layers: int = 1
+    ):
         super().__init__()
         self.num_classes = num_classes
         self.output_dim = output_dim
         self.input_dim = input_dim
 
-        self.relu0 = nn.ReLU()
-        self.conv1 = torch.nn.Conv1d(input_dim, output_dim * num_classes, kernel_size=1)
-        self.relu1 = torch.nn.ReLU()
-        self.conv2 = torch.nn.Conv1d(
-            output_dim * num_classes, output_dim * num_classes, kernel_size=1
-        )
-        self.reshape = torch.nn.Unflatten(2, (output_dim, num_classes))
+        self.layers = [
+            nn.ReLU(),
+            nn.Conv1d(input_dim, output_dim * num_classes, kernel_size=1),
+        ]
+        if conv_layers > 1:
+            for _i in range(conv_layers - 1):
+                self.layers.extend(
+                    [
+                        nn.ReLU(),
+                        nn.Conv1d(
+                            output_dim * num_classes,
+                            output_dim * num_classes,
+                            kernel_size=1,
+                        ),
+                    ]
+                )
+        self.unflatten = torch.nn.Unflatten(2, (output_dim, num_classes))
         self.log_softmax = torch.nn.LogSoftmax(dim=-1)
 
     def forward(self, x):
-        x = self.relu0(x)
-        x = self.conv1(x)
-        x = self.relu1(x)
-        x = self.conv2(x)
-        x = torch.movedim(x, 1,2)
-        x = self.reshape(x)
-        
+        for _layer in self.layers:
+            x = _layer(x)
+        x = torch.movedim(x, 1, 2)
+        x = self.unflatten(x)
         return self.log_softmax(x)
 
 
@@ -56,7 +65,7 @@ class LSTM(BaseModel):
         self,
         input_size: int = 80,
         hidden_size: int = 256,
-        num_classes: int = 256, 
+        num_classes: int = 256,
         layer_norm: bool = False,
         **lstm_kwargs,
     ):
@@ -88,14 +97,14 @@ class LSTM(BaseModel):
         )  # (B, T, E)->(B, T, H)
 
         # transform to (B, H, T)
-        self.linear_out = OutConv(input_dim=hidden_size, output_dim=input_size, num_classes=num_classes)
+        self.linear_out = OutConv(
+            input_dim=hidden_size, output_dim=input_size, num_classes=num_classes
+        )
         # (B, H, T) -> (B, C, T)
 
         # Transform to (B, T, C) and calc. loss
 
-    def _get_target(
-        self, x: TensorType["B", "T", "S"]
-    ) -> TensorType["B", "T", "S"]:
+    def _get_target(self, x: TensorType["B", "T", "S"]) -> TensorType["B", "T", "S"]:
         target = (x.clone().detach() + 1) / 2  # Transform [-1, 1] to [0, 1]
         # quantize
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
@@ -115,10 +124,10 @@ class LSTM(BaseModel):
         # X should be 0 padded along 1st dimension, so pad the last dimension
         # targets = x.clone().detach()  # B, T, S
         targets = self._get_target(x)
-        x = nn.functional.pad(x, (0, 0, 1, -1)) # last dim no pad, 2nd to last 1 / -1
+        x = nn.functional.pad(x, (0, 0, 1, -1))  # last dim no pad, 2nd to last 1 / -1
         x = torch.movedim(x, 1, 0)  # T, B, S
         # LSTM expects (T, B, S)
-        
+
         x, (_h, _c) = self.lstm(x)  # (T, B, H)
         x = torch.movedim(x, 0, 2)  # (B, T, H)
         # x = torch.movedim(x, 1, 2)
@@ -126,7 +135,9 @@ class LSTM(BaseModel):
         preds = self.linear_out(x)  # B, T, C
         # print(preds.shape)
         categorical = D.Categorical(logits=preds)
-        loss, ll = self.compute_loss(target=targets, x_sl=x_sl, output=torch.movedim(preds, 3, 1))
+        loss, ll = self.compute_loss(
+            target=targets, x_sl=x_sl, output=torch.movedim(preds, 3, 1)
+        )
 
         # preds, loss = self.reconstruct(x=x, x_sl=x_sl)
 
@@ -140,7 +151,6 @@ class LSTM(BaseModel):
             loss=loss, ll=ll, logits=preds, categorical=categorical, target=targets
         )
         return loss, metrics, output
-
 
     def compute_loss(
         self,
