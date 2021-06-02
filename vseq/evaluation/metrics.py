@@ -1,3 +1,4 @@
+from functools import reduce
 import math
 
 from copy import deepcopy
@@ -5,14 +6,14 @@ from typing import List, Optional, Set, Union
 
 import torch
 
-from vseq.utils.operations import detach
+from vseq.utils.operations import detach, detach_to_device
 
 
 class Metric:
     base_tags = set()
     _str_value_fmt = "<.3"
 
-    def __init__(self, name: str, tags: set):
+    def __init__(self, name: str, tags: Set[str] = None):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
 
@@ -48,31 +49,42 @@ def max_value(metrics: List[Metric]):
     return max(metrics, key=lambda m: m.value)
 
 
-class AccuracyMetric(Metric):
-    _str_value_fmt = "6.4"  # 6.4321
-    get_best = max_value
+class LatestMeanMetric(Metric):
+    _str_value_fmt = "<.3"
 
     def __init__(
         self,
-        predictions: Union[torch.Tensor, float],
-        labels: Union[torch.Tensor, float],
-        name: str = "accuracy",
+        values: Union[torch.Tensor, float],
+        name: str,
         tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
     ):
-        """Standard classification accuracy"""
+        """Create a latest mean metric that maintains the latest mean when updated.
+
+        Args:
+            values (Union[torch.Tensor, float]): Values of the metric
+            name (str): Name of the metric
+            tags (Set[str]): Tags to use for grouping with other metrics.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
+        """
         super().__init__(name, tags)
-        predictions = detach(predictions)
-        labels = detach(labels)
-        self.correct = (predictions == labels).sum().item()
-        self.total = labels.size(0)
+
+        values = detach(values)
+        reduce_by = detach(reduce_by)
+
+        numel = values.numel() if isinstance(values, torch.Tensor) else 1
+        value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
+
+        reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
+
+        self._value = value / reduce_by
 
     @property
     def value(self):
-        return self.correct / self.total
+        return self._value
 
     def update(self, metric: Metric):
-        self.correct += metric.correct
-        self.total += metric.total
+        self._value = metric.value
 
 
 class RunningMeanMetric(Metric):
@@ -82,11 +94,11 @@ class RunningMeanMetric(Metric):
         self,
         values: Union[torch.Tensor, float],
         name: str,
-        tags: Set[str],
+        tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
-        """Create a running mean metric.
+        """Create a running mean metric that maintains the running mean when updated.
 
         Args:
             values (Union[torch.Tensor, float]): Values of the metric
@@ -99,7 +111,7 @@ class RunningMeanMetric(Metric):
 
         values = detach(values)
         reduce_by = detach(reduce_by)
-        reduce_by = detach(reduce_by)
+        weight_by = detach(weight_by)
 
         numel = values.numel() if isinstance(values, torch.Tensor) else 1
         value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
@@ -128,6 +140,33 @@ class RunningMeanMetric(Metric):
         self._value = self._value * w1 + metric._value * w2  # Reduce between batches (over entire epoch)
 
         self.weight_by = d
+
+
+class AccuracyMetric(Metric):
+    _str_value_fmt = "6.4"  # 6.4321
+    get_best = max_value
+
+    def __init__(
+        self,
+        predictions: Union[torch.Tensor, float],
+        labels: Union[torch.Tensor, float],
+        name: str = "accuracy",
+        tags: Set[str] = None,
+    ):
+        """Standard classification accuracy"""
+        super().__init__(name, tags)
+        predictions = detach(predictions)
+        labels = detach(labels)
+        self.correct = (predictions == labels).sum().item()
+        self.total = labels.size(0)
+
+    @property
+    def value(self):
+        return self.correct / self.total
+
+    def update(self, metric: Metric):
+        self.correct += metric.correct
+        self.total += metric.total
 
 
 class LossMetric(RunningMeanMetric):

@@ -1,21 +1,20 @@
+import math
+
 from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.utils
 import torch.utils.data
 
 from torchtyping import TensorType
 
+from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric, LatestMeanMetric
 from vseq.models import BaseModel
+from vseq.modules.convenience import AddConstant
 from vseq.utils.operations import sequence_mask
-from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
-
-
-"""implementation of the Variational Recurrent
-Neural Network (VRNN) from https://arxiv.org/abs/1506.02216
-using unimodal isotropic gaussian distributions for 
-inference, prior, and generating models."""
+from vseq.utils.variational import discount_free_nats
 
 
 # TODO Output distribution Likelihood Module
@@ -23,7 +22,20 @@ inference, prior, and generating models."""
 
 
 class VRNN(nn.Module):
-    def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int, bias: bool = True):
+    def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int):
+        """Variational Recurrent Neural Network (VRNN) from [1].
+        
+        Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
+
+        Args:
+            x_dim (int): Input space size
+            h_dim (int): Hidden space (GRU) size
+            z_dim (int): Stochastic latent variable size
+            o_dim (int): Output space size
+            bias (bool, optional): [description]. Defaults to True.
+
+        [1] https://arxiv.org/abs/1506.02216
+        """
         super(VRNN, self).__init__()
 
         self.x_dim = x_dim
@@ -32,28 +44,70 @@ class VRNN(nn.Module):
         self.o_dim = o_dim
 
         # feature-extracting transformations
-        self.phi_x = nn.Sequential(nn.Linear(x_dim, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim), nn.ReLU())
-        self.phi_z = nn.Sequential(nn.Linear(z_dim, h_dim), nn.ReLU())
+        self.phi_x = nn.Sequential(
+            nn.Linear(x_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
+        self.phi_z = nn.Sequential(
+            nn.Linear(z_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
 
         # encoder
-        self.enc = nn.Sequential(nn.Linear(2 * h_dim, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim), nn.ReLU())
+        self.enc = nn.Sequential(
+            nn.Linear(2 * h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
         self.enc_mean = nn.Linear(h_dim, z_dim)
-        self.enc_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus())
+        self.enc_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
 
         # prior
-        self.prior = nn.Sequential(nn.Linear(h_dim, h_dim), nn.ReLU())
+        self.prior = nn.Sequential(
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
         self.prior_mean = nn.Linear(h_dim, z_dim)
-        self.prior_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus())
+        self.prior_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
 
         # decoder
-        self.dec = nn.Sequential(nn.Linear(2 * h_dim, h_dim), nn.ReLU(), nn.Linear(h_dim, h_dim), nn.ReLU())
+        self.dec = nn.Sequential(
+            nn.Linear(2 * h_dim, h_dim),  # nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
         self.dec_logits = nn.Linear(h_dim, o_dim)
-        # self.dec_std = nn.Sequential(nn.Linear(h_dim, x_dim), nn.Softplus())
-        # self.dec_mean = nn.Linear(h_dim, x_dim)
-        # self.dec_mean = nn.Sequential(nn.Linear(h_dim, x_dim), nn.Sigmoid())
 
         # recurrence
-        self.gru_cell = nn.GRUCell(2 * h_dim, h_dim, bias=bias)
+        self.gru_cell = nn.GRUCell(2 * h_dim, h_dim)
+        # self.gru_cell = nn.GRUCell(h_dim, h_dim)
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        init.orthogonal_(self.gru_cell.weight_hh)
 
     def forward(self, x):
 
@@ -85,15 +139,13 @@ class VRNN(nn.Module):
             phi_z_t = self.phi_z(z_t)
 
             # decoder p(x|z)
-            dec_t = self.dec(torch.cat([phi_z_t, h], 1))
+            dec_t = self.dec(torch.cat([phi_z_t, h], 1))  # dec_t = self.dec(phi_z_t)
             dec_logits_t = self.dec_logits(dec_t)
-            # dec_mean_t = self.dec_mean(dec_t)
-            # dec_std_t = self.dec_std(dec_t)
 
-            # gru cell
+            # gru cell (teacher forced by conditioning on phi_x[t])
             # input of shape (batch, input_size)
             # hidden of shape (batch, hidden_size)
-            h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)
+            h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)  # h = self.gru_cell(phi_z_t, h)
 
             # computing losses
             kld_t = self._kld_gauss(enc_mean_t, enc_std_t, prior_mean_t, prior_std_t)
@@ -110,6 +162,8 @@ class VRNN(nn.Module):
         q_z_x = torch.distributions.Normal(torch.stack(all_enc_mean), torch.stack(all_enc_std))
         p_z = torch.distributions.Normal(torch.stack(all_prior_mean), torch.stack(all_prior_std))
         kld = torch.stack(all_kld)
+        # kld = kld.detach()
+        # kld = kld * 0
         z = torch.stack(all_enc_z)
         return z, o_logits, q_z_x, p_z, kld
 
@@ -149,11 +203,8 @@ class VRNN(nn.Module):
         return torch.randn_like(std).mul(std).add_(mean)
 
     def _kld_gauss(self, mean_1, std_1, mean_2, std_2):
-        """Using std to compute KLD"""
-        kld_element = (
-            2 * torch.log(std_2) - 2 * torch.log(std_1) + (std_1.pow(2) + (mean_1 - mean_2).pow(2)) / std_2.pow(2) - 1
-        )
-        return 0.5 * kld_element
+        """Compute element-wise KL divergence between two Gaussians"""
+        return std_2.log() - std_1.log() + (std_1.pow(2) + (mean_1 - mean_2).pow(2)) / (2 * std_2.pow(2)) - 0.5
 
 
 class VRNNLM(BaseModel):
@@ -188,15 +239,17 @@ class VRNNLM(BaseModel):
         kl_twise: TensorType["B", "T", "latent_size"],
         x_sl: TensorType["B", int],
         beta: float = 1,
+        free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
+        kl_twise = discount_free_nats(kl_twise, free_nats, -1)
         kl = kl_twise.sum((1, 2))  # (B,)
-        log_prob = log_prob_twise.sum(1)  # (B,)
+        log_prob = log_prob_twise.flatten(start_dim=1).sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
         return loss, elbo, log_prob, kl
 
-    def forward(self, x: TensorType["B", "T", int], x_sl: TensorType["B", int], beta: float = 1):
+    def forward(self, x: TensorType["B", "T", int], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0):
         # Prepare inputs (x) and targets (y)
         y = x[:, 1:].clone().detach()  # Remove start token and form target
         x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
@@ -209,7 +262,9 @@ class VRNNLM(BaseModel):
         p_x_z = torch.distributions.Categorical(logits=o_logits)
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_x_z.logits.device)
         log_prob_twise = p_x_z.log_prob(y) * seq_mask
-        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta)
+        loss, elbo, log_prob, kl = self.compute_elbo(
+            log_prob_twise, kl_twise, x_sl=x_sl, beta=beta, free_nats=free_nats
+        )
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -218,6 +273,8 @@ class VRNNLM(BaseModel):
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             PerplexityMetric(elbo, reduce_by=x_sl),
+            LatestMeanMetric(beta, name="beta"),
+            LatestMeanMetric(free_nats, name="free_nats")
         ]
 
         outputs = SimpleNamespace(
@@ -233,7 +290,7 @@ class VRNNLM(BaseModel):
         return loss, metrics, outputs
 
 
-class VRNNMIDI(BaseModel):
+class VRNN2D(BaseModel):
     def __init__(
         self,
         input_size: int = 88,
@@ -258,15 +315,17 @@ class VRNNMIDI(BaseModel):
         kl_twise: TensorType["B", "T", "latent_size"],
         x_sl: TensorType["B", int],
         beta: float = 1,
+        free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
+        kl_twise = discount_free_nats(kl_twise, free_nats, -1)
         kl = kl_twise.sum((1, 2))  # (B,)
-        log_prob = log_prob_twise.sum((1, 2))  # (B,)
+        log_prob = log_prob_twise.flatten(start_dim=1).sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
         return loss, elbo, log_prob, kl
 
-    def forward(self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1):
+    def forward(self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0):
         # Prepare inputs (x) and targets (y)
         y = x[:, 1:].clone().detach()  # Remove start token and form target
         x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
@@ -274,11 +333,10 @@ class VRNNMIDI(BaseModel):
         z, o_logits, q_z_x, p_z, kl_twise = self.vrnn(x)
 
         # Compute loss
-        # import IPython; IPython.embed()
         p_x_z = torch.distributions.Bernoulli(logits=o_logits)
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_x_z.logits.device)
         log_prob_twise = p_x_z.log_prob(y) * seq_mask.unsqueeze(-1)
-        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta)
+        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta, free_nats=free_nats)
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -287,6 +345,8 @@ class VRNNMIDI(BaseModel):
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             PerplexityMetric(elbo, reduce_by=x_sl),
+            LatestMeanMetric(beta, name="beta"),
+            LatestMeanMetric(free_nats, name="free_nats")
         ]
 
         outputs = SimpleNamespace(
