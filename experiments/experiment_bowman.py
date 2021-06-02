@@ -154,14 +154,13 @@ for epoch in tracker.epochs(args.epochs):
     for b, ((x, x_sl), metadata) in enumerate(tracker(train_loader)):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
+        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step())
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         tracker.update(metrics)
-        beta_annealer.step()
 
     model.eval()
     with torch.no_grad():
