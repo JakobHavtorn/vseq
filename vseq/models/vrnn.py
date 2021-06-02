@@ -109,18 +109,21 @@ class VRNN(nn.Module):
     def reset_parameters(self) -> None:
         init.orthogonal_(self.gru_cell.weight_hh)
 
-    def forward(self, x):
-
+    def forward(self, x: TensorType["B", "T", "x_dim"]):
+        
         all_enc_mean, all_enc_std, all_enc_z = [], [], []
         all_prior_mean, all_prior_std = [], []
         all_dec_logits = []
         all_kld = []
 
+        batch_size, timesteps = x.size(0), x.size(1)
+
         # x features
         phi_x = self.phi_x(x)
+        phi_x = phi_x.unbind(1)
 
-        h = torch.zeros(x.size(1), self.h_dim, device=x.device)
-        for t in range(x.size(0)):
+        h = torch.zeros(batch_size, self.h_dim, device=x.device)
+        for t in range(timesteps):
 
             # prior p(z)
             prior_t = self.prior(h)
@@ -128,6 +131,7 @@ class VRNN(nn.Module):
             prior_std_t = self.prior_std(prior_t)
 
             # encoder q(z|x)
+            # NOTE Should we use the same phi_x[t] in these two places?
             enc_t = self.enc(torch.cat([phi_x[t], h], 1))
             enc_mean_t = self.enc_mean(enc_t)
             enc_std_t = self.enc_std(enc_t)
@@ -145,6 +149,7 @@ class VRNN(nn.Module):
             # gru cell (teacher forced by conditioning on phi_x[t])
             # input of shape (batch, input_size)
             # hidden of shape (batch, hidden_size)
+            # NOTE Should we use the same phi_x[t] in these two places?
             h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)  # h = self.gru_cell(phi_z_t, h)
 
             # computing losses
@@ -158,13 +163,13 @@ class VRNN(nn.Module):
             all_enc_z.append(z_t)
             all_dec_logits.append(dec_logits_t)
 
-        o_logits = torch.stack(all_dec_logits)
-        q_z_x = torch.distributions.Normal(torch.stack(all_enc_mean), torch.stack(all_enc_std))
-        p_z = torch.distributions.Normal(torch.stack(all_prior_mean), torch.stack(all_prior_std))
-        kld = torch.stack(all_kld)
-        # kld = kld.detach()
-        # kld = kld * 0
-        z = torch.stack(all_enc_z)
+        o_logits = torch.stack(all_dec_logits, dim=1)
+        q_z_x = torch.distributions.Normal(torch.stack(all_enc_mean, dim=1), torch.stack(all_enc_std, dim=1))
+        p_z = torch.distributions.Normal(torch.stack(all_prior_mean, dim=1), torch.stack(all_prior_std, dim=1))
+        kld = torch.stack(all_kld, dim=1)
+        kld = kld.detach()
+        kld = kld * 0
+        z = torch.stack(all_enc_z, dim=1)
         return z, o_logits, q_z_x, p_z, kld
 
     def generate(self, n_samples: int = 1, t_max: int = 100, use_mode: bool = False):
@@ -222,6 +227,8 @@ class VRNNLM(BaseModel):
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+
+        # NOTE the phi_x feature extraction could be variable, i.e. Embedding here and Sequential NN for VRNN2D
 
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings

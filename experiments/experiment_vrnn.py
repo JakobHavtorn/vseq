@@ -37,7 +37,7 @@ parser.add_argument("--latent_size", default=128, type=int, help="dimensionality
 parser.add_argument("--dropout", default=0.0, type=float, help="inter GRU layer dropout probability")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
-parser.add_argument("--free_nats_steps", default=5000, type=int, help="number of steps to constant/anneal free bits")
+parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
 parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
