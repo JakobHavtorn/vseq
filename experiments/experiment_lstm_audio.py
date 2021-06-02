@@ -29,15 +29,51 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=4, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
+parser.add_argument(
+    "--num_hidden",
+    default=64,
+    type=int,
+    help="number of hidden units in LSTM",
+)
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
-parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
-parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
-parser.add_argument("--wandb_group", default="lstm_audio", type=str, help="custom group for this experiment (optional)")
-parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
+parser.add_argument(
+    "--cache_dataset",
+    default=False,
+    type=str2bool,
+    help="if True, cache the dataset in RAM",
+)
+parser.add_argument(
+    "--num_workers", default=8, type=int, help="number of dataloader workers"
+)
+parser.add_argument(
+    "--wandb_group",
+    default="lstm_audio",
+    type=str,
+    help="custom group for this experiment (optional)",
+)
+parser.add_argument(
+    "--seed",
+    default=None,
+    type=int,
+    help="seed for random number generators. Random if -1.",
+)
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
-parser.add_argument("--save_freq", default=10, type=int, help="number of epochs to go between saves")
-parser.add_argument("--delete_last_model", default=False, type=str2bool, help="if True, delete the last model saved")
+parser.add_argument(
+    "--save_freq", default=10, type=int, help="number of epochs to go between saves"
+)
+parser.add_argument(
+    "--delete_last_model",
+    default=False,
+    type=str2bool,
+    help="if True, delete the last model saved",
+)
+parser.add_argument(
+    "--input_coding",
+    default="stack",
+    type=str,
+    choices=["mu_law", "frames", "mel", "stack"],
+    help="how to encode the input",
+)
 
 args, _ = parser.parse_known_args()
 
@@ -48,9 +84,7 @@ set_seed(args.seed)
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
-
-
-model_name_str = f"lstm_audio-{args.res_channels}"
+model_name_str = f"lstm_audio-{args.num_hidden}"
 print(f"Initializing model with name: {model_name_str}")
 
 wandb.init(
@@ -62,26 +96,27 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-# if args.input_coding == "mu_law":
-#     data_transform = Compose(
-#         RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8)
-#     )
-#     batcher= AudioBatcher
-# elif args.input_coding == "frames":
-#     data_transform = Compose(RandomSegment(length=16000))
-#     batcher = AudioBatcher
-# elif any(_s in args.input_coding for _s in ["mel", "spec"]):
-if True: # yes hacky more hacky
-    data_transform = Compose(
-        RandomSegment(length=16000), MelSpectrogram(n_mels = 80)
-        )
-    # reverse_transform = Compose(
-    #     InverseMelScale(), GriffinLim()
-    # )
+_transforms = [
+RandomSegment(length=16000) # (B, 16000)
+]
+
+if args.input_coding == "mu_law":
+    _transforms.extend((MuLawEncode(), Quantize(bits=8)))
+    batcher= AudioBatcher
+elif args.input_coding == "frames":
+    batcher = AudioBatcher
+elif args.input_coding == "mel":
+    _transforms.append(MelSpectrogram(n_mels=80))
+    batcher = SpectrogramBatcher
+elif args.input_coding == "stack":
+    _transforms.extend([
+        # Scale(min_val=-2**8, max_val=2**8), 
+        torch.nn.Unflatten(0, (int(16000/80), 80)) # (B, T) -> (B, T/S, S) # S is pseudo-spectrogram dim  
+    ])
     batcher = SpectrogramBatcher
 
-
-
+data_transform = Compose(*_transforms)
+rich.print(data_transform)
 modalities = [
     (AudioLoader("flac"), data_transform, batcher()),
 ]
@@ -93,7 +128,7 @@ train_dataset = BaseDataset(
 )
 val_dataset = BaseDataset(
     source=LIBRISPEECH_DEV_CLEAN,
-    modalities=modalities, 
+    modalities=modalities,
     sort=False,
 )
 
@@ -115,7 +150,7 @@ val_loader = DataLoader(
 )
 
 
-model = LSTM()
+model = LSTM(input_size=80, hidden_size=args.num_hidden, num_classes=256)
 
 model = model.to(device)
 print(model)
@@ -134,6 +169,7 @@ for epoch in tracker.epochs(args.epochs):
 
     model.train()
     for (x, x_sl), metadata in tracker.steps(train_loader):
+
         x = x.to(device)
 
         loss, metrics, output = model(x, x_sl)
@@ -167,7 +203,9 @@ for epoch in tracker.epochs(args.epochs):
         #         encoding="ULAW",
         #     )
     if epoch != 0 and epoch % args.save_freq == 0:  # epoch 10, 20, ...
-        if args.delete_last_model and os.path.exists(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}"):
-            # delete past model 
+        if args.delete_last_model and os.path.exists(
+            f"./models/{model_name_str}-epoch-{epoch-args.save_freq}"
+        ):
+            # delete past model
             os.removedirs(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}")
         model.save(f"./models/{model_name_str}-epoch-{epoch}")

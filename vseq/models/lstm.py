@@ -12,115 +12,159 @@ from torchtyping import TensorType
 try:
     from haste_pytorch import LayerNormLSTM
 except ModuleNotFoundError:
-    print("Module `haste_pytorch` not installed preventing use of LayerNormalized LSTM cells")
+    print(
+        "Module `haste_pytorch` not installed preventing use of LayerNormalized LSTM cells"
+    )
 
 from vseq.evaluation import Metric, LLMetric, PerplexityMetric, BitsPerDimMetric
 from vseq.evaluation.metrics import LossMetric
 from vseq.utils.operations import sequence_mask
 
+
 from .base_model import BaseModel
+
+
+class OutConv(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, num_classes: int):
+        super().__init__()
+        self.num_classes = num_classes
+        self.output_dim = output_dim
+        self.input_dim = input_dim
+
+        self.relu0 = nn.ReLU()
+        self.conv1 = torch.nn.Conv1d(input_dim, output_dim * num_classes, kernel_size=1)
+        self.relu1 = torch.nn.ReLU()
+        self.conv2 = torch.nn.Conv1d(
+            output_dim * num_classes, output_dim * num_classes, kernel_size=1
+        )
+        self.reshape = torch.nn.Unflatten(2, (output_dim, num_classes))
+        self.log_softmax = torch.nn.LogSoftmax(dim=-1)
+
+    def forward(self, x):
+        x = self.relu0(x)
+        x = self.conv1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = torch.movedim(x, 1,2)
+        x = self.reshape(x)
+        
+        return self.log_softmax(x)
 
 
 class LSTM(BaseModel):
     def __init__(
         self,
-        # num_embeddings: int,
-        embedding_dim: int = 80,
+        input_size: int = 80,
         hidden_size: int = 256,
-        num_layers: int = 1,
+        num_classes: int = 256, 
         layer_norm: bool = False,
         **lstm_kwargs,
     ):
         """Simple LSTM-based with multiple LSTM layers. Copied from LSTMLM for maximum fast dev.
 
         Args:
-            # num_embeddings (int): Number of input tokens.
-            embedding_dim (int, optional): Dimensionality of the embedding space. Defaults to 80 for mel spec.
+            input_size (int, optional): Dimensionality of the input space. Defaults to 80 for mel spec.
             hidden_size (int, optional): Dimensionality of the hidden space (LSTM gates).
-            num_layers (int, optional): Number of LSTM layers. Defaults to 1 (c.f. Bowman)
         """
         super().__init__()
 
-        # self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
+        self.input_size = input_size
         self.hidden_size = hidden_size
-        self.num_layers = num_layers
         self.layer_norm = layer_norm
         self.lstm_kwargs = lstm_kwargs
+        self.num_classes = num_classes
 
-        self._loss = nn.MSELoss()
+        self.nll_criterion = torch.nn.NLLLoss(reduction="none")
 
-        # self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
+        # self._loss = nn.MSELoss()
 
         rnn_layer = LayerNormLSTM if layer_norm else nn.LSTM
 
         self.lstm = rnn_layer(
-            input_size=embedding_dim,
+            input_size=input_size,
             hidden_size=hidden_size,
             batch_first=False,
-            **lstm_kwargs
-        ) # (B, T, E)->(B, T, H)
+            **lstm_kwargs,
+        )  # (B, T, E)->(B, T, H)
 
-        # transform to (B, C, T)
+        # transform to (B, H, T)
+        self.linear_out = OutConv(input_dim=hidden_size, output_dim=input_size, num_classes=num_classes)
+        # (B, H, T) -> (B, C, T)
 
-        self.output = nn.Linear(hidden_size, embedding_dim) # (B, C, T) -> (B, E, T)
+        # Transform to (B, T, C) and calc. loss
 
-        # Transform to (B, T, E)
-
-
-        # TODO WordDropout as module
-
-    def reconstruct(self, x: TensorType["B", "C", "T", float], x_sl: TensorType["B", int]):
-        """
-        Computes log-likelihood for x. Set the word_dropout to 0 as default to make training easy.
-        """
-        # Prepare inputs (x) and targets (y)
-        # X should be 0 padded along 1st dimension
-        targets = x.clone().detach()   # B, C, T
-        x = nn.functional.pad(x, (1, -1))
-        
-        x = torch.movedim(x, 2, 0) # T,B,C
-
-        # Compute log probs for p(x|z)
-        # h, _ = self.lstm(x)
-        # LSTM expects (T, B, C)
-        x, (_h,_c) = self.lstm(x) #  (T, B, H)
-
-        x = torch.movedim(x, 0, 1) # (B, T, H)
-
-        # Define output distribution
-        preds = self.output(x) # B, T, C
-        preds = torch.movedim(preds, 1, 2)
-        seq_mask = sequence_mask(x_sl - 1, dtype=float, device=preds.device)
-        mse = self._loss(preds, targets) * seq_mask
-        # p_x = D.Categorical(logits=p_logits)
-        # log_prob = p_x.log_prob(y) * seq_mask
-        # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB
-
-        return preds, mse
+    def _get_target(
+        self, x: TensorType["B", "T", "S"]
+    ) -> TensorType["B", "T", "S"]:
+        target = (x.clone().detach() + 1) / 2  # Transform [-1, 1] to [0, 1]
+        # quantize
+        target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
+        target = target * (self.num_classes - 1)  # Transform [0, 1] to [0, 255]
+        target = target.floor().to(
+            torch.long
+        )  # To integer (floor because of added noise for dequantization)
+        return target
 
     def forward(
-        self, x: TensorType["B", "C", "T", float], x_sl: TensorType["B", int], 
-        ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
+        self,
+        x: TensorType["B", "T", "C", float],
+        x_sl: TensorType["B", int],
+    ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Autoregressively predict next step of input x of shape (B, T)"""
+        # Prepare inputs (x) and targets (y)
+        # X should be 0 padded along 1st dimension, so pad the last dimension
+        # targets = x.clone().detach()  # B, T, S
+        targets = self._get_target(x)
+        x = nn.functional.pad(x, (0, 0, 1, -1)) # last dim no pad, 2nd to last 1 / -1
+        x = torch.movedim(x, 1, 0)  # T, B, S
+        # LSTM expects (T, B, S)
+        
+        x, (_h, _c) = self.lstm(x)  # (T, B, H)
+        x = torch.movedim(x, 0, 2)  # (B, T, H)
+        # x = torch.movedim(x, 1, 2)
 
-        # TODO: finish doing this 
+        preds = self.linear_out(x)  # B, T, C
+        # print(preds.shape)
+        categorical = D.Categorical(logits=preds)
+        loss, ll = self.compute_loss(target=targets, x_sl=x_sl, output=torch.movedim(preds, 3, 1))
 
-        preds, loss = self.reconstruct(x=x, x_sl=x_sl)
+        # preds, loss = self.reconstruct(x=x, x_sl=x_sl)
 
         metrics = [
-            LossMetric(loss)#, weight_by=log_prob.numel()),
-            # LLMetric(log_prob),
-            # BitsPerDimMetric(log_prob, reduce_by=x_sl - 1),
-            # PerplexityMetric(log_prob, reduce_by=x_sl - 1)
+            LossMetric(loss, weight_by=ll.numel()),
+            LLMetric(ll),
+            BitsPerDimMetric(ll, reduce_by=x_sl),
         ]
 
-        outputs = SimpleNamespace(
-            loss=loss,
-            # ll=log_prob,
-            # p_x=p_x  # NOTE Save 700 MB by not returning p_x
+        output = SimpleNamespace(
+            loss=loss, ll=ll, logits=preds, categorical=categorical, target=targets
         )
-        return loss, metrics, outputs
+        return loss, metrics, output
+
+
+    def compute_loss(
+        self,
+        target: TensorType["B", "T", int],
+        x_sl: TensorType["B", int],
+        output: TensorType["B", "T", "C", float],
+    ):
+        """Compute the loss as negative log-likelihood per frame, masked and mormalized according to sequence lengths.
+
+        Args:
+            target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) of quantized integers.
+            x_sl (torch.LongTensor): Sequence lengths of examples in the batch.
+            output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
+        """
+        nll = self.nll_criterion(output, target)
+        mask = sequence_mask(x_sl, device=nll.device, max_len=target.size(1))
+        mask = torch.unsqueeze(mask, dim=-1)
+        # print("TARGET:  ", target.shape)
+        # print("NLL:     ", nll.shape)
+        # print("MASK:    ", mask.shape)
+        nll *= mask
+        nll = nll.sum(1)  # sum T
+        loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
+        return loss, -nll
 
     def generate(self, n_samples: int = 1, t_max: int = 100, use_mode: bool = False):
         """
@@ -145,13 +189,15 @@ class LSTM(BaseModel):
             x_t = p.logits.argmax(dim=-1) if use_mode else p.sample()
             log_prob_t = p.log_prob(x_t)
 
-            # Update outputs
+            # Update preds
             x.append(x_t)
             log_prob.append(log_prob_t)
 
             # Update sequence length
             x_sl += seq_active
-            seq_ending = (x_t[0].cpu() == self.delimiter_token_idx).to(int)  # TODO move to cpu once at end instead
+            seq_ending = (x_t[0].cpu() == self.delimiter_token_idx).to(
+                int
+            )  # TODO move to cpu once at end instead
             seq_active *= 1 - seq_ending
 
             # Update loop conditions
