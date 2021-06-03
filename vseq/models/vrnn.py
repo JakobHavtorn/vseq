@@ -167,8 +167,8 @@ class VRNN(nn.Module):
         q_z_x = torch.distributions.Normal(torch.stack(all_enc_mean, dim=1), torch.stack(all_enc_std, dim=1))
         p_z = torch.distributions.Normal(torch.stack(all_prior_mean, dim=1), torch.stack(all_prior_std, dim=1))
         kld = torch.stack(all_kld, dim=1)
-        kld = kld.detach()
-        kld = kld * 0
+        # kld = kld.detach()
+        # kld = kld * 0
         z = torch.stack(all_enc_z, dim=1)
         return z, o_logits, q_z_x, p_z, kld
 
@@ -258,8 +258,7 @@ class VRNNLM(BaseModel):
 
     def forward(self, x: TensorType["B", "T", int], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0):
         # Prepare inputs (x) and targets (y)
-        y = x[:, 1:].clone().detach()  # Remove start token and form target
-        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+        y = x.clone().detach()  # Form target
 
         e = self.embedding(x)  # (B, T, D)
 
@@ -334,8 +333,7 @@ class VRNN2D(BaseModel):
 
     def forward(self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0):
         # Prepare inputs (x) and targets (y)
-        y = x[:, 1:].clone().detach()  # Remove start token and form target
-        x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
+        y = x.clone().detach()  # Form target
 
         z, o_logits, q_z_x, p_z, kl_twise = self.vrnn(x)
 
