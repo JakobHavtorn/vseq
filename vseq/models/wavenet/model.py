@@ -150,7 +150,12 @@ class WaveNet(BaseModel):
         else:
             target = x.clone()
             x = self.embedding(x)  # (B, T, C)
+        
         x = x.transpose(1, 2)  # (B, C, T)
+
+        # Add this to allow for returning x
+        x.requires_grad_(True)
+        x.retain_grad()
 
         self.check_input_size(x)
 
@@ -169,7 +174,7 @@ class WaveNet(BaseModel):
             BitsPerDimMetric(ll, reduce_by=x_sl),
         ]
         output = SimpleNamespace(
-            loss=loss, ll=ll, logits=output, categorical=categorical, target=target
+            loss=loss, ll=ll, logits=output, categorical=categorical, target=target, x=x
         )
         return loss, metrics, output
 

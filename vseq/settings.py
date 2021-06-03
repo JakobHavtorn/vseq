@@ -1,10 +1,11 @@
 """Settings file for vseq package"""
 
 import os
+from pathlib import Path
 import logging
 
 
-ROOT_PATH = __file__.removesuffix("/vseq/settings.py")
+ROOT_PATH = str(Path(__file__).parent.parent)#.removesuffix("/vseq/settings.py")
 ENV_FILE = os.path.join(ROOT_PATH, "VSEQ.env")
 
 def read_env_file():
