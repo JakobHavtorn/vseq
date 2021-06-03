@@ -5,8 +5,6 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-import torch.utils
-import torch.utils.data
 
 from torchtyping import TensorType
 
@@ -17,14 +15,10 @@ from vseq.utils.operations import sequence_mask
 from vseq.utils.variational import discount_free_nats
 
 
-# TODO Output distribution Likelihood Module
-# TODO Latent space Stochastic Module
-
-
 class VRNN(nn.Module):
     def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int):
         """Variational Recurrent Neural Network (VRNN) from [1].
-        
+
         Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
 
         Args:
@@ -32,11 +26,10 @@ class VRNN(nn.Module):
             h_dim (int): Hidden space (GRU) size
             z_dim (int): Stochastic latent variable size
             o_dim (int): Output space size
-            bias (bool, optional): [description]. Defaults to True.
 
         [1] https://arxiv.org/abs/1506.02216
         """
-        super(VRNN, self).__init__()
+        super().__init__()
 
         self.x_dim = x_dim
         self.h_dim = h_dim
@@ -74,8 +67,8 @@ class VRNN(nn.Module):
             nn.Linear(h_dim, h_dim),
             nn.ReLU(),
         )
-        self.enc_mean = nn.Linear(h_dim, z_dim)
-        self.enc_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
+        self.enc_mu = nn.Linear(h_dim, z_dim)
+        self.enc_sd = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
 
         # prior
         self.prior = nn.Sequential(
@@ -86,8 +79,8 @@ class VRNN(nn.Module):
             nn.Linear(h_dim, h_dim),
             nn.ReLU(),
         )
-        self.prior_mean = nn.Linear(h_dim, z_dim)
-        self.prior_std = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
+        self.prior_mu = nn.Linear(h_dim, z_dim)
+        self.prior_sd = nn.Sequential(nn.Linear(h_dim, z_dim), nn.Softplus(beta=math.log(2)), AddConstant(1e-3))
 
         # decoder
         self.dec = nn.Sequential(
@@ -110,9 +103,9 @@ class VRNN(nn.Module):
         init.orthogonal_(self.gru_cell.weight_hh)
 
     def forward(self, x: TensorType["B", "T", "x_dim"]):
-        
-        all_enc_mean, all_enc_std, all_enc_z = [], [], []
-        all_prior_mean, all_prior_std = [], []
+
+        all_enc_mu, all_enc_sd, all_enc_z = [], [], []
+        all_prior_mu, all_prior_sd = [], []
         all_dec_logits = []
         all_kld = []
 
@@ -127,17 +120,17 @@ class VRNN(nn.Module):
 
             # prior p(z)
             prior_t = self.prior(h)
-            prior_mean_t = self.prior_mean(prior_t)
-            prior_std_t = self.prior_std(prior_t)
+            prior_mu_t = self.prior_mu(prior_t)
+            prior_sd_t = self.prior_sd(prior_t)
 
             # encoder q(z|x)
             # NOTE Should we use the same phi_x[t] in these two places?
             enc_t = self.enc(torch.cat([phi_x[t], h], 1))
-            enc_mean_t = self.enc_mean(enc_t)
-            enc_std_t = self.enc_std(enc_t)
+            enc_mu_t = self.enc_mu(enc_t)
+            enc_sd_t = self.enc_sd(enc_t)
 
             # sampling and reparameterization
-            z_t = self._reparameterized_sample(enc_mean_t, enc_std_t)
+            z_t = self._reparameterized_sample(enc_mu_t, enc_sd_t)
 
             # z features
             phi_z_t = self.phi_z(z_t)
@@ -153,19 +146,19 @@ class VRNN(nn.Module):
             h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)  # h = self.gru_cell(phi_z_t, h)
 
             # computing losses
-            kld_t = self._kld_gauss(enc_mean_t, enc_std_t, prior_mean_t, prior_std_t)
+            kld_t = self._kld_gauss(enc_mu_t, enc_sd_t, prior_mu_t, prior_sd_t)
 
-            all_prior_mean.append(prior_mean_t)
-            all_prior_std.append(prior_std_t)
+            all_prior_mu.append(prior_mu_t)
+            all_prior_sd.append(prior_sd_t)
             all_kld.append(kld_t)
-            all_enc_mean.append(enc_mean_t)
-            all_enc_std.append(enc_std_t)
+            all_enc_mu.append(enc_mu_t)
+            all_enc_sd.append(enc_sd_t)
             all_enc_z.append(z_t)
             all_dec_logits.append(dec_logits_t)
 
         o_logits = torch.stack(all_dec_logits, dim=1)
-        q_z_x = torch.distributions.Normal(torch.stack(all_enc_mean, dim=1), torch.stack(all_enc_std, dim=1))
-        p_z = torch.distributions.Normal(torch.stack(all_prior_mean, dim=1), torch.stack(all_prior_std, dim=1))
+        q_z_x = torch.distributions.Normal(torch.stack(all_enc_mu, dim=1), torch.stack(all_enc_sd, dim=1))
+        p_z = torch.distributions.Normal(torch.stack(all_prior_mu, dim=1), torch.stack(all_prior_sd, dim=1))
         kld = torch.stack(all_kld, dim=1)
         # kld = kld.detach()
         # kld = kld * 0
@@ -181,11 +174,11 @@ class VRNN(nn.Module):
 
             # prior
             prior_t = self.prior(h)
-            prior_mean_t = self.prior_mean(prior_t)
-            prior_std_t = self.prior_std(prior_t)
+            prior_mu_t = self.prior_mu(prior_t)
+            prior_sd_t = self.prior_sd(prior_t)
 
             # sampling and reparameterization
-            z_t = self._reparameterized_sample(prior_mean_t, prior_std_t)
+            z_t = self._reparameterized_sample(prior_mu_t, prior_sd_t)
             phi_z_t = self.phi_z(z_t)
 
             # decoder
@@ -203,13 +196,13 @@ class VRNN(nn.Module):
 
         return sample
 
-    def _reparameterized_sample(self, mean, std):
-        """using std to sample"""
-        return torch.randn_like(std).mul(std).add_(mean)
+    def _reparameterized_sample(self, mu, sd):
+        """using sd to sample"""
+        return torch.randn_like(sd).mul(sd).add_(mu)
 
-    def _kld_gauss(self, mean_1, std_1, mean_2, std_2):
+    def _kld_gauss(self, mu_1, sd_1, mu_2, sd_2):
         """Compute element-wise KL divergence between two Gaussians"""
-        return std_2.log() - std_1.log() + (std_1.pow(2) + (mean_1 - mean_2).pow(2)) / (2 * std_2.pow(2)) - 0.5
+        return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
 
 
 class VRNNLM(BaseModel):
@@ -280,7 +273,7 @@ class VRNNLM(BaseModel):
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             PerplexityMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
-            LatestMeanMetric(free_nats, name="free_nats")
+            LatestMeanMetric(free_nats, name="free_nats"),
         ]
 
         outputs = SimpleNamespace(
@@ -331,7 +324,9 @@ class VRNN2D(BaseModel):
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
         return loss, elbo, log_prob, kl
 
-    def forward(self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0):
+    def forward(
+        self, x: TensorType["B", "T", "input_size"], x_sl: TensorType["B", int], beta: float = 1, free_nats: float = 0
+    ):
         # Prepare inputs (x) and targets (y)
         y = x.clone().detach()  # Form target
 
@@ -341,7 +336,9 @@ class VRNN2D(BaseModel):
         p_x_z = torch.distributions.Bernoulli(logits=o_logits)
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_x_z.logits.device)
         log_prob_twise = p_x_z.log_prob(y) * seq_mask.unsqueeze(-1)
-        loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_twise, x_sl=x_sl, beta=beta, free_nats=free_nats)
+        loss, elbo, log_prob, kl = self.compute_elbo(
+            log_prob_twise, kl_twise, x_sl=x_sl, beta=beta, free_nats=free_nats
+        )
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -351,7 +348,7 @@ class VRNN2D(BaseModel):
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             PerplexityMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
-            LatestMeanMetric(free_nats, name="free_nats")
+            LatestMeanMetric(free_nats, name="free_nats"),
         ]
 
         outputs = SimpleNamespace(
