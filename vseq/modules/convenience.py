@@ -4,9 +4,8 @@ import torch.nn.functional as F
 
 
 class Permute(nn.Module):
-    """nn.Module wrapper of Tensor.permute"""
-
     def __init__(self, *dims):
+        """nn.Module wrapper of Tensor.permute"""
         super().__init__()
         self.dims = dims
 
@@ -18,9 +17,8 @@ class Permute(nn.Module):
 
 
 class View(nn.Module):
-    """nn.Module wrapper of Tensor.view"""
-
     def __init__(self, shape, n_batch_dims=1):
+        """nn.Module wrapper of Tensor.view"""
         super().__init__()
         self.shape = shape
         self.n_batch_dims = n_batch_dims
@@ -33,9 +31,8 @@ class View(nn.Module):
 
 
 class Clamp(nn.Module):
-    """nn.Module wrapper of Tensor.clamp"""
-
     def __init__(self, min=None, max=None):
+        """nn.Module wrapper of Tensor.clamp"""
         super().__init__()
         self.min = min if min is not None else -float("inf")
         self.max = max if max is not None else float("inf")
@@ -48,8 +45,8 @@ class Clamp(nn.Module):
 
 
 class Chunk(nn.Module):
-    """nn.Module wrapper of torch.chunk"""
     def __init__(self, chunks: int, dim: int = -1):
+        """nn.Module wrapper of torch.chunk"""
         super().__init__()
         self.chunks = chunks
         self.dim = dim
@@ -59,9 +56,8 @@ class Chunk(nn.Module):
 
 
 class AddConstant(nn.Module):
-    """Adds a `constant` to the input"""
-
     def __init__(self, constant):
+        """Adds a `constant` to the input"""
         super().__init__()
         self.constant = constant
 
