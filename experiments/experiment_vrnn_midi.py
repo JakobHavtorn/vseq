@@ -1,5 +1,4 @@
 import argparse
-import json
 
 import torch
 import wandb
@@ -23,13 +22,16 @@ from vseq.training.annealers import CosineAnnealer
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=16, type=int, help="batch size")
+parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
+parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
-parser.add_argument("--dropout", default=0.0, type=float, help="inter GRU layer dropout probability")
-parser.add_argument("--anneal_steps", default=5000, type=int, help="number of steps to anneal beta")
-parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
+parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
+parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
+parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
+parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
+parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -109,34 +111,38 @@ model = vseq.models.VRNN2D(
 #     hidden_size=args.hidden_size,
 # )
 
-wandb.watch(model, log="all", log_freq=len(train_loader))
-model = model.to(device)
+
 print(model)
-# x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
-# model.summary(input_data=x, x_sl=x_sl)
+x, x_sl = next(iter(train_loader))[0]
+model.summary(input_data=x, x_sl=x_sl)
+model = model.to(device)
+wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 tracker = Tracker()
 
-beta_annealer = CosineAnnealer(anneal_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
+beta_annealer = CosineAnnealer(anneal_steps=args.beta_anneal_steps, start_value=args.beta_start_value, end_value=1)
+free_nats_annealer = CosineAnnealer(
+    anneal_steps=args.free_nats_steps // 2,
+    constant_steps=args.free_nats_steps // 2,
+    start_value=args.free_nats_start_value,
+    end_value=0,
+)
 
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device)
-        # rich.print(metadata)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
+        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step(), free_nats=free_nats_annealer.step())
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         tracker.update(metrics)
-        beta_annealer.step()
 
     model.eval()
     with torch.no_grad():
@@ -154,4 +160,4 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    tracker.log(beta=beta_annealer.value)
+    tracker.log()
