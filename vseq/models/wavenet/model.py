@@ -31,13 +31,13 @@ class WaveNet(BaseModel):
         self,
         in_channels: int = 256,
         out_classes: int = 256,
-        layer_size: int = 10,
-        stack_size: int = 5,
+        n_layers: int = 10,
+        n_stacks: int = 5,
         res_channels: int = 512,
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
-        The total number of residual blocks (layers) used is equal to the layer_size times the stack_size.
+        The total number of residual blocks (layers) used is equal to the n_layers times the n_stacks.
         This is `k` in Figure 4 in the paper.
 
         An illustration of the model:
@@ -54,8 +54,8 @@ class WaveNet(BaseModel):
         Args:
             in_channels (int): Number of channels in the input data.
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
-            layer_size (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
-            stack_size (int): Number of stacks of residual blocks with skip connections to the output.
+            n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
+            n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
             res_channels (int): Number of channels in residual blocks (and embedding if in_channels > 1).
 
         Reference:
@@ -63,13 +63,13 @@ class WaveNet(BaseModel):
         """
         super().__init__()
 
-        self.layer_size = layer_size
-        self.stack_size = stack_size
+        self.n_layers = n_layers
+        self.n_stacks = n_stacks
         self.in_channels = in_channels
         self.res_channels = res_channels
         self.out_classes = out_classes
 
-        self.receptive_field = self.compute_receptive_field(layer_size, stack_size)
+        self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
         if in_channels > 1:
             self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
@@ -78,16 +78,16 @@ class WaveNet(BaseModel):
             self.embedding = None
             self.causal = CausalConv1d(in_channels, res_channels, receptive_field=self.receptive_field)
 
-        self.res_stack = ResidualStack(layer_size=layer_size, stack_size=stack_size, res_channels=res_channels)
+        self.res_stack = ResidualStack(n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels)
 
         self.out_convs = OutConv1d(res_channels, out_classes)
 
         self.nll_criterion = torch.nn.NLLLoss(reduction="none")
 
     @staticmethod
-    def compute_receptive_field(layer_size: int, stack_size: int):
+    def compute_receptive_field(n_layers: int, n_stacks: int):
         """Compute and return the receptive field of a WaveNet model"""
-        layers = [2 ** i for i in range(0, layer_size)] * stack_size
+        layers = [2 ** i for i in range(0, n_layers)] * n_stacks
         receptive_field = np.sum(layers)
         receptive_field = receptive_field + 2  # Plus two for causal conv
         return int(receptive_field)

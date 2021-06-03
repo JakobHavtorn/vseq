@@ -28,8 +28,8 @@ LOGGER = logging.getLogger(name=__file__)
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--layer_size", default=7, type=int, help="number of layers per stack")
-parser.add_argument("--stack_size", default=6, type=int, help="number of stacks")
+parser.add_argument("--n_layers", default=7, type=int, help="number of layers per stack")
+parser.add_argument("--n_stacks", default=6, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="quantized", type=str, choices=["quantized", "frames"], help="input encoding")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
@@ -107,8 +107,8 @@ valid_loader = DataLoader(
 )
 
 model = vseq.models.WaveNet(
-    layer_size=args.layer_size,
-    stack_size=args.stack_size,
+    n_layers=args.n_layers,
+    n_stacks=args.n_stacks,
     in_channels=args.in_channels,
     res_channels=args.res_channels,
     out_classes=256,
@@ -152,4 +152,4 @@ for epoch in tracker.epochs(args.epochs):
         x = x.view(32, 28, 28).cpu()
         for i in range(len(x)):
             plt.imshow(x[i])
-            plt.savefig(f"./wavenet_samples/mnist-model-{args.layer_size}-{args.stack_size}-{args.res_channels}-epoch-{epoch}-sample_{i}.png")
+            plt.savefig(f"./wavenet_samples/mnist-model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.png")
