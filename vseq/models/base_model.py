@@ -19,12 +19,15 @@ MODEL_STATE_DICT_STR = "model_state_dict.pt"
 
 
 def load_model(path, model_class_name: str = None, device: torch.device = torch.device("cpu")):
+    if not os.path.exists(path):
+        raise RuntimeError(f"Tried to load model checkpoint but the path does not exist: {path}")
+
     if model_class_name is None:
         if os.path.exists(os.path.join(path, MODEL_CLASS_NAME_STR)):
             model_class_name = torch.load(os.path.join(path, MODEL_CLASS_NAME_STR))
             LOGGER.debug(f"Loading '{model_class_name}' from 'vseq.models'")
         else:
-            raise RuntimeError(f"Name of class of model to load not specified and not saved in checkpoint: {path}")
+            raise RuntimeError(f"Name of class of model to load was not given and not saved in checkpoint: {path}")
 
     model_class = getattr(vseq.models, model_class_name)
     model = model_class.load(path, device=device)
