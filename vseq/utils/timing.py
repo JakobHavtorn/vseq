@@ -31,7 +31,8 @@ def timeit(
     globals: dict = None,
     inner_duration: float = 0.2,
     repeats: int = 10,
-    number: Optional[int] = None
+    number: Optional[int] = None,
+    print_results: bool = False
 ):
     r"""Time the execution of `statement` using the `timeit` package similar to the IPython magic `%timeit`.
 
@@ -84,6 +85,8 @@ def timeit(
     mean = np.mean(timings)
     median = np.median(timings)
     std = np.std(timings)
+    
+    results = SimpleNamespace(min=min, max=max, mean=mean, median=median, std=std, number=number, repeats=repeats)
 
     if max >= min * 4:
         warnings.warn_explicit(
@@ -95,15 +98,22 @@ def timeit(
             0,
         )
 
-    return SimpleNamespace(min=min, max=max, mean=mean, median=median, std=std, number=number, repeats=repeats)
+    if print_results:
+        report_timings(results, suffix=str(statement))
+
+    return results
 
 
-def report_timings(timings, prefix: Optional[str] = None):
+def report_timings(timings, prefix: Optional[str] = None, suffix: Optional[str] = None):
     if prefix:
         s = f"{prefix:15s} | "
     else:
         s = ""
         
-    s += f"number={timings.number:5d} | [{timings.min:.3e}, {timings.max:.3e}] | {timings.median:.3e} | {timings.mean:.3e} +- {timings.std:.3e} s"
+    s += f"number={timings.number:5d} | [{timings.min:.3e}, {timings.max:.3e}] | {timings.median:.3e} | {timings.mean:.3e} +- {timings.std:.3e}s"
+
+    if suffix:
+        s += f" || {suffix}"
+
     print(s)
     return s
