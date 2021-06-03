@@ -133,13 +133,11 @@ model = vseq.models.Bowman(
     random_prior_variance=args.random_prior_variance,
     trainable_prior=args.trainable_prior,
 )
-model = model.to(device)
 print(model)
+x, x_sl = next(iter(train_loader))[0]
+model.summary(input_data=x, x_sl=x_sl)
+model = model.to(device)
 wandb.watch(model, log='all', log_freq=len(train_loader))
-
-# x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
-# model.summary(input_data=x, x_sl=x_sl)
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
 
