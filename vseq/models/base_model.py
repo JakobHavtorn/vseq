@@ -125,7 +125,7 @@ class BaseModel(nn.Module):
         input_data: Optional[Iterable[torch.Tensor]] = None,
         batch_dim: Optional[int] = None,
         col_names: Optional[Iterable[str]] = ["input_size", "output_size", "num_params", "kernel_size", "mult_adds"],
-        col_width: int = 40,
+        col_width: int = 25,
         depth: int = 5,
         device: Optional[torch.device] = None,
         dtypes: Optional[List[torch.dtype]] = None,
