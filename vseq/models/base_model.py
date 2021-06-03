@@ -124,7 +124,7 @@ class BaseModel(nn.Module):
         input_size: Optional[Union[Iterable[int]]] = None,
         input_data: Optional[Iterable[torch.Tensor]] = None,
         batch_dim: Optional[int] = None,
-        col_names: Optional[Iterable[str]] = None,
+        col_names: Optional[Iterable[str]] = ["input_size", "output_size", "num_params", "kernel_size", "mult_adds"],
         col_width: int = 40,
         depth: int = 5,
         device: Optional[torch.device] = None,
@@ -132,7 +132,6 @@ class BaseModel(nn.Module):
         row_settings: Optional[Iterable[str]] = None,
         verbose: int = 1,
         **kwargs: Any,
-
     ):
         """Return a summary of the model"""
         return torchinfo.summary(
