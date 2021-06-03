@@ -1,14 +1,21 @@
+import os 
 import argparse
 import logging
 
 import torch
 import torchaudio
+import numpy as np
 import wandb
 import rich
+import matplotlib.pyplot as plt
+
+
 
 from torch.utils.data import DataLoader
 
 import vseq.models
+from vseq.models.base_model import load_model
+
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
@@ -24,16 +31,13 @@ from vseq.utils.rand import set_seed, get_random_seed
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
+
+parser.add_argument("--model_path", type=str, help="model path to load")
 parser.add_argument("--batch_size", default=4, type=int, help="batch size")
-parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--layer_size", default=10, type=int, help="number of layers per stack")
-parser.add_argument("--stack_size", default=4, type=int, help="number of stacks")
-parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=5, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
-parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
@@ -54,41 +58,36 @@ else:
     raise ValueError()
 
 
-wandb.init(
-    entity="vseq",
-    project="wavenet",
-    group="gradients",
-)
-wandb.config.update(args)
 rich.print(vars(args))
 
 
+
+# Load model
+
+assert os.path.exists(args.model_path)
+
+model = load_model(args.model_path)
+model = model.to(device)
+print(model)
+print(model.receptive_field)
+
+
+
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8))
+    wavenet_transform = Compose(RandomSegment(length=model.receptive_field+1), MuLawEncode(), Quantize(bits=8))
 elif args.input_coding == "frames":
-    wavenet_transform = Compose(RandomSegment(length=16000))
+    wavenet_transform = Compose(RandomSegment(length=model.receptive_field+1))
+
 
 modalities = [
     (AudioLoader("flac"), wavenet_transform, AudioBatcher()),
 ]
 
-train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
-    modalities=modalities,
-)
 val_dataset = BaseDataset(
     source=LIBRISPEECH_DEV_CLEAN,
     modalities=modalities,
 )
 
-train_loader = DataLoader(
-    dataset=train_dataset,
-    collate_fn=train_dataset.collate,
-    num_workers=args.num_workers,
-    shuffle=True,
-    batch_size=args.batch_size,
-    pin_memory=True,
-)
 val_loader = DataLoader(
     dataset=val_dataset,
     collate_fn=val_dataset.collate,
@@ -98,19 +97,6 @@ val_loader = DataLoader(
     pin_memory=True,
 )
 
-model = vseq.models.WaveNet(
-    layer_size=args.layer_size,
-    stack_size=args.stack_size,
-    in_channels=args.in_channels,
-    res_channels=args.res_channels,
-    out_classes=256,
-)
-model = model.to(device)
-print(model)
-rich.print(model.receptive_field)
-wandb.watch(model, log="all", log_freq=len(train_loader))
-optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 
 # (x, x_sl), metadata = next(iter(train_loader))
 # x = x.to(device)
@@ -119,39 +105,45 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 tracker = Tracker()
 
+grad_tensors = []
+
 for epoch in tracker.epochs(args.epochs):
 
-    model.train()
-    for (x, x_sl), metadata in tracker.steps(train_loader):
-        x = x.to(device)
+    grad_storage = torch.empty((len(val_loader)+1)*args.batch_size, model.receptive_field+1)
+
+    for i, ((x, x_sl), metadata) in enumerate(tracker.steps(val_loader)):
+        x=x.to(device)
 
         loss, metrics, output = model(x, x_sl)
 
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+        x_out = output.x
+        x_out.grad.shape # should be B, C, T
 
-        tracker.update(metrics)
+        grad_storage[i*args.batch_size:i*args.batch_size + x_out.shape[0]] = torch.linalg.norm(x_out.detach(), dim=1)
 
-    model.eval()
-    with torch.no_grad():
-        for (x, x_sl), metadata in tracker.steps(val_loader):
-            x = x.to(device)
+    grad_tensors.append(grad_storage)
 
-            loss, metrics, output = model(x, x_sl)
 
-            tracker.update(metrics)
 
-        tracker.log()
+grads = torch.cat(grad_tensors, 0)
+grads.shape
 
-        # save samples
-        x = model.generate(n_samples=32, n_frames=96000)
-        x = x.unsqueeze(-1).to(torch.uint8).cpu()
-        for i in range(len(x)):
-            torchaudio.save(
-                f"./wavenet_samples/model-{args.layer_size}-{args.stack_size}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
-                x[i],
-                sample_rate=16000,
-                channels_first=False,
-                encoding="ULAW",
-            )
+grad_mean = grads.mean(axis=0).numpy()
+grad_var = grads.var(axis=0).numpy()
+frame_idx = np.arange(-model.receptive_field, 1)
+
+
+
+fig, ax = plt.subplots()
+
+ax.plot(frame_idx,grad_mean, "k")
+
+ax.fill_between(frame_idx,grad_mean - grad_var,grad_mean + grad_var,
+    alpha=0.5, facecolor='#FF6432')
+
+ax.set_title(args.model_path.split("/")[-1] + f" RF: {model.receptive_field}")
+ax.set_ylabel("Mean +/- STD of gradient")
+ax.set_xlabel("Time index of input")
+
+fig.savefig(f"misc/plots/{args.model_path.split('/')[-1]}-gradients.png")
