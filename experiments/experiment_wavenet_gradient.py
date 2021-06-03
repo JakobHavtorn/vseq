@@ -111,16 +111,19 @@ for epoch in tracker.epochs(args.epochs):
 
     grad_storage = torch.empty((len(val_loader)+1)*args.batch_size, model.receptive_field+1)
 
+
+    model.eval()
     for i, ((x, x_sl), metadata) in enumerate(tracker.steps(val_loader)):
-        x=x.to(device)
+        model.zero_grad()
+        x = x.to(device)
 
         loss, metrics, output = model(x, x_sl)
 
         loss.backward()
-        x_out = output.x
-        x_out.grad.shape # should be B, C, T
+        x_grad = output.x.grad
+        # x_out.grad.shape # should be B, C, T
 
-        grad_storage[i*args.batch_size:i*args.batch_size + x_out.shape[0]] = torch.linalg.norm(x_out.detach(), dim=1)
+        grad_storage[i*batch_size:i*batch_size + x_grad.shape[0]] = torch.linalg.norm(x_grad.detach(), dim=1)
 
     grad_tensors.append(grad_storage)
 
