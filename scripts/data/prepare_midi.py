@@ -1,11 +1,17 @@
 """
 Download and prepare the MIDI datasets from http://www-etud.iro.umontreal.ca/~boulanni/icml2012
 
-The downloaded pickle files are dictionaries with 'train', 'valid' and 'test' keys, with the corresponding values being a list of example sequences.
-Each sequence is itself a list of time steps, and each time step is a list of the non-zero elements in the piano-roll at this instant (in MIDI note numbers, between 21 and 108 inclusive)
+The downloaded pickle files are dictionaries with 'train', 'valid' and 'test' keys, with the
+corresponding values being a list of example sequences.
+Each sequence is itself a list of time steps, and each time step is a list of the non-zero
+elements in the piano-roll at this instant (in MIDI note numbers, between 21 and 108 inclusive)
+
+The files we download here are piano-rolls generated from the source files by transposing each sequence
+in C major or C minor and sampling frames every eighth note (quarter note for JSB chorales) following the
+beat information present in the MIDI file.
 
 
-From "Modeling Temporal Dependencies in High-Dimensional Sequences" 2012:
+> From "Modeling Temporal Dependencies in High-Dimensional Sequences", 2012 (https://arxiv.org/abs/1206.6392):
 
  - Piano-midi.de is a classical piano MIDI archive that was split according to Poliner & Ellis (2007).
  - Nottingham is a collection of 1200 folk tunes 3 with chords instantiated from the ABC format.
@@ -14,9 +20,11 @@ From "Modeling Temporal Dependencies in High-Dimensional Sequences" 2012:
 
 Each dataset contains at least 7 hours of polyphonic music and the total duration is approximately 67 hours.
 The polyphony (number of simultaneous notes) varies from 0 to 15 and the average polyphony is 3.9.
-We use an input of 88 binary visible units that span the whole range of piano from A0 to C8 and temporally aligned on an integer fraction of the beat (quarter note).
+We use an input of 88 binary visible units that span the whole range of piano from A0 to C8 and temporally aligned
+on an integer fraction of the beat (quarter note).
 Consequently, pieces with diﬀerent time signatures will not have their measures start at the same interval.
-Although it is not strictly necessary, learning is facilitated if the sequences are transposed in a common tonality (e.g. C major/minor) as preprocessing.
+Although it is not strictly necessary, learning is facilitated if the sequences are transposed in a common tonality
+(e.g. C major/minor) as preprocessing.
 """
 
 

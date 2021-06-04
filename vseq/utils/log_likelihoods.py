@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 
 
 @torch.jit.script
@@ -13,28 +14,29 @@ def gaussian_ll(x, mu, var, epsilon: float = 1e-6):
 
 
 @torch.jit.script
-def categorical_ll(y, logits: torch.Tensor):
+def categorical_ll(y: torch.Tensor, logits: torch.Tensor):
     """Compute Categorical log-likelihood
 
     Args:
-        y (torch.LongTensor): Target values in [1, C-1]
-        logits (torch.Tensor): Event log-probabilities (unnormalized)
+        y (torch.LongTensor): Target values in [1, C-1] of any shape.
+        logits (torch.Tensor): Event log-probabilities (unnormalized) of same shape (y.shape, C)
 
     Returns:
         torch.Tensor: Log-probabilities
     """
     logits = logits - logits.logsumexp(dim=-1, keepdim=True)
     y = y.long().unsqueeze(-1)
-    y, log_pmf = torch.broadcast_tensors(y, logits)
+    y, logits = torch.broadcast_tensors(y, logits)
     y = y[..., :1]
-    return log_pmf.gather(-1, y).squeeze(-1)
+    return logits.gather(-1, y).squeeze(-1)
 
 
-def bernoulli_ll(y, logits):
+def bernoulli_ll(y: torch.Tensor, logits: torch.Tensor):
     """Compute Bernoulli log-likelihood
 
     Args:
-        x (torch.Tensor): Target values in {0, 1}
-        probs (torch.Tensor): Event log-probabilities (unnormalized)
+        x (torch.Tensor): Target values in {0, 1} of any shape.
+        probs (torch.Tensor): Event log-probabilities (unnormalized) of same shape as `x`.
     """
-    return categorical_ll(y, logits)
+    y, logits = torch.broadcast_tensors(y, logits)  # 2µs
+    return -F.binary_cross_entropy_with_logits(logits, y, reduction='none')

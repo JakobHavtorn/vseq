@@ -100,22 +100,17 @@ test_loader = DataLoader(
 )
 
 
-model = vseq.models.VRNN2D(
+model = vseq.models.VRNN_MIDI(
     input_size=88,
     hidden_size=args.hidden_size,
     latent_size=args.latent_size,
 )
-# model = vseq.models.lstm.LSTM2D(
-#     input_size=88,
-#     hidden_size=args.hidden_size,
-# )
-
 
 print(model)
 model = model.to(device)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-model.summary(input_data=x[:, :1], x_sl=torch.tensor([1] * x.size(0)))
+# model.summary(input_data=x[:, :1], x_sl=torch.tensor([1] * x.size(0)))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

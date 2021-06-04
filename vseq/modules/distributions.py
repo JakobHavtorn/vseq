@@ -16,6 +16,10 @@ class Distribution(nn.Module):
     def get_distribution(*args, **kwargs):
         raise NotImplementedError()
 
+    @staticmethod
+    def mode(logits):
+        raise NotImplementedError()
+
     def log_prob(self, x):
         raise NotImplementedError()
 
@@ -46,6 +50,10 @@ class GaussianDense(Distribution):
     def get_distribution(mu, sd):
         return torch.distributions.Normal(loc=mu, scale=sd)
 
+    @staticmethod
+    def mode(mu, sd):
+        return mu
+
     def log_prob(self, y, mu, sd):
         return gaussian_ll(y, mu, sd ** 2, epsilon=0)
 
@@ -75,6 +83,10 @@ class CategoricalDense(Distribution):
     def get_distribution(logits):
         return torch.distributions.Categorical(logits=logits)
 
+    @staticmethod
+    def mode(logits, dim: int = -1):
+        return torch.argmax(logits, dim=dim)
+
     def log_prob(self, y, logits):
         return categorical_ll(y, logits)
 
@@ -83,12 +95,13 @@ class CategoricalDense(Distribution):
 
 
 class BernoulliDense(Distribution):
-    def __init__(self, x_dim, y_dim):
+    def __init__(self, x_dim, y_dim, reduce_dim: int = -1):
         """Parameterizes a Gaussian distribution with diagonal covariance"""
         super().__init__()
 
         self.x_dim = x_dim
         self.y_dim = y_dim
+        self.reduce_dim = reduce_dim
 
         self.logits = nn.Linear(x_dim, y_dim)
 
@@ -101,8 +114,12 @@ class BernoulliDense(Distribution):
     def get_distribution(logits):
         return torch.distributions.Bernoulli(logits=logits)
 
+    @staticmethod
+    def mode(logits):
+        return torch.argmax(logits, dim=self.reduce_dim)
+
     def log_prob(self, y, logits):
-        return bernoulli_ll(y, logits)
+        return bernoulli_ll(y, logits).sum(self.reduce_dim)
 
     def forward(self, x):
         return self.logits(x)

@@ -1,6 +1,7 @@
 import math
 
 from types import SimpleNamespace
+from vseq.utils.dict import list_of_dict_to_dict_of_list
 
 import torch
 import torch.nn as nn
@@ -81,7 +82,7 @@ class VRNNCell(jit.ScriptModule):
         prior_mu, prior_sd = self.prior(h)
 
         # encoder q(z|x)
-        enc_mu, enc_sd = self.encoder(torch.cat([x, h], 1))
+        enc_mu, enc_sd = self.encoder(torch.cat([x, h], -1))
 
         # sampling and reparameterization
         z = self._reparameterized_sample(enc_mu, enc_sd)
@@ -90,7 +91,7 @@ class VRNNCell(jit.ScriptModule):
         phi_z = self.phi_z(z)
 
         # gru cell
-        h = self.gru_cell(torch.cat([x, phi_z], 1), h)
+        h = self.gru_cell(torch.cat([x, phi_z], -1), h)
 
         # kl divergence
         kld = self._kld_gauss(enc_mu, enc_sd, prior_mu, prior_sd)
@@ -125,12 +126,22 @@ class VRNNCell(jit.ScriptModule):
 
 
 class VRNN(nn.Module):
-    def __init__(self, phi_x: nn.Module, likelihood: nn.Module, x_dim: int, h_dim: int, z_dim: int, o_dim: int, word_dropout: float = 0):
+    def __init__(
+        self,
+        phi_x: nn.Module,
+        likelihood: nn.Module,
+        x_dim: int,
+        h_dim: int,
+        z_dim: int,
+        o_dim: int,
+        word_dropout: float = 0,
+    ):
         """Variational Recurrent Neural Network (VRNN) from [1].
 
         Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
 
         Args:
+            phi_x (nn.Module): Input transformation
             x_dim (int): Input space size
             h_dim (int): Hidden space (GRU) size
             z_dim (int): Stochastic latent variable size
@@ -195,17 +206,18 @@ class VRNN(nn.Module):
         free_nats: float = 0,
         h: TensorType["B", "h_dim"] = None,
     ):
+
+        batch_size, timesteps = x.size(0), x.size(1)
+
         all_h = []
         all_phi_z = []
         all_kld = []
         all_outputs = []
 
-        batch_size, timesteps = x.size(0), x.size(1)
-
         # target
         y = x.clone().detach()
 
-        # dropout 
+        # dropout
         x = self.word_dropout(x) if self.word_dropout else x
 
         # x features
@@ -229,7 +241,7 @@ class VRNN(nn.Module):
         # output distribution
         h = torch.stack(all_h, dim=1)
         phi_z = torch.stack(all_phi_z, dim=1)
-        logits = self.likelihood(self.decoder(torch.cat([phi_z, h], 2)))  # (B, T, D)
+        logits = self.likelihood(self.decoder(torch.cat([phi_z, h], -1)))  # (B, T, D)
 
         # loss
         kld = torch.stack(all_kld, dim=1)
@@ -248,6 +260,66 @@ class VRNN(nn.Module):
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl)
         return loss, metrics, outputs
 
+    def generate(
+        self,
+        x: TensorType["B", "T", "x_dim"],
+        h: TensorType["B", "h_dim"] = None,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        stop_value: float = None,
+        use_mode: bool = False,
+    ):
+
+        if x.size(0) > 1:
+            assert x.size(0) == n_samples
+        else:
+            x = x.repeat(n_samples, *[1] * (x.ndim - 1))  # Repeat only batch
+
+        # TODO If multiple timesteps in x, run a forward pass to get conditional initial h (assert h is None)
+
+        all_outputs = []
+        all_x = [x]
+        x_sl = torch.ones(n_samples, dtype=torch.int)
+
+        # initial h
+        h = torch.zeros(n_samples, self.h_dim, device=x.device) if h is None else h
+
+        seq_active = torch.ones(n_samples, dtype=torch.int)
+        all_ended, t = False, 0  # Used to condition while loop
+        while not all_ended and t < max_timesteps:
+            phi_x = self.phi_x(x)
+
+            h, phi_z, outputs = self.vrnn_cell.generate(phi_x, h)
+
+            logits = self.likelihood(self.decoder(torch.cat([phi_z, h], -1)))  # (B, D)
+
+            if use_mode:
+                x = self.likelihood.mode(logits)
+            else:
+                x = self.likelihood.get_distribution(logits).sample()
+
+            all_x.append(x)
+            all_outputs.append(outputs)
+
+            # Update sequence length
+            x_sl += seq_active
+            seq_ending = (x == stop_value) # (,), (B,) or (B, D)
+            if isinstance(seq_ending, torch.Tensor):
+                seq_ending = seq_ending.all(*list(range(1, seq_ending.ndim))) if seq_ending.ndim > 1 else seq_ending
+                seq_ending = seq_ending.to(int).cpu()
+            else:
+                seq_ending = int(seq_ending)
+            seq_active *= 1 - seq_ending
+
+            # Update loop conditions
+            t += 1
+            all_ended = torch.all(1 - seq_active).item()
+
+        x = torch.stack(all_x, dim=1)
+
+        outputs = SimpleNamespace(**list_of_dict_to_dict_of_list([vars(ns) for ns in all_outputs]))
+        return (x, x_sl), outputs
+
 
 class VRNNLM(BaseModel):
     def __init__(
@@ -259,6 +331,12 @@ class VRNNLM(BaseModel):
         latent_size: int = 64,
         word_dropout: float = 0,
     ):
+        """A VRNN for language modelling.
+
+        Notes:
+        - WordDropout reduces overfitting but does not improve LL much
+        - Removing the start token reduces LL a bit
+        """
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
@@ -277,7 +355,7 @@ class VRNNLM(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=num_embeddings,
-            word_dropout=word_dropout
+            word_dropout=word_dropout,
         )
 
     def forward(
@@ -290,6 +368,23 @@ class VRNNLM(BaseModel):
     ):
         return self.vrnn(x, x_sl, beta, free_nats, h)
 
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = True,
+        x: TensorType["B", "x_dim"] = None,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.full([n_samples], self.delimiter_token_idx, device=self.device) if x is None else x
+        return self.vrnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=self.delimiter_token_idx,
+            use_mode=use_mode,
+            x=x,
+            h=h,
+        )
 
 
 class VRNN_MIDI(BaseModel):
@@ -299,6 +394,7 @@ class VRNN_MIDI(BaseModel):
         hidden_size: int = 256,
         latent_size: int = 64,
     ):
+        """A VRNN for modelling the MIDI music dataset."""
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -317,7 +413,7 @@ class VRNN_MIDI(BaseModel):
         self.vrnn = VRNN(
             phi_x=embedding,
             likelihood=bernoulli,
-            x_dim=input_size,
+            x_dim=hidden_size,
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
@@ -333,10 +429,28 @@ class VRNN_MIDI(BaseModel):
     ):
         return self.vrnn(x, x_sl, beta, free_nats, h)
 
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        return self.vrnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h=h,
+        )
 
 # ==================================
 #  DEPRECATED MODELS BELOW THIS LINE
 # ==================================
+
 
 class VRNNOld(nn.Module):
     def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int):
@@ -608,7 +722,7 @@ class VRNNLMOld(BaseModel):
         return loss, metrics, outputs
 
 
-class VRNN2DOld(BaseModel):
+class VRNN_MIDIOld(BaseModel):
     def __init__(
         self,
         input_size: int = 88,

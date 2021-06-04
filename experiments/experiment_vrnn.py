@@ -177,4 +177,10 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    tracker.log()
+        # Log samples from prior
+        (x, x_sl), outputs = model.generate(n_samples=4)
+        text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
+        data = [(i, t) for i, t in enumerate(text)]
+        prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
+
+    tracker.log(samples=prior_samples_table)

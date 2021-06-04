@@ -146,7 +146,7 @@ class LSTMLM(BaseModel):
 
             # Update sequence length
             x_sl += seq_active
-            seq_ending = (x_t[0].cpu() == self.delimiter_token_idx).to(int)  # TODO move to cpu once at end instead
+            seq_ending = (x_t[0] == self.delimiter_token_idx).to(int).cpu()
             seq_active *= 1 - seq_ending
 
             # Update loop conditions
