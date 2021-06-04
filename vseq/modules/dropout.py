@@ -2,11 +2,12 @@ from typing import Union
 
 import torch
 import torch.nn as nn
+import torch.jit as jit
 
 from torchtyping import TensorType
 
 
-class WordDropout(nn.Module):
+class WordDropout(jit.ScriptModule):
     def __init__(self, dropout_rate: float = 0.0, mask_value: Union[float, int] = 0, mask_first_timestep: bool = False):
         """Dropout module that masks out all features for any sampled timestep.
 

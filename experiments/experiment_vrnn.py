@@ -32,6 +32,7 @@ parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
+parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
@@ -123,6 +124,7 @@ model = vseq.models.VRNNLM(
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
     latent_size=args.latent_size,
+    word_dropout=args.word_dropout,
     delimiter_token_idx=delimiter_token_idx,
 )
 
@@ -130,7 +132,7 @@ print(model)
 model = model.to(device)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)))
+# model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

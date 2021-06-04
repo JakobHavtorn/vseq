@@ -5,17 +5,340 @@ from types import SimpleNamespace
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import torch.jit as jit
 
 from torchtyping import TensorType
 
 from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric, LatestMeanMetric
 from vseq.models import BaseModel
 from vseq.modules.convenience import AddConstant
+from vseq.modules.distributions import GaussianDense, BernoulliDense, CategoricalDense
+from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.variational import discount_free_nats
 
 
+class VRNNCell(jit.ScriptModule):
+    def __init__(self, x_dim: int, h_dim: int, z_dim: int, depth: int = 3):
+        """Variational Recurrent Neural Network (VRNN) cell from [1].
+
+        Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
+
+        Args:
+            x_dim (int): Input space size
+            h_dim (int): Hidden space (GRU) size
+            z_dim (int): Stochastic latent variable size
+
+        [1] https://arxiv.org/abs/1506.02216
+        """
+        super().__init__()
+
+        self.x_dim = x_dim
+        self.h_dim = h_dim
+        self.z_dim = z_dim
+        self.depth = depth
+
+        self.phi_z = nn.Sequential(
+            nn.Linear(z_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
+
+        self.prior = nn.Sequential(
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            GaussianDense(h_dim, z_dim),
+        )
+
+        self.encoder = nn.Sequential(
+            nn.Linear(x_dim + h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            GaussianDense(h_dim, z_dim),
+        )
+
+        self.gru_cell = nn.GRUCell(x_dim + h_dim, h_dim)
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        init.orthogonal_(self.gru_cell.weight_hh)
+
+    def forward(self, x: TensorType["B", "x_dim"], h: TensorType["B", "h_dim"]):
+        # prior p(z)
+        prior_mu, prior_sd = self.prior(h)
+
+        # encoder q(z|x)
+        enc_mu, enc_sd = self.encoder(torch.cat([x, h], 1))
+
+        # sampling and reparameterization
+        z = self._reparameterized_sample(enc_mu, enc_sd)
+
+        # z features
+        phi_z = self.phi_z(z)
+
+        # gru cell
+        h = self.gru_cell(torch.cat([x, phi_z], 1), h)
+
+        # kl divergence
+        kld = self._kld_gauss(enc_mu, enc_sd, prior_mu, prior_sd)
+
+        outputs = SimpleNamespace(z=z, enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
+        return h, phi_z, kld, outputs
+
+    def generate(self, x: TensorType["B", "x_dim"], h: TensorType["B", "h_dim"]):
+        # prior p(z)
+        prior_mu, prior_sd = self.prior(h)
+
+        # sampling and reparameterization
+        z = self._reparameterized_sample(prior_mu, prior_sd)
+
+        # z features
+        phi_z = self.phi_z(z)
+
+        # gru cell
+        h = self.gru_cell(torch.cat([x, phi_z], 1), h)
+
+        return h, phi_z, SimpleNamespace(z=z, prior_mu=prior_mu, prior_sd=prior_sd)
+
+    @jit.export
+    def _reparameterized_sample(self, mu, sd):
+        """using sd to sample"""
+        return torch.randn_like(sd).mul(sd).add_(mu)
+
+    @jit.export
+    def _kld_gauss(self, mu_1, sd_1, mu_2, sd_2):
+        """Compute element-wise KL divergence between two Gaussians"""
+        return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
+
+
 class VRNN(nn.Module):
+    def __init__(self, phi_x: nn.Module, likelihood: nn.Module, x_dim: int, h_dim: int, z_dim: int, o_dim: int, word_dropout: float = 0):
+        """Variational Recurrent Neural Network (VRNN) from [1].
+
+        Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
+
+        Args:
+            x_dim (int): Input space size
+            h_dim (int): Hidden space (GRU) size
+            z_dim (int): Stochastic latent variable size
+            o_dim (int): Output space size
+
+        [1] https://arxiv.org/abs/1506.02216
+        """
+        super().__init__()
+
+        self.phi_x = phi_x
+        self.likelihood = likelihood
+
+        self.x_dim = x_dim
+        self.h_dim = h_dim
+        self.z_dim = z_dim
+        self.o_dim = o_dim
+
+        self.vrnn_cell = VRNNCell(
+            x_dim=x_dim,
+            h_dim=h_dim,
+            z_dim=z_dim,
+        )
+
+        self.decoder = nn.Sequential(
+            nn.Linear(2 * h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+            nn.Linear(h_dim, h_dim),
+            nn.ReLU(),
+        )
+        self.likelihood = likelihood
+        self.word_dropout = WordDropout(word_dropout) if word_dropout else None
+
+    def compute_elbo(
+        self,
+        y: TensorType["B", "T"],
+        logits: TensorType["B", "T", "D"],
+        kl_twise: TensorType["B", "T", "latent_size"],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+    ):
+        """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
+        seq_mask = sequence_mask(x_sl, dtype=float, device=logits.device)
+        log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
+        log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
+
+        kl_twise = discount_free_nats(kl_twise, free_nats, -1)
+        kl = kl_twise.sum((1, 2))  # (B,)
+
+        elbo = log_prob - kl  # (B,)
+
+        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        return loss, elbo, log_prob, kl
+
+    def forward(
+        self,
+        x: TensorType["B", "T", "x_dim"],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        all_h = []
+        all_phi_z = []
+        all_kld = []
+        all_outputs = []
+
+        batch_size, timesteps = x.size(0), x.size(1)
+
+        # target
+        y = x.clone().detach()
+
+        # dropout 
+        x = self.word_dropout(x) if self.word_dropout else x
+
+        # x features
+        phi_x = self.phi_x(x)
+        phi_x = phi_x.unbind(1)
+
+        # initial h
+        h = torch.zeros(batch_size, self.h_dim, device=x.device) if h is None else h
+        all_h.append(h)
+
+        for t in range(timesteps):
+            h, phi_z, kld, outputs = self.vrnn_cell(phi_x[t], h)
+
+            all_h.append(h)
+            all_phi_z.append(phi_z)
+            all_kld.append(kld)
+            all_outputs.append(outputs)
+
+        all_h.pop()
+
+        # output distribution
+        h = torch.stack(all_h, dim=1)
+        phi_z = torch.stack(all_phi_z, dim=1)
+        logits = self.likelihood(self.decoder(torch.cat([phi_z, h], 2)))  # (B, T, D)
+
+        # loss
+        kld = torch.stack(all_kld, dim=1)
+        loss, elbo, log_prob, kl = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
+
+        metrics = [
+            LossMetric(loss, weight_by=elbo.numel()),
+            LLMetric(elbo, name="elbo"),
+            LLMetric(log_prob, name="rec"),
+            KLMetric(kl),
+            BitsPerDimMetric(elbo, reduce_by=x_sl),
+            PerplexityMetric(elbo, reduce_by=x_sl),
+            LatestMeanMetric(beta, name="beta"),
+            LatestMeanMetric(free_nats, name="free_nats"),
+        ]
+        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl)
+        return loss, metrics, outputs
+
+
+class VRNNLM(BaseModel):
+    def __init__(
+        self,
+        num_embeddings: int,
+        delimiter_token_idx: int,
+        embedding_dim: int = 300,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+        word_dropout: float = 0,
+    ):
+        super().__init__()
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+        self.word_dropout = word_dropout
+        self.delimiter_token_idx = delimiter_token_idx
+
+        embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim)
+        categorical = CategoricalDense(hidden_size, num_embeddings)
+
+        self.vrnn = VRNN(
+            phi_x=embedding,
+            likelihood=categorical,
+            x_dim=embedding_dim,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=num_embeddings,
+            word_dropout=word_dropout
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", int],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        return self.vrnn(x, x_sl, beta, free_nats, h)
+
+
+
+class VRNN_MIDI(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 88,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+
+        embedding = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        bernoulli = BernoulliDense(hidden_size, input_size)
+
+        self.vrnn = VRNN(
+            phi_x=embedding,
+            likelihood=bernoulli,
+            x_dim=input_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", "D", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        return self.vrnn(x, x_sl, beta, free_nats, h)
+
+
+# ==================================
+#  DEPRECATED MODELS BELOW THIS LINE
+# ==================================
+
+class VRNNOld(nn.Module):
     def __init__(self, x_dim: int, h_dim: int, z_dim: int, o_dim: int):
         """Variational Recurrent Neural Network (VRNN) from [1].
 
@@ -124,7 +447,6 @@ class VRNN(nn.Module):
             prior_sd_t = self.prior_sd(prior_t)
 
             # encoder q(z|x)
-            # NOTE Should we use the same phi_x[t] in these two places?
             enc_t = self.enc(torch.cat([phi_x[t], h], 1))
             enc_mu_t = self.enc_mu(enc_t)
             enc_sd_t = self.enc_sd(enc_t)
@@ -142,7 +464,6 @@ class VRNN(nn.Module):
             # gru cell (teacher forced by conditioning on phi_x[t])
             # input of shape (batch, input_size)
             # hidden of shape (batch, hidden_size)
-            # NOTE Should we use the same phi_x[t] in these two places?
             h = self.gru_cell(torch.cat([phi_x[t], phi_z_t], 1), h)  # h = self.gru_cell(phi_z_t, h)
 
             # computing losses
@@ -160,8 +481,6 @@ class VRNN(nn.Module):
         q_z_x = torch.distributions.Normal(torch.stack(all_enc_mu, dim=1), torch.stack(all_enc_sd, dim=1))
         p_z = torch.distributions.Normal(torch.stack(all_prior_mu, dim=1), torch.stack(all_prior_sd, dim=1))
         kld = torch.stack(all_kld, dim=1)
-        # kld = kld.detach()
-        # kld = kld * 0
         z = torch.stack(all_enc_z, dim=1)
         return z, o_logits, q_z_x, p_z, kld
 
@@ -205,7 +524,7 @@ class VRNN(nn.Module):
         return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
 
 
-class VRNNLM(BaseModel):
+class VRNNLMOld(BaseModel):
     def __init__(
         self,
         num_embeddings: int,
@@ -226,7 +545,7 @@ class VRNNLM(BaseModel):
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        self.vrnn = VRNN(
+        self.vrnn = VRNNOld(
             x_dim=embedding_dim,
             h_dim=hidden_size,
             z_dim=latent_size,
@@ -289,7 +608,7 @@ class VRNNLM(BaseModel):
         return loss, metrics, outputs
 
 
-class VRNN2D(BaseModel):
+class VRNN2DOld(BaseModel):
     def __init__(
         self,
         input_size: int = 88,
@@ -301,7 +620,7 @@ class VRNN2D(BaseModel):
         self.hidden_size = hidden_size
         self.latent_size = latent_size
 
-        self.vrnn = VRNN(
+        self.vrnn = VRNNOld(
             x_dim=input_size,
             h_dim=hidden_size,
             z_dim=latent_size,

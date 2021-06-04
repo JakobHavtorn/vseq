@@ -24,7 +24,6 @@ from vseq.training.annealers import CosineAnnealer
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
@@ -113,9 +112,10 @@ model = vseq.models.VRNN2D(
 
 
 print(model)
-x, x_sl = next(iter(train_loader))[0]
-model.summary(input_data=x, x_sl=x_sl)
 model = model.to(device)
+x, x_sl = next(iter(train_loader))[0]
+x = x.to(device)
+model.summary(input_data=x[:, :1], x_sl=torch.tensor([1] * x.size(0)))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
