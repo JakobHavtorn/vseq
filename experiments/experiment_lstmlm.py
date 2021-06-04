@@ -124,17 +124,17 @@ model = vseq.models.LSTMLM(
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
     layer_norm=args.layer_norm,
-    dropout=args.dropout,
     word_dropout_rate=args.word_dropout,
     delimiter_token_idx=delimiter_token_idx,
+    dropout=args.dropout,
 )
 
-# wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
-# x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
-# model.summary(input_data=x, x_sl=x_sl)
+x, x_sl = next(iter(train_loader))[0]
+x = x.to(device)
+model.summary(input_data=x[:, :2], x_sl=torch.tensor([2] * x.size(0), dtype=int))
+wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = args.optimizer_json.pop('optimizer')
 optimizer = getattr(torch.optim, optimizer)
@@ -145,7 +145,7 @@ tracker = Tracker()
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
-    for (x, x_sl), metadata in tracker(train_loader):
+    for (x, x_sl), metadata in tracker.steps(train_loader):
         x = x.to(device)
 
         loss, metrics, outputs = model(x, x_sl)
@@ -158,20 +158,18 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker(val_loader):
+        for (x, x_sl), metadata in tracker.steps(val_loader):
             x = x.to(device)
 
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
-        for (x, x_sl), metadata in tracker(test_loader):
+        for (x, x_sl), metadata in tracker.steps(test_loader):
             x = x.to(device)
 
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
-
-    # Log tracker metrics
     tracker.log()
