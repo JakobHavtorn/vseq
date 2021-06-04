@@ -247,15 +247,12 @@ class Tracker:
             end = "\r" if self.rank == 0 else "\n"
             s = rank_string(self.rank) + " " + s
             s_len = length_without_formatting(s)
+            s = s + " " * (self.terminal.width - s_len)
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
                 rich.print(s, end=end, flush=True)
         else:
-            # Flush any oversizes string (s_len) and characters typed in the terminal (cursor_x)
-            _, cursor_x = self.terminal.get_location(timeout=0.1)
-            if cursor_x == -1:
-                cursor_x = 0
             s_len = length_without_formatting(s)
-            s = s + " " * (self.terminal.width - s_len - cursor_x)
+            s = s + " " * (self.terminal.width - s_len)
             rich.print(s, end=end, flush=True)
 
         self.last_log_line_len = s_len
