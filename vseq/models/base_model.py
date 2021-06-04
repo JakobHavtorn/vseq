@@ -39,16 +39,12 @@ class BaseModel(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # TODO We may need to handle *args and **kwargs better
-        #      Any "*" and "**" type arguments can be identified by checking Parameter.kind.
-        #      For "*" arguments, 'Parameter.kind == Parameter.VAR_KEYWORD'
-        #      For "**" arguments: 'Parameter.kind == ParameterVAR_POSITIONAL)'
-        #      These could then be assigned their own hidden attribute here similar to `_init_arguments`
-        #      We might also be able to unpack "**" type arguments into `_kwarg_names` and `_init_arguments`
-        #      For "*" type arguments we can get the variable's name via the __init__ signature and link them to values in the order they are passed in.
-        signature = inspect.signature(self.__class__.__init__)
-        self._kwarg_names = [p for p in signature.parameters if p != "self"]
         self._init_arguments = None
+        self._kwarg_names = self._capture_argument_names()
+
+    def _capture_argument_names(self):
+        signature = inspect.signature(self.__class__.__init__)
+        return [p for p in signature.parameters if p != "self"]
 
     def init_arguments(self):
         """Return a dictionary of the kwargs used to instantiate this module"""
