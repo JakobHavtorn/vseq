@@ -38,6 +38,9 @@ class Metric:
     def copy(self):
         return deepcopy(self)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(name={self.name}, value={self.str_value})"
+
 
 @staticmethod
 def min_value(metrics: List[Metric]):
