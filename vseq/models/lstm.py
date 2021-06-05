@@ -67,9 +67,6 @@ class LSTMLM(BaseModel):
             # Advanced cell (not scripted) 17.19Hx
         else:
             self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_size, batch_first=False, **lstm_kwargs)
-            # native: 42.62Hz
-            # own not compiled: 20.53Hz
-            # own jit compiled 21.83Hz
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
@@ -103,9 +100,6 @@ class LSTMLM(BaseModel):
         e = self.embedding(x)
 
         # Compute log probs for p(x|z)
-        # e = torch.nn.utils.rnn.pack_padded_sequence(e, x_sl, batch_first=True)  # x_sl --> remove end token
-        # h, _ = self.lstm(e)
-        # h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
         h, _ = self.lstm(e)
 
         # Define output distribution
@@ -113,7 +107,6 @@ class LSTMLM(BaseModel):
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_logits.device)
         p_x = D.Categorical(logits=p_logits)
         log_prob = p_x.log_prob(y) * seq_mask
-        # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB
 
         return log_prob, p_x
 

@@ -99,9 +99,6 @@ class Bowman(BaseModel):
 
         self.word_dropout = WordDropout(self.word_dropout_rate, mask_value=self.mask_token_idx)
 
-        # TODO Likelihood as module
-        # TODO Stochastic layer as module (incl. reparameterization (and KL?))
-
     def prior(self):
         """Return the prior distribution without a batch dimension"""
         mu, log_sigma = self.prior_logits.chunk(2, dim=0)
@@ -114,8 +111,6 @@ class Bowman(BaseModel):
         log_prob = log_prob_twise.sum(1)  # (B,)
         elbo = log_prob - kl  # (B,)
         loss = -(log_prob - beta * kl).sum() / (x_sl - 1).sum()  # (1,)
-        # loss = -(log_prob - beta * kl).mean()  # (1,)
-        # loss = - log_prob.sum() / x_sl.sum() + beta * kl.mean()  # (1,)
         return loss, elbo, log_prob, kl
 
     def forward(
