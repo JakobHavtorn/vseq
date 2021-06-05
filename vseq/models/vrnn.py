@@ -190,10 +190,11 @@ class VRNN(nn.Module):
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
+        kl = kl_twise.sum((1, 2))  # (B,)
+        elbo = log_prob - kl  # (B,)
+
         kl_twise = discount_free_nats(kl_twise, free_nats, -1)
         kl = kl_twise.sum((1, 2))  # (B,)
-
-        elbo = log_prob - kl  # (B,)
 
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
         return loss, elbo, log_prob, kl
