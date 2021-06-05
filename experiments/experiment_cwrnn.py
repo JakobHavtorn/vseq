@@ -23,7 +23,6 @@ from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
-from vseq.training.annealers import CosineAnnealer
 
 
 parser = argparse.ArgumentParser()
