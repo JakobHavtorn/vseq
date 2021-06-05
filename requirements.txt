@@ -18,3 +18,4 @@ torchinfo
 tqdm
 wandb
 wget
+uniplot
