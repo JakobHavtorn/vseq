@@ -4,7 +4,6 @@ import torch
 import torch.nn.functional as F
 
 
-@torch.jit.script
 def gaussian_ll(x, mu, var, epsilon: float = 1e-6):
     if epsilon:
         var = var.clone()
@@ -13,7 +12,6 @@ def gaussian_ll(x, mu, var, epsilon: float = 1e-6):
     return 0.5 * (torch.log(var) + (x - mu)**2 / var + math.log(2 * math.pi))
 
 
-@torch.jit.script
 def categorical_ll(y: torch.Tensor, logits: torch.Tensor):
     """Compute Categorical log-likelihood
 

@@ -31,11 +31,10 @@ parser.add_argument("--batch_size", default=64, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
+parser.add_argument("--clock_periods", default=[1, 2, 4], type=int, nargs="+", help="clock periods")
+parser.add_argument("--full_recurrence", action="store_true", help="full recurrence")
+parser.add_argument("--learn_state", action="store_true", help="learn state")
 parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
-parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
-parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
-parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
-parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -122,8 +121,10 @@ model = vseq.models.CWRNNLM(
     num_embeddings=len(token_map),
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
-    clock_periods=[1, 2, 4],
+    clock_periods=args.clock_periods,
     word_dropout=args.word_dropout,
+    full_recurrence=args.full_recurrence,
+    learn_state=args.learn_state,
     delimiter_token_idx=delimiter_token_idx,
 )
 
@@ -169,9 +170,10 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
         # Log samples from prior
-        (x, x_sl), outputs = model.generate(n_samples=4)
-        text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
-        data = [(i, t) for i, t in enumerate(text)]
-        prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
+        # (x, x_sl), outputs = model.generate(n_samples=4)
+        # text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
+        # data = [(i, t) for i, t in enumerate(text)]
+        # prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
 
-    tracker.log(samples=prior_samples_table)
+    # tracker.log(samples=prior_samples_table)
+    tracker.log()

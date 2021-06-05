@@ -5,3 +5,4 @@ from vseq.models.base_model import BaseModel
 from vseq.models.hmrnn import HMLM
 from vseq.models.clockwork_vae import CWVAELM
 from vseq.models.vrnn import VRNNLM, VRNN_MIDI
+from vseq.models.clockwork_rnn import CWRNNLM
