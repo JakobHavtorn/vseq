@@ -43,7 +43,15 @@ class CWRNN(nn.Module):
 
 class CWRNNLM(nn.Module):
     def __init__(
-        self, embedding_dim, num_embeddings, hidden_size, clock_periods, delimiter_token_idx: int, full_recurrence=False, learn_state=True, word_dropout: float = 0
+        self,
+        embedding_dim,
+        num_embeddings,
+        hidden_size,
+        clock_periods,
+        delimiter_token_idx: int,
+        full_recurrence=False,
+        learn_state=True,
+        word_dropout: float = 0,
     ):
         super().__init__()
 
