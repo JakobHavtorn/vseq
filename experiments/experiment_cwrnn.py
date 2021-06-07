@@ -33,6 +33,7 @@ parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality
 parser.add_argument("--clock_periods", default=[1, 2, 4], type=int, nargs="+", help="clock periods")
 parser.add_argument("--full_recurrence", action="store_true", help="full recurrence")
 parser.add_argument("--learn_state", action="store_true", help="learn state")
+parser.add_argument("--dropout", default=0.0, type=float, help="dropout")
 parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
@@ -53,7 +54,7 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="vrnn",
+    project="cwrnn",
     group=None,
 )
 wandb.config.update(args)
@@ -121,7 +122,8 @@ model = vseq.models.CWRNNLM(
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
     clock_periods=args.clock_periods,
-    word_dropout=args.word_dropout,
+    word_dropout_rate=args.word_dropout,
+    dropout_rate=args.dropout,
     full_recurrence=args.full_recurrence,
     learn_state=args.learn_state,
     delimiter_token_idx=delimiter_token_idx,

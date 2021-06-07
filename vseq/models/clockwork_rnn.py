@@ -10,6 +10,7 @@ from torch.nn import functional as F
 from torchtyping import TensorType
 
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric, PerplexityMetric
+from vseq.models.base_model import BaseModel
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.log_likelihoods import categorical_ll
@@ -41,7 +42,7 @@ class CWRNN(nn.Module):
         pass
 
 
-class CWRNNLM(nn.Module):
+class CWRNNLM(BaseModel):
     def __init__(
         self,
         embedding_dim,
@@ -51,7 +52,8 @@ class CWRNNLM(nn.Module):
         delimiter_token_idx: int,
         full_recurrence=False,
         learn_state=True,
-        word_dropout: float = 0,
+        dropout_rate: float = 0.0,
+        word_dropout_rate: float = 0.0,
     ):
         super().__init__()
 
@@ -62,11 +64,13 @@ class CWRNNLM(nn.Module):
         self.delimiter_token_idx = delimiter_token_idx
         self.full_recurrence = full_recurrence
         self.learn_state = learn_state
-        self.word_dropout = word_dropout
+        self.dropout_rate = dropout_rate
+        self.word_dropout_rate = word_dropout_rate
 
         n_clocks = len(clock_periods)
         self.n_clocks = n_clocks
 
+        # TODO Replace with F.linear or nn.Linear?
         self.Wi = nn.Parameter(torch.empty(embedding_dim, n_clocks * hidden_size))
         self.Wh = nn.Parameter(torch.empty(n_clocks * hidden_size, n_clocks * hidden_size))
         self.Wo = nn.Parameter(torch.empty(n_clocks * hidden_size, num_embeddings))
@@ -86,7 +90,8 @@ class CWRNNLM(nn.Module):
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        self.word_dropout = WordDropout(word_dropout, mask_value=self.mask_token_idx) if word_dropout else None
+        self.word_dropout = WordDropout(word_dropout_rate, mask_value=self.mask_token_idx) if word_dropout_rate else None
+        self.dropout = nn.Dropout(dropout_rate) if dropout_rate else None
 
         self.reset_parameters()
 
@@ -156,6 +161,7 @@ class CWRNNLM(nn.Module):
             all_h.append(h_prev)
 
         h = torch.stack(all_h, dim=1)
+        h = self.dropout(h) if self.dropout else h
         o = torch.matmul(h, self.Wo)
 
         seq_mask = sequence_mask(x_sl, dtype=float, device=o.device)

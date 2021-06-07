@@ -26,6 +26,7 @@ class LSTMLM(BaseModel):
         num_layers: int = 1,
         layer_norm: bool = False,
         word_dropout_rate: float = 0.0,
+        dropout_rate: float = 0.0,
         **lstm_kwargs,
     ):
         """Simple LSTM-based Language Model with learnable input token embeddings and multiple LSTM layers.
@@ -46,6 +47,7 @@ class LSTMLM(BaseModel):
         self.delimiter_token_idx = delimiter_token_idx
         self.layer_norm = layer_norm
         self.word_dropout_rate = word_dropout_rate
+        self.dropout_rate = dropout_rate
         self.lstm_kwargs = lstm_kwargs
 
         # The input embedding for x. We use one embedding shared between encoder and decoder. This may be inappropriate.
@@ -67,6 +69,8 @@ class LSTMLM(BaseModel):
             # Advanced cell (not scripted) 17.19Hx
         else:
             self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_size, batch_first=False, **lstm_kwargs)
+
+        self.dropout = nn.Dropout(dropout_rate) if dropout_rate else None
 
         self.output = nn.Linear(hidden_size, num_embeddings)
 
@@ -103,6 +107,7 @@ class LSTMLM(BaseModel):
         h, _ = self.lstm(e)
 
         # Define output distribution
+        h = self.dropout(h) if self.dropout else h
         p_logits = self.output(h)  # labo: we could use our embedding matrix here
         seq_mask = sequence_mask(x_sl, dtype=float, device=p_logits.device)
         p_x = D.Categorical(logits=p_logits)
