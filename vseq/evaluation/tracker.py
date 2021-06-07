@@ -61,8 +61,7 @@ class Tracker:
         # ddp logic
         assert (rank is None) == (world_size is None), "Must either set both `rank` and `world_size` or neither of them"
         self.is_ddp = rank is not None
-        if self.is_ddp:
-            self.terminal = Terminal()
+        self.terminal = Terminal()
 
         # continously updated
         self.printed_last = 0
@@ -244,15 +243,19 @@ class Tracker:
             # TODO Instead of rich, print with regular print and add colors manually.
             #      The current implementation has a race condition on placing the cursor
             #      and printing the line with rich. This is merged to one print call without rich.
-            # print(self.terminal.move_y(self.terminal.height - self.rank - 1) + s, end='\r')#, flush=True)
+            # print(self.terminal.move_y(self.terminal.height - self.rank - 2) + s, end='\r')#, flush=True)
             end = "\r" if self.rank == 0 else "\n"
             s = rank_string(self.rank) + " " + s
+            s_len = length_without_formatting(s)
+            s = s + " " * (self.terminal.width - s_len)
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
                 rich.print(s, end=end, flush=True)
         else:
+            s_len = length_without_formatting(s)
+            s = s + " " * (self.terminal.width - s_len)
             rich.print(s, end=end, flush=True)
 
-        self.last_log_line_len = length_without_formatting(s)
+        self.last_log_line_len = s_len
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
