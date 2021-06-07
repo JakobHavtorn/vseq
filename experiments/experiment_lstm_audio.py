@@ -152,11 +152,19 @@ val_loader = DataLoader(
 
 model = LSTM(input_size=80, hidden_size=args.num_hidden, num_classes=256)
 
+# for name, param in model.named_parameters():
+#     print(f"{name}  :  {param.device}")
+
 model = model.to(device)
-print(model)
+rich.print(model)
+rich.print(model.device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+
+for name, param in model.named_parameters():
+    print(f"{name}  :  {param.device}")
+# exit()
 
 # (x, x_sl), metadata = next(iter(train_loader))
 # x = x.to(device)

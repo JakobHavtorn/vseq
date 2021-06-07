@@ -33,13 +33,13 @@ class OutConv(nn.Module):
         self.output_dim = output_dim
         self.input_dim = input_dim
 
-        self.layers = [
+        self._layers = [
             nn.ReLU(),
             nn.Conv1d(input_dim, output_dim * num_classes, kernel_size=1),
         ]
         if conv_layers > 1:
             for _i in range(conv_layers - 1):
-                self.layers.extend(
+                self._layers.extend(
                     [
                         nn.ReLU(),
                         nn.Conv1d(
@@ -49,6 +49,7 @@ class OutConv(nn.Module):
                         ),
                     ]
                 )
+        self.layers = nn.ModuleList(self._layers)
         self.unflatten = torch.nn.Unflatten(2, (output_dim, num_classes))
         self.log_softmax = torch.nn.LogSoftmax(dim=-1)
 
@@ -57,7 +58,8 @@ class OutConv(nn.Module):
             x = _layer(x)
         x = torch.movedim(x, 1, 2)
         x = self.unflatten(x)
-        return self.log_softmax(x)
+        x = self.log_softmax(x)
+        return x
 
 
 class LSTM(BaseModel):
