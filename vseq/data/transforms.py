@@ -123,6 +123,7 @@ class MuLawDecode(Transform):
         super().__init__()
         self.bits = bits
         self.mu = 2 ** bits - 1
+        self._divisor = math.log(self.mu + 1)
 
     def forward(self, x: torch.Tensor):
         return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu

@@ -26,8 +26,8 @@ librispeech_source_dir = os.path.join(SOURCE_DIRECTORY, 'librispeech')
 assert not os.path.exists(librispeech_data_dir), "Dataset already exists in data directory."
 assert not os.path.exists(librispeech_source_dir), "Dataset already exists in source directory."
 
-os.mkdir(librispeech_data_dir)
-os.mkdir(librispeech_source_dir)
+os.makedirs(librispeech_data_dir)
+os.makedirs(librispeech_source_dir)
 
 header = ["filename,length.flac.samples\n"]
 train_source_file_content = []

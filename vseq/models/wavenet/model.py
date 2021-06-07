@@ -166,7 +166,7 @@ class WaveNet(BaseModel):
 
         loss, ll = self.compute_loss(target, x_sl, output)
 
-        categorical = D.Categorical(logits=output.transpose(1, 2))
+        categorical = D.Categorical(logits=output.transpose(1, 2)) # (B, T, C)
 
         metrics = [
             LossMetric(loss, weight_by=ll.numel()),
