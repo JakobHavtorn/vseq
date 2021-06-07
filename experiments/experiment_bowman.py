@@ -182,6 +182,7 @@ for epoch in tracker.epochs(args.epochs):
     text = token_map.decode_batch(x, x_sl, join_separator=" ")
     data = [(i, t) for i, t in enumerate(text)]
     prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
+    rich.print(text)
 
     # Perform interpolation in latent space
     n_steps = args.n_interpolations
