@@ -1,5 +1,7 @@
 import math
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
@@ -25,7 +27,7 @@ class Distribution(nn.Module):
 
 
 class GaussianDense(Distribution):
-    def __init__(self, x_dim, y_dim, initial_sd: float = 1, epsilon: float = 1e-6):
+    def __init__(self, x_dim, y_dim, initial_sd: float = 1, epsilon: float = 1e-6, reduce_dim: Optional[int] = None):
         """Parameterizes a Gaussian distribution with diagonal covariance"""
         super().__init__()
 
@@ -33,6 +35,7 @@ class GaussianDense(Distribution):
         self.y_dim = y_dim
         self.initial_sd = initial_sd
         self.epsilon = epsilon
+        self.reduce_dim = reduce_dim
 
         self.logits = nn.Linear(x_dim, 2 * y_dim)
 
@@ -47,15 +50,17 @@ class GaussianDense(Distribution):
         pass
 
     @staticmethod
-    def get_distribution(mu, sd):
-        return torch.distributions.Normal(loc=mu, scale=sd)
+    def get_distribution(logits):
+        return torch.distributions.Normal(loc=logits[0], scale=logits[1])
 
     @staticmethod
-    def mode(mu, sd):
-        return mu
+    def mode(logits):
+        return logits[0]
 
-    def log_prob(self, y, mu, sd):
-        return gaussian_ll(y, mu, sd ** 2, epsilon=0)
+    def log_prob(self, y, logits):
+        if self.reduce_dim is not None:
+            return gaussian_ll(y, logits[0], logits[1] ** 2, epsilon=0).sum(self.reduce_dim)
+        return gaussian_ll(y, logits[0], logits[1] ** 2, epsilon=0)
 
     def forward(self, x):
         logits = self.logits(x)
@@ -114,8 +119,7 @@ class BernoulliDense(Distribution):
     def get_distribution(logits):
         return torch.distributions.Bernoulli(logits=logits)
 
-    @staticmethod
-    def mode(logits):
+    def mode(self, logits):
         return torch.argmax(logits, dim=self.reduce_dim)
 
     def log_prob(self, y, logits):

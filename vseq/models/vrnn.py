@@ -70,6 +70,7 @@ class VRNNCell(jit.ScriptModule):
             GaussianDense(h_dim, z_dim),
         )
 
+        # self.gru_cell = nn.GRUCell(h_dim, h_dim)
         self.gru_cell = nn.GRUCell(x_dim + h_dim, h_dim)
 
         self.reset_parameters()
@@ -92,6 +93,7 @@ class VRNNCell(jit.ScriptModule):
 
         # gru cell
         h = self.gru_cell(torch.cat([x, phi_z], -1), h)
+        # h = self.gru_cell(phi_z, h)
 
         # kl divergence
         kld = self._kld_gauss(enc_mu, enc_sd, prior_mu, prior_sd)
@@ -110,7 +112,8 @@ class VRNNCell(jit.ScriptModule):
         phi_z = self.phi_z(z)
 
         # gru cell
-        h = self.gru_cell(torch.cat([x, phi_z], 1), h)
+        # h = self.gru_cell(torch.cat([x, phi_z], 1), h)
+        h = self.gru_cell(phi_z, h)
 
         return h, phi_z, SimpleNamespace(z=z, prior_mu=prior_mu, prior_sd=prior_sd)
 
@@ -122,7 +125,10 @@ class VRNNCell(jit.ScriptModule):
     @jit.export
     def _kld_gauss(self, mu_1, sd_1, mu_2, sd_2):
         """Compute element-wise KL divergence between two Gaussians"""
-        return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
+        return torch.distributions.kl_divergence(
+            torch.distributions.Normal(mu_1, sd_1), torch.distributions.Normal(mu_2, sd_2)
+        )
+        # return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
 
 
 class VRNN(nn.Module):
@@ -186,7 +192,7 @@ class VRNN(nn.Module):
         free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
-        seq_mask = sequence_mask(x_sl, dtype=float, device=logits.device)
+        seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
@@ -258,7 +264,7 @@ class VRNN(nn.Module):
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl)
+        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits)
         return loss, metrics, outputs
 
     def generate(
@@ -304,7 +310,7 @@ class VRNN(nn.Module):
 
             # Update sequence length
             x_sl += seq_active
-            seq_ending = (x == stop_value) # (,), (B,) or (B, D)
+            seq_ending = x == stop_value  # (,), (B,) or (B, D)
             if isinstance(seq_ending, torch.Tensor):
                 seq_ending = seq_ending.all(*list(range(1, seq_ending.ndim))) if seq_ending.ndim > 1 else seq_ending
                 seq_ending = seq_ending.to(int).cpu()
@@ -447,6 +453,80 @@ class VRNN_MIDI(BaseModel):
             x=x,
             h=h,
         )
+
+
+class VRNNAudio(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 200,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+    ):
+        """A VRNN for modelling audio waveforms."""
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+
+        embedding = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        likelihood = GaussianDense(hidden_size, input_size, reduce_dim=-1)
+
+        self.vrnn = VRNN(
+            phi_x=embedding,
+            likelihood=likelihood,
+            x_dim=hidden_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h)
+
+        for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
+            bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
+            del metrics[bpd_metric_idx]
+
+        metrics.extend([
+            BitsPerDimMetric(outputs.elbo.cpu() - x_sl * self.input_size * math.log(2 ** 8), reduce_by=x_sl),
+            LatestMeanMetric(((outputs.y - outputs.logits[0]) ** 2).mean().sqrt().item(), name="mse"),
+            LatestMeanMetric(outputs.logits[1].mean().item(), name="stddev"),
+        ])
+
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        return self.vrnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h=h,
+        )
+
 
 # ==================================
 #  DEPRECATED MODELS BELOW THIS LINE

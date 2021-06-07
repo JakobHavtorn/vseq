@@ -34,6 +34,9 @@ MIDI_MUSEDATA_TRAIN = "midi_musedata_train"
 MIDI_MUSEDATA_VALID = "midi_musedata_valid"
 MIDI_MUSEDATA_TEST = "midi_musedata_test"
 
+TIMIT_TRAIN = "timit_train"
+TIMIT_TEST = "timit_test"
+
 
 DATAPATHS_MAPPING = {
     LIBRISPEECH_TRAIN: os.path.join(SOURCE_DIRECTORY, "librispeech", "train.txt"),
@@ -66,4 +69,7 @@ DATAPATHS_MAPPING = {
     MIDI_MUSEDATA_TRAIN: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "train.txt"),
     MIDI_MUSEDATA_VALID: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "valid.txt"),
     MIDI_MUSEDATA_TEST: os.path.join(SOURCE_DIRECTORY, "midi", "muse_data", "test.txt"),
+
+    TIMIT_TRAIN: os.path.join(SOURCE_DIRECTORY, "timit", "train.txt"),
+    TIMIT_TEST: os.path.join(SOURCE_DIRECTORY, "timit", "test.txt")
 }

@@ -41,8 +41,7 @@ class Reshape(Transform):
         self.shape = shape
 
     def forward(self, x):
-        batch_size = x.size(0)
-        return x.view(batch_size, *self.shape)
+        return x.view(*self.shape)
 
 
 class TextCleaner(Transform):
@@ -78,8 +77,21 @@ class DecodeInteger(Transform):
         return x
 
 
+class StackWaveform(Transform):
+    def __init__(self, n_frames: int = 200):
+        super().__init__()
+        self.n_frames = n_frames
+
+    def forward(self, x):
+        padding = self.n_frames - x.size(0) % self.n_frames
+        x = torch.cat([x, torch.zeros(padding)])
+        x = x.view(-1, self.n_frames)
+        return x
+
+
 class RandomSegment(Transform):
     def __init__(self, length: int):
+        """Randomly sample a segment of a certain length from an example of dimensions (T, *)"""
         super().__init__()
         self.length = length
 
@@ -133,11 +145,6 @@ class MuLawDecode(Transform):
     def forward(self, x: torch.Tensor):
         return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu
 
-
-# Mel
-# InverseMel
-# STFT
-# InverseSTFT (Griffin-Lim)
 
 class Binarize(Transform):
     def __init__(self, resample: bool = False, threshold: float = None):
