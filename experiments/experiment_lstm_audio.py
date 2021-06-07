@@ -97,7 +97,7 @@ rich.print(vars(args))
 
 
 _transforms = [
-RandomSegment(length=16000) # (B, 16000)
+RandomSegment(length=16000, pad=True) # (B, 16000)
 ]
 
 if args.input_coding == "mu_law":
