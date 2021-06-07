@@ -182,5 +182,6 @@ for epoch in tracker.epochs(args.epochs):
         text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
         data = [(i, t) for i, t in enumerate(text)]
         prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
+        rich.print(text)
 
     tracker.log(samples=prior_samples_table)
