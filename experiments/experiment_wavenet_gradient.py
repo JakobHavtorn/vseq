@@ -35,7 +35,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", type=str, help="model path to load")
 parser.add_argument("--batch_size", default=4, type=int, help="batch size")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--epochs", default=5, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=1, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
@@ -123,30 +123,31 @@ for epoch in tracker.epochs(args.epochs):
         x_grad = output.x.grad
         # x_out.grad.shape # should be B, C, T
 
-        grad_storage[i*batch_size:i*batch_size + x_grad.shape[0]] = torch.linalg.norm(x_grad.detach(), dim=1)
+        grad_storage[i*args.batch_size:i*args.batch_size + x_grad.shape[0]] = torch.linalg.norm(x_grad.detach(), dim=1)
 
     grad_tensors.append(grad_storage)
 
 
 
 grads = torch.cat(grad_tensors, 0)
-grads.shape
-
-grad_mean = grads.mean(axis=0).numpy()
-grad_var = grads.var(axis=0).numpy()
-frame_idx = np.arange(-model.receptive_field, 1)
+rich.print(grads.shape)
+grad_mean = grads.mean(axis=0).numpy()[:-1]
+grad_var = grads.std(axis=0).numpy()[:-1]
+frame_idx = np.arange(-model.receptive_field, 0)
 
 
 
 fig, ax = plt.subplots()
 
-ax.plot(frame_idx,grad_mean, "k")
+ax.plot(frame_idx, grad_mean,  alpha = 0.4, lw=1, label="Mean Gradient")
+ax.plot(frame_idx, grad_var,  alpha = 0.4, lw=1, label="STD of Gradient")
 
-ax.fill_between(frame_idx,grad_mean - grad_var,grad_mean + grad_var,
-    alpha=0.5, facecolor='#FF6432')
+# ax.fill_between(frame_idx,grad_mean - grad_var,grad_mean + grad_var,
+#     alpha=0.5, facecolor='#FF6432')
 
 ax.set_title(args.model_path.split("/")[-1] + f" RF: {model.receptive_field}")
 ax.set_ylabel("Mean +/- STD of gradient")
 ax.set_xlabel("Time index of input")
+ax.legend()
 
 fig.savefig(f"misc/plots/{args.model_path.split('/')[-1]}-gradients.png")
