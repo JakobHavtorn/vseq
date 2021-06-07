@@ -65,6 +65,9 @@ class EncodeInteger(Transform):
         x = self.token_map.encode(x)
         return x
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(tokenizer={self.tokenizer})"
+
 
 class DecodeInteger(Transform):
     def __init__(self):
@@ -73,21 +76,34 @@ class DecodeInteger(Transform):
 
 
 class RandomSegment(Transform):
-    def __init__(self, length: int):
+    def __init__(self, length: int, pad: bool = False):
         super().__init__()
         self.length = length
+        self.pad = pad
 
     def forward(self, x):
-        high = max(x.size(0) - self.length, 1)
-        start_idx = torch.randint(low=0, high=high, size=(1,))
-        return x[start_idx : start_idx + self.length]
+        if self.pad and x.size(0) < self.length:
+            # case 1 : too short sequence, N<L
+            # Pad before with L-N
+            return torch.cat((torch.tensor([0.0]).repeat(self.length - x.size(0)), x))
+        elif self.pad and x.size(0) == self.length:
+            return x
+        else:
+            high = max(x.size(0) - self.length, 1)
+            start_idx = torch.randint(low=0, high=high, size=(1,))
+            return x[start_idx : start_idx + self.length]
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(length={self.length}, pad={self.pad})"
 
 
 class Scale(Transform):
     def __init__(self, low=-1, high=1, min_val=None, max_val=None):
         """Scale an input to be in [low, high] by normalizing with data min and max values"""
         super().__init__()
-        assert (low is not None) == (high is not None), "must set both low and high or neither"
+        assert (low is not None) == (
+            high is not None
+        ), "must set both low and high or neither"
         self.low = low
         self.high = high
         self.min_val = min_val
@@ -116,6 +132,9 @@ class MuLawEncode(Transform):
     def forward(self, x: torch.Tensor):
         return x.sign() * torch.log(1 + self.mu * x.abs()) / self._divisor
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(bits={self.bits})"
+
 
 class MuLawDecode(Transform):
     def __init__(self, bits: int = 8):
@@ -127,6 +146,9 @@ class MuLawDecode(Transform):
 
     def forward(self, x: torch.Tensor):
         return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(bits={self.bits})"
 
 
 class Quantize(Transform):
@@ -154,7 +176,16 @@ class Quantize(Transform):
             bins (Optional[int], optional): [description]. Defaults to None.
         """
         super().__init__()
-        assert (bits is None) != (bins is None), "Must set one and only one of `bits` and `bins`"
+        assert (bits is None) != (
+            bins is None
+        ), "Must set one and only one of `bits` and `bins`"
+        self._str = f"{self.__class__.__name__}(low={low}, high={high}, bits={bits}"
+        if bins is not None:
+            self._str += f", bins={bins}"
+        if force_out_int64:
+            self._str += f", force_out_int64={force_out_int64}"
+        self._str += ")"
+
         self.low = low
         self.high = high
         self.bits = bins // 8 if bits is None else bits
@@ -163,13 +194,20 @@ class Quantize(Transform):
         self.out_int32 = (self.bits <= 32) and (not force_out_int64)
 
     def forward(self, x: torch.Tensor):
-        return torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
+        return torch.bucketize(
+            x, self.boundaries, out_int32=self.out_int32, right=False
+        )
+
+    def __repr__(self):
+        return self._str
 
 
 class Binarize(Transform):
     def __init__(self, resample: bool = False, threshold: float = None):
         super().__init__()
-        assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
+        assert bool(threshold) != bool(
+            resample
+        ), "Must set exactly one of threshold and resample"
         self.resample = resample
         self.threshold = threshold
 

@@ -110,7 +110,6 @@ elif args.input_coding == "mel":
     batcher = SpectrogramBatcher
 elif args.input_coding == "stack":
     _transforms.extend([
-        # Scale(min_val=-2**8, max_val=2**8), 
         torch.nn.Unflatten(0, (int(16000/80), 80)) # (B, T) -> (B, T/S, S) # S is pseudo-spectrogram dim  
     ])
     batcher = SpectrogramBatcher
