@@ -1,7 +1,6 @@
 import math
 
 from types import SimpleNamespace
-from vseq.utils.dict import list_of_dict_to_dict_of_list
 
 import torch
 import torch.nn as nn
@@ -16,11 +15,12 @@ from vseq.modules.convenience import AddConstant
 from vseq.modules.distributions import GaussianDense, BernoulliDense, CategoricalDense
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
-from vseq.utils.variational import discount_free_nats
+from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
+from vseq.utils.dict import list_of_dict_to_dict_of_list
 
 
 class VRNNCell(jit.ScriptModule):
-    def __init__(self, x_dim: int, h_dim: int, z_dim: int, depth: int = 3):
+    def __init__(self, x_dim: int, h_dim: int, z_dim: int, condition_h_on_x: bool = True):
         """Variational Recurrent Neural Network (VRNN) cell from [1].
 
         Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
@@ -29,6 +29,7 @@ class VRNNCell(jit.ScriptModule):
             x_dim (int): Input space size
             h_dim (int): Hidden space (GRU) size
             z_dim (int): Stochastic latent variable size
+            condition_h_on_x (bool): If True, condition h on x observation in inference and generation.
 
         [1] https://arxiv.org/abs/1506.02216
         """
@@ -37,8 +38,8 @@ class VRNNCell(jit.ScriptModule):
         self.x_dim = x_dim
         self.h_dim = h_dim
         self.z_dim = z_dim
-        self.depth = depth
-
+        self.condition_h_on_x = condition_h_on_x
+ 
         self.phi_z = nn.Sequential(
             nn.Linear(z_dim, h_dim),
             nn.ReLU(),
@@ -70,8 +71,8 @@ class VRNNCell(jit.ScriptModule):
             GaussianDense(h_dim, z_dim),
         )
 
-        # self.gru_cell = nn.GRUCell(h_dim, h_dim)
-        self.gru_cell = nn.GRUCell(x_dim + h_dim, h_dim)
+        gru_in_dim = x_dim + h_dim if self.condition_h_on_x else h_dim
+        self.gru_cell = nn.GRUCell(gru_in_dim, h_dim)
 
         self.reset_parameters()
 
@@ -86,17 +87,19 @@ class VRNNCell(jit.ScriptModule):
         enc_mu, enc_sd = self.encoder(torch.cat([x, h], -1))
 
         # sampling and reparameterization
-        z = self._reparameterized_sample(enc_mu, enc_sd)
+        z = rsample_gaussian(enc_mu, enc_sd)
 
         # z features
         phi_z = self.phi_z(z)
 
         # gru cell
-        h = self.gru_cell(torch.cat([x, phi_z], -1), h)
-        # h = self.gru_cell(phi_z, h)
+        if self.condition_h_on_x:
+            h = self.gru_cell(torch.cat([x, phi_z], -1), h)
+        else:
+            h = self.gru_cell(phi_z, h)
 
         # kl divergence
-        kld = self._kld_gauss(enc_mu, enc_sd, prior_mu, prior_sd)
+        kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
 
         outputs = SimpleNamespace(z=z, enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
         return h, phi_z, kld, outputs
@@ -106,29 +109,18 @@ class VRNNCell(jit.ScriptModule):
         prior_mu, prior_sd = self.prior(h)
 
         # sampling and reparameterization
-        z = self._reparameterized_sample(prior_mu, prior_sd)
+        z = rsample_gaussian(prior_mu, prior_sd)
 
         # z features
         phi_z = self.phi_z(z)
 
         # gru cell
-        # h = self.gru_cell(torch.cat([x, phi_z], 1), h)
-        h = self.gru_cell(phi_z, h)
+        if self.condition_h_on_x:
+            h = self.gru_cell(torch.cat([x, phi_z], -1), h)
+        else:
+            h = self.gru_cell(phi_z, h)
 
         return h, phi_z, SimpleNamespace(z=z, prior_mu=prior_mu, prior_sd=prior_sd)
-
-    @jit.export
-    def _reparameterized_sample(self, mu, sd):
-        """using sd to sample"""
-        return torch.randn_like(sd).mul(sd).add_(mu)
-
-    @jit.export
-    def _kld_gauss(self, mu_1, sd_1, mu_2, sd_2):
-        """Compute element-wise KL divergence between two Gaussians"""
-        return torch.distributions.kl_divergence(
-            torch.distributions.Normal(mu_1, sd_1), torch.distributions.Normal(mu_2, sd_2)
-        )
-        # return sd_2.log() - sd_1.log() + (sd_1.pow(2) + (mu_1 - mu_2).pow(2)) / (2 * sd_2.pow(2)) - 0.5
 
 
 class VRNN(nn.Module):
@@ -140,11 +132,34 @@ class VRNN(nn.Module):
         h_dim: int,
         z_dim: int,
         o_dim: int,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
         word_dropout: float = 0,
+        dropout: float = 0,
     ):
         """Variational Recurrent Neural Network (VRNN) from [1].
 
         Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
+
+            ┌───┐       ┌───┐       ┌───┐          ┌───┐       ┌───┐       ┌───┐
+            │h_1├─┬────►│h_2├─┬────►│h_3│          │h_1├─┬────►│h_2├─┬────►│h_3│
+            └─┬─┘ │     └─┬─┘ │     └─┬─┘          └─┬─┘ │     └─┬─┘ │     └─┬─┘
+              │   │       │   │       │              │   │       │   │       │
+              │   │       │   │       │              │   │   ┌───┤   │   ┌───┤
+              │   │       │   │       │              │   │   │   │   │   │   │
+              ▼   │       ▼   │       ▼              ▼   │   │   ▼   │   │   ▼
+            ┌───┐ │     ┌───┐ │     ┌───┐          ┌───┐ │   │ ┌───┐ │   │ ┌───┐
+            │z_1├─┤     │z_2├─┤     │z_3│          │z_1├─┤   │ │z_2├─┤   │ │z_3│
+            └───┘ │     └───┘ │     └───┘          └─┬─┘ │   │ └─┬─┘ │   │ └─┬─┘
+              ▲   │       ▲   │       ▲              │   │   │   │   │   │   │
+              │   │       │   │       │              │   │   │   │   │   │   │
+              │   │       │   │       │              │   │   │   │   │   │   │
+              │   │       │   │       │              ▼   │   │   ▼   │   │   ▼
+            ┌─┴─┐ │     ┌─┴─┐ │     ┌─┴─┐          ┌───┐ │   │ ┌───┐ │   │ ┌───┐
+            │x_1├─┘     │x_2├─┘     │x_3│          │x_1├─┘   └►│x_2├─┘   └►│x_3│
+            └───┘       └───┘       └───┘          └───┘       └───┘       └───┘
+
+                   INFERENCE MODEL                       GENERATIVE MODEL
 
         Args:
             phi_x (nn.Module): Input transformation
@@ -152,6 +167,8 @@ class VRNN(nn.Module):
             h_dim (int): Hidden space (GRU) size
             z_dim (int): Stochastic latent variable size
             o_dim (int): Output space size
+            condition_h_on_x (bool): If True, condition h on x in inference and generation (parameter sharing).
+            condition_x_on_h (bool): If True, condition x on h in generation.
 
         [1] https://arxiv.org/abs/1506.02216
         """
@@ -164,15 +181,19 @@ class VRNN(nn.Module):
         self.h_dim = h_dim
         self.z_dim = z_dim
         self.o_dim = o_dim
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
 
         self.vrnn_cell = VRNNCell(
             x_dim=x_dim,
             h_dim=h_dim,
             z_dim=z_dim,
+            condition_h_on_x=condition_h_on_x
         )
 
+        decoder_in_dim = 2 * h_dim if condition_x_on_h else h_dim
         self.decoder = nn.Sequential(
-            nn.Linear(2 * h_dim, h_dim),
+            nn.Linear(decoder_in_dim, h_dim),
             nn.ReLU(),
             nn.Linear(h_dim, h_dim),
             nn.ReLU(),
@@ -181,6 +202,7 @@ class VRNN(nn.Module):
         )
         self.likelihood = likelihood
         self.word_dropout = WordDropout(word_dropout) if word_dropout else None
+        self.dropout = nn.Dropout(dropout) if dropout else None
 
     def compute_elbo(
         self,
@@ -248,7 +270,13 @@ class VRNN(nn.Module):
         # output distribution
         h = torch.stack(all_h, dim=1)
         phi_z = torch.stack(all_phi_z, dim=1)
-        logits = self.likelihood(self.decoder(torch.cat([phi_z, h], -1)))  # (B, T, D)
+
+        if self.condition_x_on_h:
+            dec = self.decoder(torch.cat([phi_z, h], -1))
+        else:
+            dec = self.decoder(phi_z)
+        dec = self.dropout(dec) if self.dropout is not None else dec
+        logits = self.likelihood(dec)  # (B, T, D)
 
         # loss
         kld = torch.stack(all_kld, dim=1)
@@ -298,7 +326,11 @@ class VRNN(nn.Module):
 
             h, phi_z, outputs = self.vrnn_cell.generate(phi_x, h)
 
-            logits = self.likelihood(self.decoder(torch.cat([phi_z, h], -1)))  # (B, D)
+            if self.condition_x_on_h:
+                dec = self.decoder(torch.cat([phi_z, h], -1))
+            else:
+                dec = self.decoder(phi_z)
+            logits = self.likelihood(dec)  # (B, T, D)
 
             if use_mode:
                 x = self.likelihood.mode(logits)
@@ -336,7 +368,10 @@ class VRNNLM(BaseModel):
         embedding_dim: int = 300,
         hidden_size: int = 256,
         latent_size: int = 64,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
         word_dropout: float = 0,
+        dropout: float = 0,
     ):
         """A VRNN for language modelling.
 
@@ -350,7 +385,10 @@ class VRNNLM(BaseModel):
         self.hidden_size = hidden_size
         self.latent_size = latent_size
         self.word_dropout = word_dropout
+        self.dropout = dropout
         self.delimiter_token_idx = delimiter_token_idx
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
 
         embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim)
         categorical = CategoricalDense(hidden_size, num_embeddings)
@@ -362,7 +400,10 @@ class VRNNLM(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=num_embeddings,
+            condition_h_on_x=condition_h_on_x,
+            condition_x_on_h=condition_x_on_h,
             word_dropout=word_dropout,
+            dropout=dropout,
         )
 
     def forward(
@@ -400,12 +441,16 @@ class VRNN_MIDI(BaseModel):
         input_size: int = 88,
         hidden_size: int = 256,
         latent_size: int = 64,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
     ):
         """A VRNN for modelling the MIDI music dataset."""
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
 
         embedding = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -424,6 +469,8 @@ class VRNN_MIDI(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
+            condition_h_on_x=condition_h_on_x,
+            condition_x_on_h=condition_x_on_h,
         )
 
     def forward(
@@ -461,12 +508,16 @@ class VRNNAudio(BaseModel):
         input_size: int = 200,
         hidden_size: int = 256,
         latent_size: int = 64,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
     ):
         """A VRNN for modelling audio waveforms."""
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
 
         embedding = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -485,6 +536,8 @@ class VRNNAudio(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
+            condition_h_on_x=condition_h_on_x,
+            condition_x_on_h=condition_x_on_h,
         )
 
     def forward(

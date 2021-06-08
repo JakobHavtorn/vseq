@@ -28,6 +28,26 @@ def kl_divergence_mc(
     return kl_dwise, q_logprob, p_logprob
 
 
+@torch.jit.script
+def kl_divergence_gaussian(mu_q, sd_q, mu_p, sd_p):
+    """Elementwise analytical KL divergence between two Gaussian distributions KL(q||p) (no reduction applied)."""
+    return sd_p.log() - sd_q.log() + (sd_q.pow(2) + (mu_q - mu_p).pow(2)) / (2 * sd_p.pow(2)) - 0.5
+
+
+@torch.jit.script
+def rsample_gaussian(mu, sd):
+    """Return a reparameterized sample from a given Gaussian distribution.
+
+    Args:
+        mu (torch.Tensor): Gaussian mean
+        sd (torch.Tensor): Gaussian standard deviation
+
+    Returns:
+        torch.Tensor: Reparameterized sample
+    """
+    return torch.randn_like(sd).mul(sd).add(mu)
+
+
 def discount_free_nats(
     kl: TensorType["B":..., "shared":...],
     free_bits: float = None,
