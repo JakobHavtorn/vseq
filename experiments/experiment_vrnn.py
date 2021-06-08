@@ -62,6 +62,7 @@ wandb.init(
 wandb.config.update(args)
 rich.print(vars(args))
 
+
 if args.token_level == "word":
     tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
     token_map = TokenMap(tokens=tokens, add_delimit=True)

@@ -2,9 +2,8 @@ from types import SimpleNamespace
 from typing import Tuple, List, Union
 
 from torchtyping.tensor_type import TensorType
-from vseq.evaluation.metrics import KLMetric, LossMetric, PerplexityMetric
+from vseq.evaluation.metrics import KLMetric, LatestMeanMetric, LossMetric, PerplexityMetric
 
-import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,6 +12,7 @@ import torch.distributions as D
 from vseq.modules import HighwayStackDense, WordDropout
 from vseq.modules.activations import InverseSoftplus
 from vseq.utils.operations import sequence_mask
+from vseq.utils.log_likelihoods import categorical_ll
 from vseq.evaluation import Metric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric
 
 from .base_model import BaseModel
@@ -28,7 +28,7 @@ class Bowman(BaseModel):
         n_highway_blocks: int,
         delimiter_token_idx: int,
         word_dropout_rate: float = 0.0,
-        random_prior_variance: bool = False,
+        random_prior_variance: Union[bool, float] = False,
         trainable_prior: bool = False,
     ):
         super().__init__()
@@ -87,8 +87,7 @@ class Bowman(BaseModel):
         self.output = nn.Linear(hidden_size, num_embeddings)
 
         if random_prior_variance:
-            m, v = torch.zeros(latent_dim), torch.ones(latent_dim)
-            prior_variance = D.LogNormal(m, v).sample()
+            prior_log_sigma = self.std_activation_inverse(1 + float(random_prior_variance) * torch.randn(latent_dim))
         else:
             prior_log_sigma = self.std_activation_inverse(torch.ones(latent_dim))
         prior_logits = torch.cat([torch.zeros(latent_dim), prior_log_sigma])
@@ -117,11 +116,13 @@ class Bowman(BaseModel):
         self, x: TensorType["B", "T", int], x_sl: TensorType["B", int], beta: float = 1,
     ) -> Tuple[torch.Tensor, List[Metric], SimpleNamespace]:
         """Perform inference and generative passes on input x of shape (B, T)"""
-        z, q_z = self.infer(x, x_sl)
         p_z = self.prior()
+
+        z, q_z = self.infer(x, x_sl)
+
         kl_dwise = torch.distributions.kl_divergence(q_z, p_z)
 
-        log_prob_twise, p_x = self.reconstruct(z=z, x=x, x_sl=x_sl)
+        log_prob_twise, logits = self.reconstruct(z=z, x=x, x_sl=x_sl)
 
         loss, elbo, log_prob, kl = self.compute_elbo(log_prob_twise, kl_dwise, x_sl=x_sl, beta=beta)
 
@@ -132,6 +133,7 @@ class Bowman(BaseModel):
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl - 1),
             PerplexityMetric(elbo, reduce_by=x_sl - 1),
+            LatestMeanMetric(beta, name="beta"),
         ]
 
         outputs = SimpleNamespace(
@@ -139,10 +141,10 @@ class Bowman(BaseModel):
             elbo=elbo,
             rec=log_prob,
             kl=kl,
-            p_x=p_x,  # NOTE Save 700 MB by not returning p_x
             q_z=q_z,
             p_z=p_z,
             z=z,
+            logits=logits,
         )
         return loss, metrics, outputs
 
@@ -184,13 +186,10 @@ class Bowman(BaseModel):
         h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
 
         # Define output distribution
-        p_logits = self.output(h)  # labo: we could use our embedding matrix here
-        seq_mask = sequence_mask(x_sl, dtype=float, device=p_logits.device)
-        p_x = D.Categorical(logits=p_logits)
-        log_prob = p_x.log_prob(y) * seq_mask
-        # log_prob = torch.gather(p_logits.log_softmax(dim=-1), 2, y.unsqueeze(2)).squeeze() * seq_mask  # NOTE -600 MB
-
-        return log_prob, p_x
+        logits = self.output(h)  # labo: we could use our embedding matrix here
+        seq_mask = sequence_mask(x_sl, dtype=float, device=logits.device)
+        log_prob = categorical_ll(y, logits) * seq_mask
+        return log_prob, logits
 
     def generate(self, z: torch.Tensor = None, n_samples: int = 1, t_max: int = 100, use_mode: bool = False):
         """
@@ -212,8 +211,8 @@ class Bowman(BaseModel):
             # Sample x_t from p(x_t|z, x_<t)
             e_t = self.embedding(x_t)
             _, (h_t, c_t) = self.lstm_decode(e_t, (h_t, c_t))
-            p_logits = self.output(h_t)  # labo: again, we could use our embedding matrix here
-            p = D.Categorical(logits=p_logits)
+            logits = self.output(h_t)  # labo: again, we could use our embedding matrix here
+            p = D.Categorical(logits=logits)
             x_t = p.logits.argmax(dim=-1) if use_mode else p.sample()
             log_prob_t = p.log_prob(x_t)
 
@@ -223,7 +222,7 @@ class Bowman(BaseModel):
 
             # Update sequence length
             x_sl += seq_active
-            seq_ending = (x_t[0].cpu() == self.delimiter_token_idx).to(int)  # TODO move to cpu once at end instead
+            seq_ending = (x_t[0].cpu() == self.delimiter_token_idx).to(int)
             seq_active *= 1 - seq_ending
 
             # Update loop conditions

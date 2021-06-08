@@ -17,10 +17,10 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.loaders import TextLoader
-from vseq.data.tokens import DELIMITER_TOKEN
-from vseq.data.tokenizers import word_tokenizer
+from vseq.data.tokens import DELIMITER_TOKEN, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
+from vseq.data.tokenizers import char_tokenizer, word_tokenizer
 from vseq.data.token_map import TokenMap
-from vseq.data.transforms import EncodeInteger
+from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.argparsing import str2bool
@@ -45,6 +45,7 @@ parser.add_argument("--anneal_steps", default=20000, type=int, help="number of s
 parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--prior_samples", default=32, type=int, help="number of prior samples for logging")
 parser.add_argument("--n_interpolations", default=10, type=int, help="number of interpolation samples for logging")
+parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
@@ -72,12 +73,18 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-vocab = load_vocabulary(PENN_TREEBANK_TRAIN)
-token_map = TokenMap(tokens=vocab, add_start=False, add_end=False, add_delimit=True)
-penn_treebank_transform = EncodeInteger(
-    token_map=token_map,
-    tokenizer=word_tokenizer,
-)
+if args.token_level == "word":
+    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
+    token_map = TokenMap(tokens=tokens, add_delimit=True)
+    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
+else:
+    tokens = PENN_TREEBANK_ALPHABET
+    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
+    penn_treebank_transform = Compose(
+        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
+        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer),
+    )
+
 batcher = TextBatcher()
 loader = TextLoader('txt', cache=True)
 
@@ -134,10 +141,9 @@ model = vseq.models.Bowman(
     trainable_prior=args.trainable_prior,
 )
 print(model)
-model = model.to(device)
 x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)))
+model.summary(input_data=x[:, :2], x_sl=torch.LongTensor([2] * x.size(0)), device='cpu')
+model = model.to(device)
 wandb.watch(model, log='all', log_freq=len(train_loader))
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
@@ -166,20 +172,20 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
         for (x, x_sl), metadata in tracker(test_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
     # Get samples from prior
     (x, x_sl), log_prob = model.generate(z=prior_samples)
-    text = token_map.decode_batch(x, x_sl, join_separator=" ")
+    text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
     data = [(i, t) for i, t in enumerate(text)]
     prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
     rich.print(text)
@@ -191,6 +197,7 @@ for epoch in tracker.epochs(args.epochs):
         "the company disclosed the expected revenue for next year"
     ]
     x = [penn_treebank_transform(_x) for _x in x]
+    x = sorted(x, key=lambda _x: len(_x), reverse=True)
     x, x_sl = batcher(x)
     _, q_z = model.infer(x.to(device), x_sl)
 
@@ -200,13 +207,12 @@ for epoch in tracker.epochs(args.epochs):
     z_interps = z_interps.view(z_interps.size(0) * z_interps.size(3), z_interps.size(1), z_interps.size(2))  # (B*I, T, D)
     (x_hat, x_hat_sl), log_prob = model.generate(z=z_interps, use_mode=True)
 
-    text = token_map.decode_batch(x_hat, x_hat_sl, join_separator=" ")
+    text = token_map.decode_batch(x_hat, x_hat_sl, join_separator=" " if args.token_level == "word" else "")
     data = [(i, t) for i, t in enumerate(text)]
     interpolations_table = wandb.Table(columns=["Idx", "Samples"], data=data)
 
     # Log tracker metrics
     tracker.log(
-        beta=beta_annealer.value,
         samples=prior_samples_table,
         interpolations=interpolations_table,
     )
