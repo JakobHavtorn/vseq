@@ -21,7 +21,7 @@ class BaseDataset(Dataset):
             source (str): Dataset shorthand name or path to source file
             modalities (List[Tuple[Loader, Batcher, Transform]]): File extensions, batcher and transforms
             sort (bool, optional): If True, sort the first modality according to its batcher. Defaults to True.
-        """        
+        """
         super().__init__()
         self.source = source
         self.loaders, self.transforms, self.batchers = zip(*modalities)
@@ -32,27 +32,27 @@ class BaseDataset(Dataset):
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.unique_loaders = set(self.loaders)
         self.examples = self.load_examples(self.source_filepath)
-        
+
     def load_examples(self, source_filepath):
         """Load example_ids from source file"""
-        
-        with open(source_filepath, newline='') as source_file_buffer:
+
+        with open(source_filepath, newline="") as source_file_buffer:
             reader = csv.DictReader(source_file_buffer)
-            is_batch_dataset = ("n_examples" in reader.fieldnames)
+            is_batch_dataset = "n_examples" in reader.fieldnames
             source_rows = list(reader)
-        
+
         if is_batch_dataset:
             return self._load_and_cache_batch_dataset(source_rows)
         return [row["filename"] for row in source_rows]
-    
+
     def _load_and_cache_batch_dataset(self, source_rows):
         """Caches data for each loader upfront."""
-        
+
         # load examples
         examples = []
         for row in source_rows:
             examples += [f"{row['filename']}-{idx}" for idx in range(int(row["n_examples"]))]
-        
+
         # cache dataset for each loader
         print(f"\nLoading and caching data for {self.source}:")
         with tqdm(total=len(source_rows) * len(self.unique_loaders)) as pbar:
@@ -66,10 +66,10 @@ class BaseDataset(Dataset):
                 assert len(examples) == len(loader.load.memory) - n_cached, "Not all examples were cached correctly."
 
         return examples
-            
+
     def __getitem__(self, idx):
         """Get all modalities of a single example"""
-        
+
         example_id = self.examples[idx]
 
         # load data
