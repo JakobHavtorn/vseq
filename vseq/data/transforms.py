@@ -1,6 +1,6 @@
 import math
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -121,6 +121,16 @@ class Scale(Transform):
             return x_scaled
 
         return self.low + x_scaled * (self.high - self.low)
+
+
+class Normalize(Transform):
+    def __init__(self, mean: Union[float, torch.Tensor], std: Union[float, torch.Tensor]):
+        super().__init__()
+        self.mean = mean
+        self.std = std
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
 
 
 class MuLawEncode(Transform):
