@@ -1,5 +1,4 @@
 import argparse
-from vseq.utils.argparsing import str2bool
 
 import torch
 import wandb
@@ -23,8 +22,9 @@ from vseq.data.token_map import TokenMap
 from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
-from vseq.utils.rand import set_seed, get_random_seed
 from vseq.training.annealers import CosineAnnealer
+from vseq.utils.argparsing import str2bool
+from vseq.utils.rand import set_seed, get_random_seed
 
 
 parser = argparse.ArgumentParser()
@@ -40,12 +40,14 @@ parser.add_argument("--dropout", default=0.0, type=float, help="dropout")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
-parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
+parser.add_argument("--free_nats_start_value", default=1, type=float, help="free bits per timestep")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=100, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+parser.add_argument("--wandb_group", default=None, type=str, help="group for wandb")
+
 
 args, _ = parser.parse_known_args()
 
@@ -61,7 +63,7 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 wandb.init(
     entity="vseq",
     project="vrnn",
-    group=None,
+    group=args.wandb_group,
 )
 wandb.config.update(args)
 rich.print(vars(args))
@@ -149,8 +151,8 @@ tracker = Tracker()
 
 beta_annealer = CosineAnnealer(anneal_steps=args.beta_anneal_steps, start_value=args.beta_start_value, end_value=1)
 free_nats_annealer = CosineAnnealer(
-    anneal_steps=args.free_nats_steps // 2,
-    constant_steps=args.free_nats_steps // 2,
+    anneal_steps=args.free_nats_steps // 4 * 3,
+    constant_steps=args.free_nats_steps // 4,
     start_value=args.free_nats_start_value,
     end_value=0,
 )

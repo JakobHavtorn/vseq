@@ -58,24 +58,29 @@ def discount_free_nats(
     In the paper they divide all latents Z into K groups. This implementation assumes a that each KL tensor passed
     to __call__ is one such group.
 
-    The KL tensor may have more dimensions than the batch dimension, in which case the free_nats budget can be
-    distributed across those dimensions by setting `shared_dims`. E.g. if `kl.shape` is (32, 10) and `shared_dims` is -1
-    each of the 10 elements in the last dimension will get 1/10 of the free nats budget.
-    If `kl.shape` is (32, 10, 10) and `shared_dims` is (-2, -1) each of the 10*10=100 elements will get 1 / 100th.
+    By default, this method discounts `free_nats` units of nats elementwise in the KL regardless of its shape.
 
-    The returned free nats KL is equal to max(kl, freebits_per_dim, dim=shared_dims)
+    If the KL tensor has more dimensions than the batch dimension, the free_nats budget can be optionally
+    shared across those dimensions by setting `shared_dims`. E.g. if `kl.shape` is (32, 10) and `shared_dims` is -1,
+    each of the 10 elements in the last dimension will get 1/10th of the free nats budget. If `kl.shape` is (32, 10, 10)
+    and `shared_dims` is (-2, -1) each of the 10*10=100 elements will get 1 / 100th.
+
+    The returned KL with `free_nats` discounted is equal to max(kl, freebits_per_dim)
 
     [1] https://arxiv.org/pdf/1606.04934
     """
-    if free_nats == 0 or free_nats is None:
+    if free_nats is None or free_nats == 0:
         return kl
 
     if isinstance(shared_dims, int):
         shared_dims = (shared_dims,)
 
-    # equally divide free nats budget over the elements
-    n_elements = math.prod(shared_dims) if shared_dims is not None else 1
-    min_kl_per_dim = free_nats / n_elements
+    # equally divide free nats budget over the elements in shared_dims
+    if shared_dims is not None:
+        n_elements = math.prod([kl.shape[d] for d in shared_dims])
+        min_kl_per_dim = free_nats / n_elements
+    else:
+        min_kl_per_dim = free_nats
 
     min_kl_per_dim = torch.tensor(min_kl_per_dim, dtype=kl.dtype, device=kl.device)
     freenats_kl = torch.maximum(kl, min_kl_per_dim)

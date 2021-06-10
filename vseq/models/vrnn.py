@@ -211,17 +211,17 @@ class VRNN(nn.Module):
         free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
-        
+
         seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
-        
+
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
         kl = (kld_twise * seq_mask.unsqueeze(1)).sum((1, 2))  # (B,)
         elbo = log_prob - kl  # (B,)
 
-        kld_twise = discount_free_nats(kld_twise, free_nats, 1)
-        kl = (kld_twise * seq_mask.unsqueeze(1)).sum((1, 2))  # (B,)
+        kld_twise_fn = discount_free_nats(kld_twise, free_nats, shared_dims=1)
+        kl = (kld_twise_fn * seq_mask.unsqueeze(1)).sum((1, 2))  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
 
         return loss, elbo, log_prob, kl
