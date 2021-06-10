@@ -33,6 +33,16 @@ class Batcher:
         raise NotImplementedError()
 
 
+class ListBatcher(Batcher):
+    def __init__(self) -> None:
+        """Generic batcher that simply returns a list of tensors (of potentially different shapes) and their .numel()"""
+        super().__init__()
+
+    def collate(self, batch: List[torch.Tensor]):
+        sequence_lengths = [tensor.numel() for tensor in batch]
+        return batch, torch.LongTensor(sequence_lengths)
+
+
 class TensorBatcher(Batcher):
     def __init__(self):
         """Generic concatenating batcher for equally sized tensors of arbitrary dimensions"""
