@@ -98,11 +98,8 @@ class VRNNCell(jit.ScriptModule):
         else:
             h = self.gru_cell(phi_z, h)
 
-        # kl divergence
-        kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
-
         outputs = SimpleNamespace(z=z, enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
-        return h, phi_z, kld, outputs
+        return h, phi_z, enc_mu, enc_sd, prior_mu, prior_sd, outputs
 
     def generate(self, x: TensorType["B", "x_dim"], h: TensorType["B", "h_dim"]):
         # prior p(z)
@@ -208,23 +205,25 @@ class VRNN(nn.Module):
         self,
         y: TensorType["B", "T"],
         logits: TensorType["B", "T", "D"],
-        kl_twise: TensorType["B", "T", "latent_size"],
+        kld_twise: TensorType["B", "T", "latent_size"],
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
+        
         seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
+        
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
-        kl = kl_twise.sum((1, 2))  # (B,)
+        kl = (kld_twise * seq_mask.unsqueeze(1)).sum((1, 2))  # (B,)
         elbo = log_prob - kl  # (B,)
 
-        kl_twise = discount_free_nats(kl_twise, free_nats, -1)
-        kl = kl_twise.sum((1, 2))  # (B,)
-
+        kld_twise = discount_free_nats(kld_twise, free_nats, 1)
+        kl = (kld_twise * seq_mask.unsqueeze(1)).sum((1, 2))  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+
         return loss, elbo, log_prob, kl
 
     def forward(
@@ -240,7 +239,10 @@ class VRNN(nn.Module):
 
         all_h = []
         all_phi_z = []
-        all_kld = []
+        all_enc_mu = []
+        all_enc_sd = []
+        all_prior_mu = []
+        all_prior_sd = []
         all_outputs = []
 
         # target
@@ -258,28 +260,37 @@ class VRNN(nn.Module):
         all_h.append(h)
 
         for t in range(timesteps):
-            h, phi_z, kld, outputs = self.vrnn_cell(phi_x[t], h)
+            h, phi_z, enc_mu, enc_sd, prior_mu, prior_sd, outputs = self.vrnn_cell(phi_x[t], h)
 
             all_h.append(h)
             all_phi_z.append(phi_z)
-            all_kld.append(kld)
+            all_enc_mu.append(enc_mu)
+            all_enc_sd.append(enc_sd)
+            all_prior_mu.append(prior_mu)
+            all_prior_sd.append(prior_sd)
             all_outputs.append(outputs)
 
-        all_h.pop()
+        all_h.pop()  # Include initial and not last
 
         # output distribution
-        h = torch.stack(all_h, dim=1)
         phi_z = torch.stack(all_phi_z, dim=1)
-
         if self.condition_x_on_h:
+            h = torch.stack(all_h, dim=1)
             dec = self.decoder(torch.cat([phi_z, h], -1))
         else:
             dec = self.decoder(phi_z)
+
         dec = self.dropout(dec) if self.dropout is not None else dec
+
         logits = self.likelihood(dec)  # (B, T, D)
 
-        # loss
-        kld = torch.stack(all_kld, dim=1)
+        # kl divergence, elbo and loss
+        enc_mu = torch.stack(all_enc_mu, dim=-1)
+        enc_sd = torch.stack(all_enc_sd, dim=-1)
+        prior_mu = torch.stack(all_prior_mu, dim=-1)
+        prior_sd = torch.stack(all_prior_sd, dim=-1)
+        kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
+
         loss, elbo, log_prob, kl = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
         metrics = [
