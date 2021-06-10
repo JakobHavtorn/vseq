@@ -51,6 +51,13 @@ class TensorBatcher(Batcher):
         return collated_batch, torch.LongTensor(sequence_lengths)
 
 
+class FixedLengthBatcher(Batcher):
+    def __init__(self) -> None:
+        super().__init__()
+        raise NotImplementedError()
+        # TODO Pad all inputs to same length
+
+
 class AudioBatcher(Batcher):
     def __init__(self) -> None:
         super().__init__()
