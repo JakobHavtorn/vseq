@@ -20,15 +20,14 @@ device = get_free_gpus(1, require_unused=True)
 print(device)
 
 # custom VS regular pytorch module
-model = LSTM(in_features, out_features, num_layers=num_layers, bidirectional=bidirectional, layer_norm=False, jit_compile=False).to(device)
-model = nn.LSTM(in_features, out_features, num_layers=num_layers, bidirectional=bidirectional).to(device)
+model = LSTM(in_features, out_features, num_layers=num_layers, bidirectional=bidirectional, layer_norm=False, jit_compile=True).to(device)
+nn_model = nn.LSTM(in_features, out_features, num_layers=num_layers, bidirectional=bidirectional).to(device)
 
 # jit'ed module
 model_jit = torch.jit.script(model)
 
 
 def get_x():
-    # seq_len = torch.randint(low=50, high=150, size=(1,))
     x = torch.randn(seq_len, batch_size, in_features).to(device)
     return x
 
@@ -41,13 +40,19 @@ def get_state():
     return state
 
 
-print(f"forward()            | nn.LSTM:         {timeit('model(get_x(), get_state())', globals=globals(), repeats=50)}")
-print(f"forward()            | custom LSTM:     {timeit('model(get_x(), get_state())', globals=globals(), repeats=50)}")
-print(f"forward()            | jit custom LSTM: {timeit('model_jit(get_x(), get_state())', globals=globals(), repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()            | nn.LSTM:         {timeit('nn_model(get_x(), get_state())[0].sum().item()', globals=globals(), number=10, repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()            | jit custom LSTM: {timeit('model_jit(get_x(), get_state())[0].sum().item()', globals=globals(), number=10, repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()            | custom LSTM:     {timeit('model(get_x(), get_state())[0].sum().item()', globals=globals(), number=10, repeats=50)}")
 
-print(f"forward()+backward() | nn.LSTM:         {timeit('model(get_x(), get_state())[0].sum().backward()', globals=globals(), repeats=50)}")
-print(f"forward()+backward() | custom LSTM:     {timeit('model(get_x(), get_state())[0].sum().backward()', globals=globals(), repeats=50)}")
-print(f"forward()+backward() | jit custom LSTM: {timeit('model_jit(get_x(), get_state())[0].sum().backward()', globals=globals(), repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()+backward() | nn.LSTM:         {timeit('nn_model(get_x(), get_state())[0].sum().backward()', globals=globals(), number=10, repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()+backward() | jit custom LSTM: {timeit('model_jit(get_x(), get_state())[0].sum().backward()', globals=globals(), number=10, repeats=50)}")
+torch.manual_seed(42)
+print(f"forward()+backward() | custom LSTM:     {timeit('model(get_x(), get_state())[0].sum().backward()', globals=globals(), number=10, repeats=50)}")
 
 # forward()            | nn.LSTM:          namespace(min=0.007419191561639309, max=0.010110171288251877, mean=0.00823103709369898, median=0.007983970679342747, std=0.0006925272679852692, number=50, repeats=50)
 # forward()            | custom LSTM:      namespace(min=0.022613052278757095, max=0.040045680664479735, mean=0.029453871361911296, median=0.02876217933371663, std=0.004078533439866274, number=10, repeats=50)
