@@ -3,12 +3,37 @@ import csv
 from tqdm import tqdm
 from typing import List, Tuple, Any
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 
 from .loaders import Loader
 from .transforms import Transform
-from .batchers import Batcher
+from .batchers import Batcher, ListBatcher
 from .datapaths import DATAPATHS_MAPPING
+
+
+def update(existingAggregate, newValue):
+    """
+    mean accumulates the mean of the entire dataset
+    M2 aggregates the squared distance from the mean
+    count aggregates the number of samples seen so far
+    """
+    (count, mean, M2) = existingAggregate
+    count += 1
+    delta = newValue - mean
+    mean += delta / count
+    delta2 = newValue - mean
+    M2 += delta * delta2
+    return (count, mean, M2)
+
+
+def finalize(existingAggregate):
+    """Retrieve the mean, variance and sample variance from an aggregate"""
+    (count, mean, M2) = existingAggregate
+    if count < 2:
+        return float("nan")
+    else:
+        (mean, variance, sampleVariance) = (mean, M2 / count, M2 / (count - 1))
+        return (mean, variance, sampleVariance)
 
 
 class BaseDataset(Dataset):
@@ -109,6 +134,37 @@ class BaseDataset(Dataset):
             outputs.append(o)
 
         return outputs, metadata
+
+    def compute_statistics(self, **dataloader_kwargs):
+        assert all(isinstance(batcher, ListBatcher) for batcher in self.batchers)
+
+        loader = DataLoader(self, batch_size=1, collate_fn=self.collate, **dataloader_kwargs)
+
+        aggregates_mean = [(0, 0, 0) for _ in range(self.num_modalities)]
+        aggregates_var = [(0, 0, 0) for _ in range(self.num_modalities)]
+        for data, metadata in tqdm(loader):
+            if self.num_modalities == 1:
+                x, x_sl = data
+                x, x_sl = [x], [x_sl]
+
+            for i_modality in range(self.num_modalities):
+                mean = x[i_modality][0].mean()
+                var = x[i_modality][0].var()
+
+                aggregates_mean[i_modality] = update(aggregates_mean[i_modality], mean)
+                aggregates_var[i_modality] = update(aggregates_var[i_modality], var)
+
+        means, variances = [], []
+        for i_modality in range(self.num_modalities):
+            aggregates_mean[i_modality] = finalize(aggregates_mean[i_modality])
+            aggregates_var[i_modality] = finalize(aggregates_var[i_modality])
+
+            means.append(aggregates_mean[i_modality][0])
+            variances.append(aggregates_var[i_modality][0])
+
+        if self.num_modalities == 1:
+            return means[0], variances[0]
+        return means, variances
 
     def __len__(self):
         return len(self.examples)
