@@ -1,4 +1,5 @@
 import argparse
+import math
 
 import torch
 import wandb
@@ -13,10 +14,10 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import SpectrogramBatcher
+from vseq.data.batchers import ListBatcher, SpectrogramBatcher
 from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import StackWaveform
+from vseq.data.transforms import Compose, Normalize, StackWaveform
 from vseq.evaluation import Tracker
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.training.annealers import CosineAnnealer
@@ -32,6 +33,7 @@ parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of 
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
 parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
+parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -57,9 +59,14 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-transform = StackWaveform(200)
-batcher = SpectrogramBatcher()
 loader = AudioLoader("wav", cache=False)
+batcher = ListBatcher()
+mean, variance = BaseDataset(source=TIMIT_TRAIN, modalities=[(loader, None, batcher)], sort=False).compute_statistics(
+    num_workers=args.num_workers
+)
+
+batcher = SpectrogramBatcher()
+transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
 
 modalities = [(loader, transform, batcher)]
 
@@ -138,4 +145,7 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    tracker.log()
+    (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+    audio = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"TIMIT example {i}", sample_rate=16000) for i in range(2)]
+
+    tracker.log(audio=audio)

@@ -8,6 +8,7 @@ import torch.nn.init as init
 import torch.jit as jit
 
 from torchtyping import TensorType
+from tqdm import tqdm
 
 from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric, LatestMeanMetric
 from vseq.models import BaseModel
@@ -332,6 +333,8 @@ class VRNN(nn.Module):
 
         seq_active = torch.ones(n_samples, dtype=torch.int)
         all_ended, t = False, 0  # Used to condition while loop
+
+        pbar = tqdm(total=max_timesteps)
         while not all_ended and t < max_timesteps:
             phi_x = self.phi_x(x)
 
@@ -364,7 +367,9 @@ class VRNN(nn.Module):
             # Update loop conditions
             t += 1
             all_ended = torch.all(1 - seq_active).item()
+            pbar.update(1)
 
+        pbar.close()
         x = torch.stack(all_x, dim=1)
 
         outputs = SimpleNamespace(**list_of_dict_to_dict_of_list([vars(ns) for ns in all_outputs]))
