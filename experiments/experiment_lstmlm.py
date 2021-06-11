@@ -133,7 +133,7 @@ model = model.to(device)
 print(model)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-model.summary(input_data=x[:, :2], x_sl=torch.tensor([2] * x.size(0), dtype=int))
+# model.summary(input_data=x[:, :2], x_sl=torch.tensor([2] * x.size(0), dtype=int))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = args.optimizer_json.pop('optimizer')

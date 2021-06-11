@@ -59,14 +59,10 @@ class LSTMLM(BaseModel):
                 input_size=embedding_dim,
                 hidden_size=hidden_size,
                 batch_first=False,
-                jit_compile=False,
+                jit_compile=True,
                 layer_norm=layer_norm,
                 **lstm_kwargs,
             )
-            # Simple cell scripted  20.30Hz
-            # Advanced scripted cell (ScriptModule) 15.57Hz epoch 3
-            # Advanced cell with outer jit.script() 15.58Hz epoch 3
-            # Advanced cell (not scripted) 17.19Hx
         else:
             self.lstm = nn.LSTM(input_size=embedding_dim, hidden_size=hidden_size, batch_first=False, **lstm_kwargs)
 
