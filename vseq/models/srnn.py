@@ -130,6 +130,7 @@ class SRNN(nn.Module):
         free_nats: float = 0,
     ):
         batch_size = x.size(0)
+        device = x.device
 
         # target
         y = x.clone().detach()
@@ -145,14 +146,14 @@ class SRNN(nn.Module):
         u_embedding = torch.cat([torch.zeros_like(x_embedding[0:1]), x_embedding[:-1, ...]], dim=0) if u is None else u
 
         # u_t to d_t
-        d0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=x.device) if d0 is None else d0
+        d0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=device) if d0 is None else d0
         d, _ = self.forward_recurrent(u_embedding, d0)
 
         # x_t and d_t to a_t
         concat_h_t_x_t = torch.cat([x_embedding, d], dim=-1)
         concat_h_t_x_t = concat_h_t_x_t.flip(0)  # reverse (index 0 == time T)
 
-        a0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=x.device) if a0 is None else a0
+        a0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=device) if a0 is None else a0
         a, _ = self.backward_recurrent(concat_h_t_x_t, a0)
         a = a.flip(0)  # reverse back again (index 0 == time 0)
 
@@ -164,7 +165,7 @@ class SRNN(nn.Module):
         d = d.permute(1, 0, 2)
         a = a.permute(1, 0, 2)
 
-        z_t = torch.zeros(batch_size, self.z_dim, device=x.device) if z0 is None else z0
+        z_t = torch.zeros(batch_size, self.z_dim, device=device) if z0 is None else z0
 
         for h_t, a_t in zip(d.unbind(1), a.unbind(1)):
 
