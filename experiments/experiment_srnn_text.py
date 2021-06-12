@@ -33,6 +33,7 @@ parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
+parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
 parser.add_argument("--condition_h_on_x", default=True, type=str2bool, help="whether to condition h on x")
 parser.add_argument("--condition_x_on_h", default=True, type=str2bool, help="whether to condition x on h")
 parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
@@ -136,6 +137,7 @@ model = vseq.models.SRNNLM(
     delimiter_token_idx=delimiter_token_idx,
     condition_h_on_x=args.condition_h_on_x,
     condition_x_on_h=args.condition_x_on_h,
+    residual_posterior=args.residual_posterior,
 )
 
 print(model)
