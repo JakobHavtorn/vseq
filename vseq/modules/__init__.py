@@ -1,2 +1,9 @@
-from vseq.modules.highway import HighwayStackDense, HighwayBlockDense
-from vseq.modules.dropout import WordDropout
+from vseq.modules.activations import *
+from vseq.modules.convenience import *
+from vseq.modules.custom_recurrent import *
+from vseq.modules.distributions import *
+from vseq.modules.dropout import *
+from vseq.modules.dropout import *
+from vseq.modules.highway import *
+from vseq.modules.hmlstm import *
+from vseq.modules.straight_through import *
