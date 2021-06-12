@@ -104,6 +104,11 @@ class CWRNNLM(BaseModel):
             self.Wh.data *= self.utri_mask
 
     def forward(self, x: TensorType["B", "timesteps", int], x_sl: TensorType["B", int]):
+        # TODO Refactor:
+        # TODO Create CWRNNLM class
+        # TODO Create CWRNNCell class
+        # TODO Create CWRNN
+
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
 
