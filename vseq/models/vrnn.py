@@ -225,7 +225,7 @@ class VRNN(nn.Module):
         kl = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
 
-        return loss, elbo, log_prob, kl
+        return loss, elbo, log_prob, kl, seq_mask
 
     def forward(
         self,
@@ -292,7 +292,7 @@ class VRNN(nn.Module):
         prior_sd = torch.stack(all_prior_sd, dim=1)
         kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
 
-        loss, elbo, log_prob, kl = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
+        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -304,7 +304,7 @@ class VRNN(nn.Module):
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits)
+        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
         return loss, metrics, outputs
 
     def generate(
@@ -570,11 +570,19 @@ class VRNNAudio(BaseModel):
             bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
             del metrics[bpd_metric_idx]
 
-        metrics.extend([
-            BitsPerDimMetric(outputs.elbo.cpu() - x_sl * self.input_size * math.log(2 ** 8), reduce_by=x_sl),
-            LatestMeanMetric(((outputs.y - outputs.logits[0]) ** 2).mean().sqrt().item(), name="mse"),
-            LatestMeanMetric(outputs.logits[1].mean().item(), name="stddev"),
-        ])
+        seq_mask = outputs.seq_mask.to(bool)
+        mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
+        std = outputs.logits[1][seq_mask, :].mean().item()
+        bpd = outputs.elbo.cpu() - x_sl * self.input_size * math.log(2 ** 8)
+
+        metrics.extend(
+            [
+                BitsPerDimMetric(bpd, reduce_by=x_sl),
+                LatestMeanMetric(mse, name="mse"),
+                LatestMeanMetric(std, name="stddev"),
+            ]
+        )
+
 
         return loss, metrics, outputs
 

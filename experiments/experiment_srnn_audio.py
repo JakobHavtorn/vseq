@@ -19,6 +19,7 @@ from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
 from vseq.data.transforms import Compose, Normalize, StackWaveform
 from vseq.evaluation import Tracker
+from vseq.utils.argparsing import str2bool
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.training.annealers import CosineAnnealer
 
@@ -29,6 +30,9 @@ parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
+parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
+parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
+parser.add_argument("--dropout", default=0.0, type=float, help="dropout")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
@@ -51,7 +55,7 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="vrnn",
+    project="srnn",
     group=None,
 )
 wandb.config.update(args)
@@ -96,10 +100,13 @@ test_loader = DataLoader(
 )
 
 
-model = vseq.models.VRNNAudio(
+model = vseq.models.SRNNAudio(
     input_size=args.stack_frames,
     hidden_size=args.hidden_size,
     latent_size=args.latent_size,
+    word_dropout=args.word_dropout,
+    dropout=args.dropout,
+    residual_posterior=args.residual_posterior,
 )
 
 print(model)
@@ -144,7 +151,8 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
-    audio = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"TIMIT example {i}", sample_rate=16000) for i in range(2)]
+    # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+    # audio = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"TIMIT example {i}", sample_rate=16000) for i in range(2)]
 
-    tracker.log(audio=audio)
+    # tracker.log(audio=audio)
+    tracker.log()

@@ -34,8 +34,6 @@ parser.add_argument("--embedding_dim", default=300, type=int, help="dimensionali
 parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in VRNN")
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
-parser.add_argument("--condition_h_on_x", default=True, type=str2bool, help="whether to condition h on x")
-parser.add_argument("--condition_x_on_h", default=True, type=str2bool, help="whether to condition x on h")
 parser.add_argument("--word_dropout", default=0.0, type=float, help="word dropout")
 parser.add_argument("--dropout", default=0.0, type=float, help="dropout")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
@@ -135,8 +133,6 @@ model = vseq.models.SRNNLM(
     word_dropout=args.word_dropout,
     dropout=args.dropout,
     delimiter_token_idx=delimiter_token_idx,
-    condition_h_on_x=args.condition_h_on_x,
-    condition_x_on_h=args.condition_x_on_h,
     residual_posterior=args.residual_posterior,
 )
 
@@ -144,7 +140,7 @@ print(model)
 model = model.to(device)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-# model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)))
+model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)

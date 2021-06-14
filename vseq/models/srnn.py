@@ -1,3 +1,5 @@
+import math
+
 from types import SimpleNamespace
 
 import torch
@@ -31,13 +33,12 @@ class SRNN(nn.Module):
         residual_posterior: bool = False,
     ):
         """Stochastic Recurrent Neural Network from [1]
-        
+
         [1] https://arxiv.org/abs/1605.07571
         """
         super(SRNN, self).__init__()
 
         self.x_embedding = x_embedding
-        self.likelihood = likelihood
         self.x_dim = x_dim
         self.h_dim = h_dim
         self.z_dim = z_dim
@@ -46,6 +47,9 @@ class SRNN(nn.Module):
         self.word_dropout = word_dropout
         self.num_layers = num_layers
         self.residual_posterior = residual_posterior
+
+        self.forward_recurrent = nn.GRU(x_dim, h_dim, num_layers)
+        self.backward_recurrent = nn.GRU(x_dim + h_dim, h_dim, num_layers)
 
         # encoder  x/u to z, input to latent variable, inference model
         self.encoder = nn.Sequential(
@@ -79,11 +83,10 @@ class SRNN(nn.Module):
             nn.ReLU(),
         )
 
-        self.forward_recurrent = nn.GRU(x_dim, h_dim, num_layers)
-        self.backward_recurrent = nn.GRU(x_dim + h_dim, h_dim, num_layers)
+        self.dropout = nn.Dropout(dropout) if dropout else None
+        self.likelihood = likelihood
 
         self.word_dropout = WordDropout(word_dropout) if word_dropout else None
-        self.dropout = nn.Dropout(dropout) if dropout else None
 
         self.reset_parameters()
 
@@ -116,7 +119,7 @@ class SRNN(nn.Module):
         kl = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
         loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
 
-        return loss, elbo, log_prob, kl
+        return loss, elbo, log_prob, kl, seq_mask
 
     def forward(
         self,
@@ -202,7 +205,7 @@ class SRNN(nn.Module):
         prior_sd = torch.stack(all_prior_sd, dim=1)
         kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
 
-        loss, elbo, log_prob, kl = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
+        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -214,7 +217,7 @@ class SRNN(nn.Module):
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits)
+        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
         return loss, metrics, outputs
 
     def generate(self, x, step, u):
@@ -315,11 +318,9 @@ class SRNNLM(BaseModel):
         embedding_dim: int = 300,
         hidden_size: int = 256,
         latent_size: int = 64,
-        condition_h_on_x: bool = True,
-        condition_x_on_h: bool = True,
         word_dropout: float = 0,
         dropout: float = 0,
-        residual_posterior: bool = False
+        residual_posterior: bool = False,
     ):
         """An SRNN for language modelling.
 
@@ -334,8 +335,6 @@ class SRNNLM(BaseModel):
         self.word_dropout = word_dropout
         self.dropout = dropout
         self.delimiter_token_idx = delimiter_token_idx
-        self.condition_h_on_x = condition_h_on_x
-        self.condition_x_on_h = condition_x_on_h
         self.residual_posterior = residual_posterior
 
         embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim)
@@ -348,8 +347,6 @@ class SRNNLM(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=num_embeddings,
-            # condition_h_on_x=condition_h_on_x,
-            # condition_x_on_h=condition_x_on_h,
             word_dropout=word_dropout,
             dropout=dropout,
             residual_posterior=residual_posterior,
@@ -361,18 +358,21 @@ class SRNNLM(BaseModel):
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
-        d0: TensorType["B", "h_dim"] = None,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
         z0: TensorType["B", "h_dim"] = None,
     ):
-        return self.srnn(x=x, x_sl=x_sl, d0=d0, z0=z0, beta=beta, free_nats=free_nats)
+        return self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
 
     def generate(
         self,
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = True,
-        x: TensorType["B", "x_dim"] = None,
-        d: TensorType["B", "h_dim"] = None,
+        x: TensorType["B", "T", int] = None,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "h_dim"] = None,
     ):
         x = torch.full([n_samples], self.delimiter_token_idx, device=self.device) if x is None else x
         return self.srnn.generate(
@@ -381,5 +381,98 @@ class SRNNLM(BaseModel):
             stop_value=self.delimiter_token_idx,
             use_mode=use_mode,
             x=x,
-            d=d,
+            d0=d0,
+            a0=a0,
+            z0=z0,
+        )
+
+
+class SRNNAudio(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 200,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+        word_dropout: float = 0,
+        dropout: float = 0,
+        residual_posterior: bool = False,
+    ):
+        """A VRNN for modelling audio waveforms."""
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+        self.word_dropout = word_dropout
+        self.dropout = dropout
+        self.residual_posterior = residual_posterior
+
+        embedding = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        likelihood = GaussianDense(hidden_size, input_size, reduce_dim=-1)
+
+        self.srnn = SRNN(
+            x_embedding=embedding,
+            likelihood=likelihood,
+            x_dim=hidden_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+            word_dropout=word_dropout,
+            dropout=dropout,
+            residual_posterior=residual_posterior,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "h_dim"] = None,
+    ):
+        loss, metrics, outputs = self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
+
+        for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
+            bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
+            del metrics[bpd_metric_idx]
+
+        seq_mask = outputs.seq_mask.to(bool)
+        mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
+        std = outputs.logits[1][seq_mask, :].mean().item()
+        bpd = outputs.elbo.cpu() - x_sl * self.input_size
+
+        metrics.extend(
+            [
+                BitsPerDimMetric(bpd, reduce_by=x_sl),
+                LatestMeanMetric(mse, name="mse"),
+                LatestMeanMetric(std, name="stddev"),
+            ]
+        )
+
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        return self.srnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h=h,
         )
