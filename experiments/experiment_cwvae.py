@@ -48,7 +48,7 @@ parser.add_argument("--wandb_group", default=None, type=str, help='custom group 
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 
 if args.seed is None:

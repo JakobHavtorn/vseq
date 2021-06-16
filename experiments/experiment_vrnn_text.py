@@ -49,7 +49,7 @@ parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 parser.add_argument("--wandb_group", default=None, type=str, help="group for wandb")
 
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 
 if args.seed is None:

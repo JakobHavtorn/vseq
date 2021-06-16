@@ -36,7 +36,7 @@ parser.add_argument("--num_workers", default=4, type=int, help="number of datalo
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 
 if args.seed is None:
