@@ -19,4 +19,5 @@ Ablation experiments to determine the mechanism that makes CW-VAE (and VRNN) wor
 
 6. SRNN vanilla
 7. SRNN without stochastic transition z_{t-1} -> z_t (no dependency between z's, equiv. to VRNN without z_t -> d_t connection)
+8. SRNN filtering version (backward_recurrent is a per-timestep linear transform)
 8. 

@@ -29,13 +29,13 @@ def kl_divergence_mc(
 
 
 @torch.jit.script
-def kl_divergence_gaussian(mu_q, sd_q, mu_p, sd_p):
+def kl_divergence_gaussian(mu_q: torch.Tensor, sd_q: torch.Tensor, mu_p: torch.Tensor, sd_p: torch.Tensor):
     """Elementwise analytical KL divergence between two Gaussian distributions KL(q||p) (no reduction applied)."""
     return sd_p.log() - sd_q.log() + (sd_q.pow(2) + (mu_q - mu_p).pow(2)) / (2 * sd_p.pow(2)) - 0.5
 
 
 @torch.jit.script
-def rsample_gaussian(mu, sd):
+def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor):
     """Return a reparameterized sample from a given Gaussian distribution.
 
     Args:
@@ -46,6 +46,73 @@ def rsample_gaussian(mu, sd):
         torch.Tensor: Reparameterized sample
     """
     return torch.randn_like(sd).mul(sd).add(mu)
+
+
+def logistic_rsample(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
+    """
+    Returns a sample from Logistic with specified mean and log scale.
+
+    :param mu_ls: a tensor containing mean and log scale along dim=1,
+            or a tuple (mean, log scale)
+    :return: a reparameterized sample with the same size as the input
+            mean and log scale
+    """
+    # Get parameters
+    scale = log_scale.exp()
+
+    # Get uniform sample in open interval (0, 1)
+    u = torch.zeros_like(mu)
+    u.uniform_(eps, 1 - eps)
+
+    # Transform into logistic sample
+    sample = mu + scale * (torch.log(u) - torch.log(1 - u))
+
+    return sample
+
+
+def rsample_discretized_logistic_mixture(logits, num_mix: int, eps: float = 1e-8):
+    """Return a reparameterized sample from a given Discretized Logistic Mixture distribution.
+
+    Code taken from PyTorch adaptation of original PixelCNN++ TensorFlow implementation:
+    https://github.com/pclucas14/pixel-cnn-pp
+
+    Args:
+        logits (torch.Tensor): Mixture coefficients, means and log-scales for logistic mixtures `(*, D * 3 * num_mix)`.
+        num_mix (int): Number of mixture components in the the DLM.
+        eps (float): Bounds [eps, 1-eps] on the uniform rv used to sample the mixture coefficients and the logistic.
+
+    Returns:
+        torch.Tensor: Sample from the DLM `(*, D)`
+    """
+    ls = [int(y) for y in logits.size()]
+    x_dim = int(ls[-1] / (3 * num_mix))
+    xs = ls[:-1] + [x_dim]
+
+    # unpack parameters
+    logits = logits.view(xs + [num_mix * 3])  # 3 for mean, scale, coefficients (D, 3 x num_mix)
+    coeffients = logits[..., :num_mix]
+    means = logits[..., :num_mix]
+    log_scales = logits[..., num_mix : 2 * num_mix].clamp(min=-7.0)
+
+    # sample mixture indicator from softmax
+    temp = torch.empty_like(coeffients)
+    temp.uniform_(eps, 1.0 - eps)
+    temp = coeffients.data - torch.log(-torch.log(temp))
+    _, argmax = temp.max(dim=-1)
+    one_hot = torch.nn.functional.one_hot(argmax, num_mix)
+
+    # select logistic parameters
+    means = torch.sum(logits[..., :num_mix] * one_hot, dim=-1)
+    log_scales = torch.clamp(torch.sum(logits[..., num_mix : 2 * num_mix] * one_hot, dim=-1), min=-7.0)
+
+    # sample from logistc
+    u = torch.empty_like(means)
+    u.uniform_(eps, 1.0 - eps)
+    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1.0 - u))
+
+    # Enforce normalization
+    x = x.clamp(min=-1, max=1)
+    return x
 
 
 def discount_free_nats(

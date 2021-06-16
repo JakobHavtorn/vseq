@@ -1,30 +1,30 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class Permute(nn.Module):
-    def __init__(self, *dims):
+    def __init__(self, *dims, n_batch_dims: int = 1):
         """nn.Module wrapper of Tensor.permute"""
         super().__init__()
         self.dims = dims
+        self.n_batch_dims = n_batch_dims
 
     def forward(self, x):
-        return x.permute(*self.dims)
+        return x.permute(*list(range(self.n_batch_dims)), *self.dims)
 
     def __repr__(self):
         return f"Permute({self.dims})"
 
 
 class View(nn.Module):
-    def __init__(self, shape, n_batch_dims=1):
+    def __init__(self, *shape, n_batch_dims: int = 1):
         """nn.Module wrapper of Tensor.view"""
         super().__init__()
         self.shape = shape
         self.n_batch_dims = n_batch_dims
 
     def forward(self, x):
-        return x.view(*x.shape[: self.n_batch_dims], *self.shape)
+        return x.view(*x.shape[0:self.n_batch_dims], *self.shape)
 
     def extra_repr(self):
         return f"n_batch_dims={self.n_batch_dims}, shape={self.shape}"

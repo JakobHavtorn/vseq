@@ -1,6 +1,8 @@
 import math
 
 from types import SimpleNamespace
+from typing import Optional
+from vseq.modules.stft import ISTFT, STFT
 
 import torch
 import torch.nn as nn
@@ -12,8 +14,14 @@ from tqdm import tqdm
 
 from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric, LatestMeanMetric
 from vseq.models import BaseModel
-from vseq.modules.convenience import AddConstant
-from vseq.modules.distributions import GaussianDense, BernoulliDense, CategoricalDense
+from vseq.modules.convenience import Permute, View
+from vseq.modules.distributions import (
+    DiscretizedLogisticMixtureDense,
+    GaussianDense,
+    BernoulliDense,
+    CategoricalDense,
+    PolarCoordinatesSpectrogram,
+)
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
@@ -40,7 +48,7 @@ class VRNNCell(jit.ScriptModule):
         self.h_dim = h_dim
         self.z_dim = z_dim
         self.condition_h_on_x = condition_h_on_x
- 
+
         self.phi_z = nn.Sequential(
             nn.Linear(z_dim, h_dim),
             nn.ReLU(),
@@ -182,12 +190,7 @@ class VRNN(nn.Module):
         self.condition_h_on_x = condition_h_on_x
         self.condition_x_on_h = condition_x_on_h
 
-        self.vrnn_cell = VRNNCell(
-            x_dim=x_dim,
-            h_dim=h_dim,
-            z_dim=z_dim,
-            condition_h_on_x=condition_h_on_x
-        )
+        self.vrnn_cell = VRNNCell(x_dim=x_dim, h_dim=h_dim, z_dim=z_dim, condition_h_on_x=condition_h_on_x)
 
         decoder_in_dim = 2 * h_dim if condition_x_on_h else h_dim
         self.decoder = nn.Sequential(
@@ -233,9 +236,8 @@ class VRNN(nn.Module):
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
-
         batch_size, timesteps = x.size(0), x.size(1)
 
         all_h = []
@@ -257,7 +259,7 @@ class VRNN(nn.Module):
         phi_x = phi_x.unbind(1)
 
         # initial h
-        h = torch.zeros(batch_size, self.h_dim, device=x.device) if h is None else h
+        h = torch.zeros(batch_size, self.h_dim, device=x.device) if h0 is None else h0
         all_h.append(h)
 
         for t in range(timesteps):
@@ -294,23 +296,27 @@ class VRNN(nn.Module):
 
         loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
+        x_hat = logits.argmax(dim=-1)
+
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo"),
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
-            PerplexityMetric(elbo, reduce_by=x_sl),
+            # PerplexityMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
+        outputs = SimpleNamespace(
+            elbo=elbo, log_prob=log_prob, kl=kl, y=y, x_hat=x_hat, logits=logits, seq_mask=seq_mask
+        )
         return loss, metrics, outputs
 
     def generate(
         self,
-        x: TensorType["B", "T", "x_dim"],
-        h: TensorType["B", "h_dim"] = None,
+        x: TensorType["B", "x_dim"],
+        h0: TensorType["B", "h_dim"] = None,
         n_samples: int = 1,
         max_timesteps: int = 100,
         stop_value: float = None,
@@ -320,7 +326,7 @@ class VRNN(nn.Module):
         if x.size(0) > 1:
             assert x.size(0) == n_samples
         else:
-            x = x.repeat(n_samples, *[1] * (x.ndim - 1))  # Repeat only batch
+            x = x.repeat(n_samples, *[1] * (x.ndim - 1))  # Repeat along batch
 
         # TODO If multiple timesteps in x, run a forward pass to get conditional initial h (assert h is None)
 
@@ -329,7 +335,7 @@ class VRNN(nn.Module):
         x_sl = torch.ones(n_samples, dtype=torch.int)
 
         # initial h
-        h = torch.zeros(n_samples, self.h_dim, device=x.device) if h is None else h
+        h = torch.zeros(n_samples, self.h_dim, device=x.device) if h0 is None else h0
 
         seq_active = torch.ones(n_samples, dtype=torch.int)
         all_ended, t = False, 0  # Used to condition while loop
@@ -349,14 +355,14 @@ class VRNN(nn.Module):
             if use_mode:
                 x = self.likelihood.mode(logits)
             else:
-                x = self.likelihood.get_distribution(logits).sample()
+                x = self.likelihood.sample(logits)
 
             all_x.append(x)
             all_outputs.append(outputs)
 
             # Update sequence length
             x_sl += seq_active
-            seq_ending = x == stop_value  # (,), (B,) or (B, D)
+            seq_ending = x == stop_value  # (,), (B,) or (B, D*)
             if isinstance(seq_ending, torch.Tensor):
                 seq_ending = seq_ending.all(*list(range(1, seq_ending.ndim))) if seq_ending.ndim > 1 else seq_ending
                 seq_ending = seq_ending.to(int).cpu()
@@ -428,9 +434,9 @@ class VRNNLM(BaseModel):
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
-        return self.vrnn(x, x_sl, beta, free_nats, h)
+        return self.vrnn(x, x_sl, beta, free_nats, h0)
 
     def generate(
         self,
@@ -438,7 +444,7 @@ class VRNNLM(BaseModel):
         max_timesteps: int = 100,
         use_mode: bool = True,
         x: TensorType["B", "x_dim"] = None,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
         x = torch.full([n_samples], self.delimiter_token_idx, device=self.device) if x is None else x
         return self.vrnn.generate(
@@ -447,7 +453,7 @@ class VRNNLM(BaseModel):
             stop_value=self.delimiter_token_idx,
             use_mode=use_mode,
             x=x,
-            h=h,
+            h0=h0,
         )
 
 
@@ -495,9 +501,9 @@ class VRNN_MIDI(BaseModel):
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
-        return self.vrnn(x, x_sl, beta, free_nats, h)
+        return self.vrnn(x, x_sl, beta, free_nats, h0)
 
     def generate(
         self,
@@ -505,7 +511,7 @@ class VRNN_MIDI(BaseModel):
         max_timesteps: int = 100,
         use_mode: bool = False,
         x: TensorType["B", "x_dim"] = None,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
         x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
         return self.vrnn.generate(
@@ -514,11 +520,87 @@ class VRNN_MIDI(BaseModel):
             stop_value=None,
             use_mode=use_mode,
             x=x,
-            h=h,
+            h0=h0,
         )
 
 
-class VRNNAudio(BaseModel):
+class VRNNAudioDML(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 200,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
+        num_mix: int = 10,
+        num_bins: int = 256,
+    ):
+        """A VRNN for modelling audio waveforms."""
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+
+        embedding = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        likelihood = DiscretizedLogisticMixtureDense(
+            x_dim=hidden_size,
+            y_dim=input_size,
+            num_mix=num_mix,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+        self.vrnn = VRNN(
+            phi_x=embedding,
+            likelihood=likelihood,
+            x_dim=hidden_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+            condition_h_on_x=condition_h_on_x,
+            condition_x_on_h=condition_x_on_h,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", "D", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h0: TensorType["B", "h_dim"] = None,
+    ):
+        return self.vrnn(x, x_sl, beta, free_nats, h0)
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        return self.vrnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h0=h0,
+        )
+
+
+class VRNNAudioGauss(BaseModel):
     def __init__(
         self,
         input_size: int = 200,
@@ -562,9 +644,9 @@ class VRNNAudio(BaseModel):
         x_sl: TensorType["B", int],
         beta: float = 1,
         free_nats: float = 0,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
-        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h)
+        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h0)
 
         for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
             bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
@@ -573,16 +655,13 @@ class VRNNAudio(BaseModel):
         seq_mask = outputs.seq_mask.to(bool)
         mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
         std = outputs.logits[1][seq_mask, :].mean().item()
-        bpd = outputs.elbo.cpu() - x_sl * self.input_size * math.log(2 ** 8)
 
         metrics.extend(
             [
-                BitsPerDimMetric(bpd, reduce_by=x_sl),
                 LatestMeanMetric(mse, name="mse"),
                 LatestMeanMetric(std, name="stddev"),
             ]
         )
-
 
         return loss, metrics, outputs
 
@@ -592,7 +671,7 @@ class VRNNAudio(BaseModel):
         max_timesteps: int = 100,
         use_mode: bool = False,
         x: TensorType["B", "x_dim"] = None,
-        h: TensorType["B", "h_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
     ):
         x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
         return self.vrnn.generate(
@@ -601,5 +680,124 @@ class VRNNAudio(BaseModel):
             stop_value=None,
             use_mode=use_mode,
             x=x,
-            h=h,
+            h0=h0,
+        )
+
+
+class VRNNAudioSpec(BaseModel):
+    def __init__(
+        self,
+        n_fft: int = 320,
+        hop_length: int = 320,
+        win_length: int = 320,
+        window: Optional[torch.Tensor] = None,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+        condition_h_on_x: bool = True,
+        condition_x_on_h: bool = True,
+    ):
+        """A VRNN for modelling audio waveforms."""
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.window = window
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+        self.condition_h_on_x = condition_h_on_x
+        self.condition_x_on_h = condition_x_on_h
+
+        self.stft = STFT(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=window,
+        )
+        self.istft = ISTFT(
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=window,
+        )
+
+        embedding = nn.Sequential(
+            Permute(3, 1, 2),
+            View(-1, 2 * self.stft.out_features),
+            nn.Linear(2 * self.stft.out_features, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        likelihood = PolarCoordinatesSpectrogram(hidden_size, self.stft.out_features, num_mix=10, num_bins=256)
+
+        self.vrnn = VRNN(
+            phi_x=embedding,
+            likelihood=likelihood,
+            x_dim=hidden_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=n_fft,
+            condition_h_on_x=condition_h_on_x,
+            condition_x_on_h=condition_x_on_h,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        h0: TensorType["B", "h_dim"] = None,
+        return_audio: bool = False,
+    ):
+        x = self.stft(x)
+        # TODO Rescale stft r part to [-1, 1]
+        # TODO Recompute sequence lengths
+        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h0)
+
+        import IPython
+
+        IPython.embed(using=False)
+
+        if return_audio:
+            audio = self.istft(outputs.x_hat)
+            outputs.audio = audio
+
+        for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
+            bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
+            del metrics[bpd_metric_idx]
+
+        # seq_mask = outputs.seq_mask.to(bool)
+        # mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
+        # std = outputs.logits[1][seq_mask, :].mean().item()
+        # bpd = outputs.elbo.cpu() - x_sl * self.n_fft * math.log(2 ** 8)
+
+        # metrics.extend(
+        #     [
+        #         BitsPerDimMetric(bpd, reduce_by=x_sl),
+        #         LatestMeanMetric(mse, name="mse"),
+        #         LatestMeanMetric(std, name="stddev"),
+        #     ]
+        # )
+
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h0: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.stft.out_features, device=self.device) if x is None else x
+        return self.vrnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h0=h0,
         )
