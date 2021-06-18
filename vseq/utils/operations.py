@@ -47,10 +47,11 @@ def reverse_sequences(x, x_sl):
     """
     max_len = x_sl.max()
     padding = (max_len - x_sl).unsqueeze(1).to(x.device)
-    reverse_ids = torch.arange(start=max_len - 1, end=-1, step=-1, device=x.device).expand(x.size(0), -1)
-    indices = reverse_ids - padding
-    indices[indices < 0] = indices[indices < 0] + max_len
-    return torch.gather(x, 1, indices)
+    forward_ids = torch.arange(0, max_len, 1, device=x.device).expand(x.size(0), -1)
+    reverse_ids = torch.arange(max_len-1, -1, -1, device=x.device).expand(x.size(0), -1) - padding
+    mask = reverse_ids < 0
+    reverse_ids[mask] = forward_ids[mask]  # Do not reverse padding
+    return torch.gather(x, 1, reverse_ids)
 
 
 def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch.bool, device: torch.device = None):
