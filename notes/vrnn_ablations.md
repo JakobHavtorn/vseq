@@ -2,22 +2,30 @@
 
 Ablation experiments to determine the mechanism that makes CW-VAE (and VRNN) work.
 
+**Baseline**
+- LSTM
+- Clockwork RNN
+- HMRNN
+- 
+
 **Models:**
-1. VRNN
-2. Clockwork VAE
-3. VTA
-4. SRNN
+- VRNN
+- SRNN
+- VTA
+- Clockwork VAE
 
 **Ablation experiments:**
-1. VRNN vanilla
-2. VRNN no x -> h skip (inference+generative)
-3. VRNN no h -> x skip (generative)
-4. VRNN prior independent over timesteps (i.e. always standard Gaussian) (also examined in SRNN paper)
+x VRNN vanilla (6.93 bpd)
+x VRNN no x -> h skip (inference+generative) (8.4 bpd)
+x VRNN no h -> x skip (generative) (7.5 bpd)
+x VRNN no x -> h skip and no h -> x skip (8.4 bpd)
+- VRNN prior independent over timesteps (i.e. always standard Gaussian) (also examined in SRNN paper)
 
-4. Clockwork VAE single layer (VRNN with modifications 2. and 3.)
-5. Clockwork VAE single layer conditioned on "future" observation x_{t+1}
+- SRNN vanilla
+- SRNN without stochastic transition z_{t-1} -> z_t (no dependency between z's, equiv. to VRNN without z_t -> d_t connection)
+- SRNN filtering version (backward_recurrent is a per-timestep linear transform)
 
-6. SRNN vanilla
-7. SRNN without stochastic transition z_{t-1} -> z_t (no dependency between z's, equiv. to VRNN without z_t -> d_t connection)
-8. SRNN filtering version (backward_recurrent is a per-timestep linear transform)
-8. 
+- VTA?
+
+- Clockwork VAE single layer (VRNN with modifications 2. and 3.)
+- Clockwork VAE single layer conditioned on "future" observation x_{t+1}

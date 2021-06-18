@@ -33,24 +33,36 @@ def hard_sigmoid(x, a: Union[float, Tensor] = 1 / 3):
 
 
 @torch.jit.script
-def reverse_sequences(x, x_sl):
+def reverse_sequences(x, x_sl, batch_first: bool = False):
     """Reverse a sequence keeping right padding untouched and in position.
 
     Note: This method only works with right padding (not left padding or a combination).
 
     Args:
-        x (torch.Tensor): Padded sequences to reverse (B, T, *)
+        x (torch.Tensor): Padded sequences to reverse (T, B, *) (or (B, T, *) if `batch_first == True`)
         x_sl (torch.Tensor): Sequence lengths
 
     Returns:
         torch.Tensor: Sequences reversed along time axis but with same padding as before
     """
+    if batch_first:
+        x = x.permute(1, 0)
+
     max_len = x_sl.max()
-    padding = (max_len - x_sl).unsqueeze(1).to(x.device)
-    reverse_ids = torch.arange(start=max_len - 1, end=-1, step=-1, device=x.device).expand(x.size(0), -1)
-    indices = reverse_ids - padding
-    indices[indices < 0] = indices[indices < 0] + max_len
-    return torch.gather(x, 1, indices)
+    padding = (max_len - x_sl).unsqueeze(0).to(x.device)
+    forward_ids = torch.arange(0, max_len, 1, device=x.device).expand(x.size(1), -1).permute(1, 0)
+    reverse_ids = torch.arange(max_len-1, -1, -1, device=x.device).expand(x.size(1), -1).permute(1, 0) - padding
+
+    mask = reverse_ids < 0
+    reverse_ids[mask] = forward_ids[mask]  # Do not reverse padding
+
+    # Match shape with x as a view
+    x_shape_singular_dims = reverse_ids.shape[:2] + (1,) * (x.ndim - 2)  # (T, B, 1, 1, ...)
+    reverse_ids = reverse_ids.view(x_shape_singular_dims).expand(-1, -1, *x.shape[2:])  # (T, B, *x.shape[2:])
+    out = torch.gather(x, 0, reverse_ids)
+    if batch_first:
+        return out.permute(1, 0)
+    return out
 
 
 def sequence_mask(seq_lens: Union[list, torch.Tensor], max_len=None, dtype=torch.bool, device: torch.device = None):

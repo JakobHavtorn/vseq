@@ -48,70 +48,116 @@ def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor):
     return torch.randn_like(sd).mul(sd).add(mu)
 
 
-def logistic_rsample(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
+@torch.jit.script
+def rsample_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
     """
     Returns a sample from Logistic with specified mean and log scale.
 
-    :param mu_ls: a tensor containing mean and log scale along dim=1,
-            or a tuple (mean, log scale)
-    :return: a reparameterized sample with the same size as the input
-            mean and log scale
+    :param mu: a tensor containing the mean.
+    :param log_scale: a tensor containing the log scale.
+    :return: a reparameterized sample with the same size as the input mean and log scale.
     """
-    # Get parameters
-    scale = log_scale.exp()
-
-    # Get uniform sample in open interval (0, 1)
-    u = torch.zeros_like(mu)
-    u.uniform_(eps, 1 - eps)
-
-    # Transform into logistic sample
-    sample = mu + scale * (torch.log(u) - torch.log(1 - u))
-
+    u = torch.zeros_like(mu).uniform_(eps, 1 - eps)  # uniform sample in the interval (eps, 1 - eps)
+    sample = mu + torch.exp(log_scale) * (torch.log(u) - torch.log(1 - u))  # transform to logistic
     return sample
 
 
-def rsample_discretized_logistic_mixture(logits, num_mix: int, eps: float = 1e-8):
+# @torch.jit.script
+def rsample_discretized_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
+    """Return a sample from a discretized logistic with values standardized to be in [-1, 1]
+    
+    This is done by sampling the corresponding continuous logistic and clamping values outside\
+    the interval to the endpoints.
+    """
+    return rsample_logistic(mu, log_scale, eps).clamp(-1, 1)
+
+
+def rsample_discretized_logistic_mixture(
+    logit_probs: torch.Tensor,
+    means: torch.Tensor,
+    log_scales: torch.Tensor,
+    num_mix: int,
+    eps: float = 1e-5,
+    t: float = 1.0,
+):
     """Return a reparameterized sample from a given Discretized Logistic Mixture distribution.
 
     Code taken from PyTorch adaptation of original PixelCNN++ TensorFlow implementation:
-    https://github.com/pclucas14/pixel-cnn-pp
+    https://github.com/pclucas14/pixel-cnn-pp/blob/master/utils.py but does not include the channel specific conditional modelling.
 
     Args:
-        logits (torch.Tensor): Mixture coefficients, means and log-scales for logistic mixtures `(*, D * 3 * num_mix)`.
+        logit_probs (torch.Tensor): (*, D, num_mix)
+        means (torch.Tensor): (*, D, num_mix)
+        log_scales (torch.Tensor): (*, D, num_mix)
+        num_mix (int): Number of mixture components
+        eps (float): Bounds [eps, 1-eps] on the uniform rv used to sample the mixture coefficients and the logistic.
+        t (float): Temperature for Gumbel sampling
+
+    Returns:
+        torch.Tensor: Sample from the DLM `(*, D)`
+    """
+    # sample mixture indicator from softmax
+    gumbel = -torch.log(-torch.log(torch.empty_like(means).uniform_(eps, 1.0 - eps)))
+    argmax = torch.argmax(logit_probs / t + gumbel, dim=-1)
+    one_hot = torch.nn.functional.one_hot(argmax, num_mix)
+
+    # select logistic parameters
+    means = torch.sum(means * one_hot, dim=-1)
+    log_scales = torch.sum(log_scales * one_hot, dim=-1)
+
+    # sample from logistic (we don't actually round to the nearest 8bit value)
+    u = torch.empty_like(means).uniform_(eps, 1.0 - eps)
+    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1.0 - u))
+
+    # Enforce standardization
+    x = x.clamp(min=-1, max=1)
+    return x
+
+
+def rsample_discretized_logistic_mixture_rgb(parameters: torch.Tensor, num_mix: int, eps: float = 1e-5, t: float = 1.0):
+    """Return a reparameterized sample from a given Discretized Logistic Mixture distribution for RGB images.
+
+    Code taken from PyTorch adaptation of original PixelCNN++ TensorFlow implementation:
+    https://github.com/pclucas14/pixel-cnn-pp/blob/master/utils.py.
+
+    Args:
+        parameters (torch.Tensor): Mixture coefficients, means and log-scales for logistic mixtures `(*, D * 3 * num_mix)`.
         num_mix (int): Number of mixture components in the the DLM.
         eps (float): Bounds [eps, 1-eps] on the uniform rv used to sample the mixture coefficients and the logistic.
 
     Returns:
         torch.Tensor: Sample from the DLM `(*, D)`
     """
-    ls = [int(y) for y in logits.size()]
-    x_dim = int(ls[-1] / (3 * num_mix))
-    xs = ls[:-1] + [x_dim]
+    # TODO Streamline
+    B, C, H, W = parameters.size()
 
     # unpack parameters
-    logits = logits.view(xs + [num_mix * 3])  # 3 for mean, scale, coefficients (D, 3 x num_mix)
-    coeffients = logits[..., :num_mix]
-    means = logits[..., :num_mix]
-    log_scales = logits[..., num_mix : 2 * num_mix].clamp(min=-7.0)
+    logit_probs = parameters[:, :num_mix, :, :]  # B, M, H, W
+    l = parameters[:, num_mix:, :, :].view(B, 3, 3 * num_mix, H, W)  # B, 3, 3 * M, H, W
+    means = l[:, :, :num_mix, :, :]  # B, 3, M, H, W
+    log_scales = torch.clamp(l[:, :, num_mix : 2 * num_mix, :, :], min=-7.0)  # B, 3, M, H, W
+    coeffs = torch.tanh(l[:, :, 2 * num_mix : 3 * num_mix, :, :])  # B, 3, M, H, W
 
-    # sample mixture indicator from softmax
-    temp = torch.empty_like(coeffients)
-    temp.uniform_(eps, 1.0 - eps)
-    temp = coeffients.data - torch.log(-torch.log(temp))
-    _, argmax = temp.max(dim=-1)
-    one_hot = torch.nn.functional.one_hot(argmax, num_mix)
+    gumbel = -torch.log(-torch.log(torch.empty_like(logit_probs).uniform_(eps, 1.0 - eps)))  # B, M, H, W
+    argmax = torch.argmax(logit_probs / t + gumbel, 1)
+    one_hot = torch.nn.functional.one_hot(argmax, num_mix, dim=1)  # B, M, H, W
+    one_hot = one_hot.unsqueeze(1)  # B, 1, M, H, W
 
     # select logistic parameters
-    means = torch.sum(logits[..., :num_mix] * one_hot, dim=-1)
-    log_scales = torch.clamp(torch.sum(logits[..., num_mix : 2 * num_mix] * one_hot, dim=-1), min=-7.0)
+    means = torch.sum(means * one_hot, dim=2)  # B, 3, H, W
+    log_scales = torch.sum(log_scales * one_hot, dim=2)  # B, 3, H, W
+    coeffs = torch.sum(coeffs * one_hot, dim=2)  # B, 3, H, W
 
-    # sample from logistc
-    u = torch.empty_like(means)
-    u.uniform_(eps, 1.0 - eps)
-    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1.0 - u))
+    # cells from logistic & clip to interval
+    # we don't actually round to the nearest 8bit value when sampling
+    u = torch.Tensor(means.size()).uniform_(eps, 1.0 - eps).cuda()  # B, 3, H, W
+    x = means + torch.exp(log_scales) / t * (torch.log(u) - torch.log(1.0 - u))  # B, 3, H, W
 
-    # Enforce normalization
-    x = x.clamp(min=-1, max=1)
+    x0 = torch.clamp(x[:, 0, :, :], -1, 1.0)  # B, H, W
+    x1 = torch.clamp(x[:, 1, :, :] + coeffs[:, 0, :, :] * x0, -1, 1)  # B, H, W
+    x2 = torch.clamp(x[:, 2, :, :] + coeffs[:, 1, :, :] * x0 + coeffs[:, 2, :, :] * x1, -1, 1)  # B, H, W
+
+    x = torch.stack([x0, x1, x2], dim=1)
     return x
 
 

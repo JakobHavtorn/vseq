@@ -62,15 +62,18 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
+# loader = AudioLoader("wav", cache=False)
+# batcher = ListBatcher()
+# mean, variance = BaseDataset(source=TIMIT_TRAIN, modalities=[(loader, None, batcher)], sort=False).compute_statistics(
+#     num_workers=args.num_workers
+# )
+
+# batcher = SpectrogramBatcher()
+# transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
+
 loader = AudioLoader("wav", cache=False)
-batcher = ListBatcher()
-mean, variance = BaseDataset(source=TIMIT_TRAIN, modalities=[(loader, None, batcher)], sort=False).compute_statistics(
-    num_workers=args.num_workers
-)
-
 batcher = SpectrogramBatcher()
-transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
-
+transform = StackWaveform(args.stack_frames)
 modalities = [(loader, transform, batcher)]
 
 train_dataset = BaseDataset(
@@ -89,6 +92,7 @@ train_loader = DataLoader(
     shuffle=True,
     batch_size=args.batch_size,
     pin_memory=True,
+    drop_last=True,
 )
 test_loader = DataLoader(
     dataset=test_dataset,
@@ -100,7 +104,7 @@ test_loader = DataLoader(
 )
 
 
-model = vseq.models.SRNNAudio(
+model = vseq.models.SRNNAudioDML(
     input_size=args.stack_frames,
     hidden_size=args.hidden_size,
     latent_size=args.latent_size,
@@ -111,7 +115,6 @@ model = vseq.models.SRNNAudio(
 
 print(model)
 x, x_sl = next(iter(train_loader))[0]
-# x = x.to(device)
 model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)), device='cpu')
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
@@ -151,8 +154,11 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
-    # audio = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"TIMIT example {i}", sample_rate=16000) for i in range(2)]
+        # reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-    # tracker.log(audio=audio)
+        # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+        # samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+
+        # tracker.log(samples=samples, reconstructions=reconstructions)
+        
     tracker.log()

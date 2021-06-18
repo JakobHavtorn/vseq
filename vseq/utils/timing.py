@@ -8,10 +8,14 @@ from typing import Callable, Optional, Union
 import numpy as np
 
 
-UNITS = {"nsec": 1e-9, "usec": 1e-6, "msec": 1e-3, "sec": 1.0}
+UNITS = {"ns": 1e-9, "µs": 1e-6, "ms": 1e-3, "s": 1.0}
 
 
-def format_time(dt, unit="sec", precision=3):
+def format_time(dt, unit=None, precision=4):
+    """Format a time in seconds by rescaling and appending appropriate unit
+    
+    The returned string will always have length at most 5 (precision) + 2 (unit) + 1 (space) = 7
+    """
     if unit is not None:
         scale = UNITS[unit]
     else:
@@ -21,7 +25,7 @@ def format_time(dt, unit="sec", precision=3):
             if dt >= scale:
                 break
 
-    return "%.*g %s" % (precision, dt / scale, unit)
+    return "%.*g%s" % (precision, dt / scale, unit)
 
 
 def timeit(
@@ -110,7 +114,7 @@ def report_timings(timings, prefix: Optional[str] = None, suffix: Optional[str] 
     else:
         s = ""
         
-    s += f"number={timings.number:5d} | [{timings.min:.3e}, {timings.max:.3e}] | {timings.median:.3e} | {timings.mean:.3e} +- {timings.std:.3e}s"
+    s += f"number={timings.number:>5d} | [{format_time(timings.min):>8s}, {format_time(timings.max):>8s}] | {format_time(timings.median):>8s} | {format_time(timings.mean):>8s} +- {format_time(timings.std):>8s}"
 
     if suffix:
         s += f" || {suffix}"

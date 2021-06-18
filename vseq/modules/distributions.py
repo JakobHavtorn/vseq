@@ -7,8 +7,14 @@ import torch.nn as nn
 
 from torchtyping import TensorType
 
-from vseq.utils.log_likelihoods import gaussian_ll, categorical_ll, bernoulli_ll, discretized_logistic_mixture_ll
-from vseq.utils.variational import rsample_discretized_logistic_mixture
+from vseq.utils.log_likelihoods import (
+    gaussian_ll,
+    categorical_ll,
+    bernoulli_ll,
+    discretized_logistic_ll,
+    discretized_logistic_mixture_ll,
+)
+from vseq.utils.variational import rsample_discretized_logistic, rsample_discretized_logistic_mixture, rsample_gaussian
 
 from .convenience import AddConstant
 
@@ -25,15 +31,15 @@ class ConditionalDistribution(nn.Module):
         raise NotImplementedError()
 
     @staticmethod
-    def sample(logits):
+    def sample(params):
         raise NotImplementedError()
 
     @staticmethod
-    def rsample(logits):
+    def rsample(params):
         raise NotImplementedError()
 
     @staticmethod
-    def mode(logits):
+    def mode(params):
         raise NotImplementedError()
 
     def log_prob(self, x):
@@ -51,7 +57,7 @@ class GaussianDense(ConditionalDistribution):
         self.epsilon = epsilon
         self.reduce_dim = reduce_dim
 
-        self.logits = nn.Linear(x_dim, 2 * y_dim)
+        self.params = nn.Linear(x_dim, 2 * y_dim)
 
         if epsilon > 0:
             self.sd_activation = nn.Sequential(nn.Softplus(beta=math.log(2) / initial_sd), AddConstant(epsilon))
@@ -64,29 +70,31 @@ class GaussianDense(ConditionalDistribution):
         pass
 
     @staticmethod
-    def get_distribution(logits):
-        return torch.distributions.Normal(loc=logits[0], scale=logits[1])
+    def get_distribution(params):
+        return torch.distributions.Normal(loc=params[0], scale=params[1])
+
+    @torch.no_grad()
+    @staticmethod
+    def sample(params):
+        return rsample_gaussian(params[0], params[1])
 
     @staticmethod
-    def sample(logits):
-        return torch.distributions.Normal(loc=logits[0], scale=logits[1]).sample()
+    def rsample(params):
+        return rsample_gaussian(params[0], params[1])
 
     @staticmethod
-    def rsample(logits):
-        return torch.distributions.Normal(loc=logits[0], scale=logits[1]).rsample()
+    def mode(params):
+        return params[0]
 
-    @staticmethod
-    def mode(logits):
-        return logits[0]
-
-    def log_prob(self, y, logits):
+    def log_prob(self, y, params):
+        log_prob = gaussian_ll(y, params[0], params[1] ** 2, epsilon=0)
         if self.reduce_dim is not None:
-            return gaussian_ll(y, logits[0], logits[1] ** 2, epsilon=0).sum(self.reduce_dim)
-        return gaussian_ll(y, logits[0], logits[1] ** 2, epsilon=0)
+            return log_prob.sum(self.reduce_dim)
+        return log_prob
 
     def forward(self, x):
-        logits = self.logits(x)
-        mu, log_sd = logits.chunk(2, dim=-1)
+        params = self.params(x)
+        mu, log_sd = params.chunk(2, dim=-1)
         sd = self.sd_activation(log_sd)
         return mu, sd
 
@@ -160,7 +168,9 @@ class BernoulliDense(ConditionalDistribution):
 
 
 class PolarCoordinatesSpectrogram(ConditionalDistribution):
-    def __init__(self, x_dim: int, y_dim: int, num_mix: int = 10, num_bins: int = 256, initial_concentration: float = 1):
+    def __init__(
+        self, x_dim: int, y_dim: int, num_mix: int = 10, num_bins: int = 256, initial_concentration: float = 1
+    ):
         super().__init__()
         self.von_mises = VonMisesDense(
             x_dim=x_dim,
@@ -215,7 +225,7 @@ class VonMisesDense(ConditionalDistribution):
         self.initial_concentration = initial_concentration
         self.reduce_dim = reduce_dim
 
-        self.logits = nn.Linear(x_dim, 2 * y_dim)
+        self.params = nn.Linear(x_dim, 2 * y_dim)
 
         self.sd_activation = nn.Sequential(nn.Softplus(beta=math.log(2) / initial_concentration))
 
@@ -225,40 +235,86 @@ class VonMisesDense(ConditionalDistribution):
         pass
 
     @staticmethod
-    def get_distribution(logits):
-        return torch.distributions.VonMises(loc=logits[0], concentration=logits[1])
+    def get_distribution(params):
+        return torch.distributions.VonMises(loc=params[0], concentration=params[1])
 
     @staticmethod
-    def sample(logits):
-        return torch.distributions.VonMises(loc=logits[0], concentration=logits[1]).sample()
+    def sample(params):
+        return torch.distributions.VonMises(loc=params[0], concentration=params[1]).sample()
 
     @staticmethod
-    def mode(logits):
-        return logits[0]
+    def mode(params):
+        return params[0]
 
-    def log_prob(self, y, logits):
+    def log_prob(self, y, params):
         if self.reduce_dim is not None:
-            return self.get_distribution(logits).sum(self.reduce_dim)
-        return self.get_distribution(logits)
+            return self.get_distribution(params).sum(self.reduce_dim)
+        return self.get_distribution(params)
 
     def forward(self, x):
-        logits = self.logits(x)
-        mu, log_concentration = logits.chunk(2, dim=-1)
+        params = self.params(x)
+        mu, log_concentration = params.chunk(2, dim=-1)
         concentration = self.sd_activation(log_concentration)
         return mu, concentration
 
 
+class DiscretizedLogisticDense(ConditionalDistribution):
+    def __init__(self, x_dim: int, y_dim: int, num_bins: int = 256, reduce_dim: Optional[int] = None):
+        super().__init__()
+
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        self.num_bins = num_bins
+        self.reduce_dim = reduce_dim
+
+        self.out_features = y_dim * 2
+
+        self.params = nn.Linear(x_dim, self.out_features)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        pass
+
+    @staticmethod
+    def rsample(params):
+        return rsample_discretized_logistic(params[0], params[1])
+
+    @staticmethod
+    @torch.no_grad()
+    def sample(params):
+        return rsample_discretized_logistic(params[0], params[1])
+
+    def mode(self, params):
+        return params[0]
+
+    def log_prob(self, y, params):
+        """Compute log-likelihood. Inputs are assumed to be [-1, 1]"""
+        log_prob = discretized_logistic_ll(y, params[0], params[1], num_bins=self.num_bins)
+        if self.reduce_dim is not None:
+            return log_prob.sum(self.reduce_dim)
+        return log_prob
+
+    def forward(self, x):
+        params = self.params(x)  # (*, D, 2)
+        mu, log_scale = params.chunk(2, dim=-1)
+        log_scale = log_scale.clamp(min=-7.0)
+        return mu, log_scale
+
+
 class DiscretizedLogisticMixtureDense(ConditionalDistribution):
-    def __init__(self, x_dim: int, y_dim: int, num_mix: int = 10, num_bins: int = 256, reduce_dim: Optional[int] = None):
+    def __init__(
+        self, x_dim: int, y_dim: int, num_mix: int = 10, num_bins: int = 256, reduce_dim: Optional[int] = None
+    ):
         """Discretized Logistic Mixture distribution.
 
-        The distribution has the following parameters:
+        The distribution has the following params:
 
         - Mean value per mixture: `num_mix`.
         - Log-scale per mixture: `num_mix`.
         - Mixture coefficient per mixture: `num_mix`.
 
-        This yields a total of `3 * num_mix` parameters. 
+        This yields a total of `3 * num_mix` params.
         This is different to the Discretized Mixture of Logistics used the PixelCNN++ paper which is tailored
         for RGB images and treats the channel dimension in a speciail way. There are no such special dimensions here.
 
@@ -286,7 +342,7 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
 
         self.out_features = (y_dim * 3) * num_mix
 
-        self.logits = nn.Linear(x_dim, self.out_features)
+        self.params = nn.Linear(x_dim, self.out_features)
 
         self.reset_parameters()
 
@@ -294,25 +350,37 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
         pass
 
     @staticmethod
-    def get_distribution(logits):
+    def get_distribution(params):
         raise NotImplementedError("Discretized mixture of logistics does not have a Distribution object (yet)")
 
-    def rsample(self, logits):
-        return rsample_discretized_logistic_mixture(logits, num_mix=self.num_mix)
+    def rsample(self, params):
+        return rsample_discretized_logistic_mixture(params[0], params[1], params[2], num_mix=self.num_mix)
 
     @torch.no_grad()
-    def sample(self, logits):
-        return rsample_discretized_logistic_mixture(logits, num_mix=self.num_mix)
+    def sample(self, params):
+        return rsample_discretized_logistic_mixture(params[0], params[1], params[2], num_mix=self.num_mix)
 
-    def mode(self, logits):
+    def mode(self, params):
         raise NotImplementedError()
 
-    def log_prob(self, y, logits):
+    def log_prob(self, y, params):
         """Compute log-likelihood. Inputs are assumed to be [-1, 1]"""
-        log_prob = discretized_logistic_mixture_ll(y, logits, num_bins=self.num_bins)
+        log_prob = discretized_logistic_mixture_ll(
+            y,
+            params[0],
+            params[1],
+            params[2],
+            num_mix=self.num_mix,
+            num_bins=self.num_bins,
+        )
         if self.reduce_dim is not None:
             return log_prob.sum(self.reduce_dim)
         return log_prob
 
     def forward(self, x):
-        return self.logits(x)
+        parameters = self.params(x) # (*, D x 3 x self.num_mix)
+        # TODO Do we really need this view? Can't we simply chunk in 3 to get three # (*, D, self.num_mix)?
+        parameters = parameters.view(parameters.shape[:-1] + (self.y_dim, self.num_mix * 3))  # (*, D, 3 x self.num_mix)
+        logit_probs, means, log_scales = parameters.chunk(3, dim=-1)  # (*, D, self.num_mix)
+        log_scales = log_scales.clamp(min=-7.0)
+        return logit_probs, means, log_scales

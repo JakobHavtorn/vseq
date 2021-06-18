@@ -14,11 +14,12 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import AudioBatcher, ListBatcher, SpectrogramBatcher
+from vseq.data.batchers import SpectrogramBatcher
 from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import Compose, Normalize, Scale, StackWaveform
+from vseq.data.transforms import StackWaveform
 from vseq.evaluation import Tracker
+from vseq.utils.argparsing import str2bool
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.training.annealers import CosineAnnealer
 
@@ -31,10 +32,12 @@ parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
 parser.add_argument("--num_bins", default=256, type=int, help="number of quantization bins (256, 8 bits by default)")
+parser.add_argument("--condition_h_on_x", default=True, type=str2bool, help="whether to condition h on x")
+parser.add_argument("--condition_x_on_h", default=True, type=str2bool, help="whether to condition x on h")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
-parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
+parser.add_argument("--free_nats_start_value", default=1, type=float, help="free bits per timestep")
 parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -82,6 +85,7 @@ train_loader = DataLoader(
     shuffle=True,
     batch_size=args.batch_size,
     pin_memory=True,
+    drop_last=True,
 )
 test_loader = DataLoader(
     dataset=test_dataset,
@@ -99,6 +103,8 @@ model = vseq.models.VRNNAudioDML(
     latent_size=args.latent_size,
     num_mix=args.num_mix,
     num_bins=args.num_bins,
+    condition_h_on_x=args.condition_h_on_x,
+    condition_x_on_h=args.condition_x_on_h,
 )
 
 print(model)
@@ -142,7 +148,10 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-    (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
-    audio = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"TIMIT example {i}", sample_rate=16000) for i in range(2)]
 
-    tracker.log()
+        reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+
+        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+
+        tracker.log(samples=samples, reconstructions=reconstructions)

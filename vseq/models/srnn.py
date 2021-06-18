@@ -1,21 +1,18 @@
-import math
-
 from types import SimpleNamespace
+from vseq.modules.distributions import DiscretizedLogisticDense
 
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 
 from torchtyping import TensorType
+from tqdm import tqdm
 
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric, PerplexityMetric
 from vseq.models import BaseModel
 from vseq.modules import CategoricalDense, GaussianDense, WordDropout
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
-from vseq.utils.operations import sequence_mask
-
-
-# TODO Make same structure as VRNN with an SRNN cell (?)
+from vseq.utils.operations import sequence_mask, reverse_sequences
 
 
 class SRNN(nn.Module):
@@ -150,15 +147,16 @@ class SRNN(nn.Module):
 
         # u_t to d_t
         d0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=device) if d0 is None else d0
-        d, _ = self.forward_recurrent(u_embedding, d0)
+        d, d_n = self.forward_recurrent(u_embedding, d0)
+        d = torch.cat([d0, d[:-1, ...]], dim=0)  # Pop last hidden, prepend initial
 
         # x_t and d_t to a_t
         concat_h_t_x_t = torch.cat([x_embedding, d], dim=-1)
-        concat_h_t_x_t = concat_h_t_x_t.flip(0)  # reverse (index 0 == time T)
+        concat_h_t_x_t = reverse_sequences(concat_h_t_x_t, x_sl)
 
         a0 = torch.zeros(self.num_layers, batch_size, self.h_dim, device=device) if a0 is None else a0
-        a, _ = self.backward_recurrent(concat_h_t_x_t, a0)
-        a = a.flip(0)  # reverse back again (index 0 == time 0)
+        a, a_n = self.backward_recurrent(concat_h_t_x_t, a0)
+        a = reverse_sequences(a, x_sl)  # reverse back again (index 0 == time 0)
 
         # prepare for iteration
         all_enc_mu, all_enc_sd = [], []
@@ -170,10 +168,10 @@ class SRNN(nn.Module):
 
         z_t = torch.zeros(batch_size, self.z_dim, device=device) if z0 is None else z0
 
-        for h_t, a_t in zip(d.unbind(1), a.unbind(1)):
+        for d_t, a_t in zip(d.unbind(1), a.unbind(1)):
 
-            # prior conditioned on h_t and z_{t-1}
-            prior_mu_t, prior_sd_t = self.prior(torch.cat([h_t, z_t], dim=-1))
+            # prior conditioned on d_t and z_{t-1}
+            prior_mu_t, prior_sd_t = self.prior(torch.cat([d_t, z_t], dim=-1))
 
             # encoder conditioned on a_t and z_{t-1}
             enc_mu_t, enc_sd_t = self.encoder(torch.cat([a_t, z_t], dim=-1))
@@ -213,101 +211,82 @@ class SRNN(nn.Module):
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
-            PerplexityMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
+        outputs = SimpleNamespace(
+            elbo=elbo,
+            log_prob=log_prob,
+            kl=kl,
+            y=y,
+            logits=logits,
+            seq_mask=seq_mask,
+            d=d_n,
+            a=a_n,
+            z=z_t_sampled[-1],
+        )
         return loss, metrics, outputs
 
-    def generate(self, x, step, u):
-        all_enc_mu, all_enc_sd = [], []
-        all_dec_mean, all_dec_std = [], []
+    def generate(
+        self,
+        x: TensorType["B", "T", "x_dim"],
+        u: TensorType["B", "T", "x_dim"] = None,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "z_dim"] = None,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        stop_value: float = None,
+        use_mode: bool = False,
+    ):
+        # TODO Implement SRNN generation
+        device = self.forward_recurrent.weight_hh_l0.device
+
+        # Conditional generation
+        if x is not None:
+            x_sl = torch.full_like(x, fill_value=x.size(1))
+            _, _, outputs = self.forward(x, x_sl, u, d0=d0, a0=a0, z0=z0)
+            d0 = outputs.d
+            a0 = outputs.a
+            z_t = outputs.z
+        else:
+            d0 = torch.zeros(self.num_layers, n_samples, self.h_dim, device=device) if d0 is None else d0
+            a0 = torch.zeros(self.num_layers, n_samples, self.h_dim, device=device) if a0 is None else a0
+            z_t = torch.zeros(n_samples, self.z_dim, device=device) if z0 is None else z0
+
+        all_prior_mu, all_prior_sd = [], []
         z_t_sampled = []
-        z_t = torch.zeros(self.num_layers, x.size(1), self.h_dim)[-1]
 
-        # computing hidden state in list and x_t & u_t in list outside the loop
-        d = torch.zeros(self.num_layers, x.size(1), self.h_dim)
-        h_list = []
-        x_t_list = []
-        u_t_list = []
-        for t in range(x.size(0)):
-            x_t = x[t]
-            u_t = u[t]
-            _, d = self.forward_recurrent(torch.cat([x_t], 1).unsqueeze(0), d)
-            x_t_list.append(x_t)
-            u_t_list.append(u_t)
-            h_list.append(d[-1])
+        seq_active = torch.ones(n_samples, dtype=torch.int)
+        all_ended, t = False, 0  # Used to condition while loop
 
-            # reversing hidden state list
-        reversed_h = h_list
-        reversed_h.reverse()
+        pbar = tqdm(total=max_timesteps)
+        while not all_ended and t < max_timesteps:
+            
 
-        # reversing u_t list
-        reversed_u_t = u_t_list
-        reversed_u_t.reverse()
+            all_x.append(x)
+            all_outputs.append(outputs)
 
-        #         #concat reverse d with reverse x_t
-        concat_h_t_u_t_list = []
-        for t in range(x.size(0)):
-            concat_h_t_u_t = torch.cat([reversed_u_t[t], reversed_h[t]], 1).unsqueeze(0)
-            concat_h_t_u_t_list.append(concat_h_t_u_t)
+            # Update sequence length
+            x_sl += seq_active
+            seq_ending = x == stop_value  # (,), (B,) or (B, D*)
+            if isinstance(seq_ending, torch.Tensor):
+                seq_ending = seq_ending.all(*list(range(1, seq_ending.ndim))) if seq_ending.ndim > 1 else seq_ending
+                seq_ending = seq_ending.to(int).cpu()
+            else:
+                seq_ending = int(seq_ending)
+            seq_active *= 1 - seq_ending
 
-        #         #compute reverse a_t
-        a_t = torch.zeros(self.num_layers, x.size(1), self.h_dim)
-        reversed_a_t_list = []
-        for t in range(x.size(0)):
-            _, a_t = self.backward_recurrent(concat_h_t_u_t_list[t], a_t)  # RNN new
-            reversed_a_t_list.append(a_t[-1])
-        reversed_a_t_list.reverse()
+            # Update loop conditions
+            t += 1
+            all_ended = torch.all(1 - seq_active).item()
+            pbar.update(1)
 
-        for t in range(x.size(0)):
-            x_t = x[t]
+        pbar.close()
+        x = torch.stack(all_x, dim=1)
 
-            # encoder
-            enc_t = self.enc(reversed_a_t_list[t])
-            enc_mu_t = self.enc_mean(enc_t)
-            enc_sd_t = self.enc_std(enc_t)
-
-            # prior
-            prior_t = self.prior(h_list[t])
-            prior_mu_t = self.prior_mean(prior_t)
-            prior_sd_t = self.prior_std(prior_t)
-
-            # sampling and reparameterization
-            z_t = self._reparameterized_sample(enc_mu_t, enc_sd_t)
-            z_t_sampled.append(z_t)
-
-            # decoder
-            dec_t = self.decoder(torch.cat([z_t, h_list[t]], 1))
-            dec_mean_t = self.decoder_mean(dec_t)
-            dec_std_t = self.decoder_std(dec_t)
-
-            all_enc_sd.append(enc_sd_t)
-            all_enc_mu.append(enc_mu_t)
-            all_dec_mean.append(dec_mean_t)
-            all_dec_std.append(dec_std_t)
-
-        x_predict = []
-        for i in range(step):
-            # prior
-            prior_t = self.prior(h_list[t])
-            prior_mu_t = self.prior_mean(prior_t)
-            prior_sd_t = self.prior_std(prior_t)
-
-            # sampling and reparameterization
-            z_t = self._reparameterized_sample(enc_mu_t, enc_sd_t)
-            z_t_sampled.append(z_t)
-
-            # decoder
-            dec_t = self.decoder(torch.cat([z_t, h_list[i]], 1))
-            dec_mean_t = self.decoder_mean(dec_t)
-            dec_std_t = self.decoder_std(dec_t)
-
-            x_t = dec_mean_t
-            x_predict.append(dec_mean_t)
-
-        return x_predict, z_t_sampled
+        outputs = SimpleNamespace(**list_of_dict_to_dict_of_list([vars(ns) for ns in all_outputs]))
+        return (x, x_sl), outputs
 
 
 class SRNNLM(BaseModel):
@@ -360,7 +339,7 @@ class SRNNLM(BaseModel):
         free_nats: float = 0,
         d0: TensorType["num_layers", "B", "h_dim"] = None,
         a0: TensorType["num_layers", "B", "h_dim"] = None,
-        z0: TensorType["B", "h_dim"] = None,
+        z0: TensorType["B", "z_dim"] = None,
     ):
         return self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
 
@@ -372,7 +351,7 @@ class SRNNLM(BaseModel):
         x: TensorType["B", "T", int] = None,
         d0: TensorType["num_layers", "B", "h_dim"] = None,
         a0: TensorType["num_layers", "B", "h_dim"] = None,
-        z0: TensorType["B", "h_dim"] = None,
+        z0: TensorType["B", "z_dim"] = None,
     ):
         x = torch.full([n_samples], self.delimiter_token_idx, device=self.device) if x is None else x
         return self.srnn.generate(
@@ -387,7 +366,96 @@ class SRNNLM(BaseModel):
         )
 
 
-class SRNNAudio(BaseModel):
+class SRNNAudioDML(BaseModel):
+    def __init__(
+        self,
+        input_size: int = 200,
+        hidden_size: int = 256,
+        latent_size: int = 64,
+        word_dropout: float = 0,
+        dropout: float = 0,
+        residual_posterior: bool = False,
+        num_mix: int = 10,
+        num_bins: int = 256,
+    ):
+        """An SRNN for modelling audio waveforms."""
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.latent_size = latent_size
+        self.word_dropout = word_dropout
+        self.dropout = dropout
+        self.residual_posterior = residual_posterior
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+
+        embedding = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+        )
+        # likelihood = DiscretizedLogisticMixtureDense(
+        #     x_dim=hidden_size,
+        #     y_dim=input_size,
+        #     num_mix=num_mix,
+        #     num_bins=num_bins,
+        #     reduce_dim=-1,
+        # )
+        likelihood = DiscretizedLogisticDense(
+            x_dim=hidden_size,
+            y_dim=input_size,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+        self.srnn = SRNN(
+            x_embedding=embedding,
+            likelihood=likelihood,
+            x_dim=hidden_size,
+            h_dim=hidden_size,
+            z_dim=latent_size,
+            o_dim=input_size,
+            word_dropout=word_dropout,
+            dropout=dropout,
+            residual_posterior=residual_posterior,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T", "D", float],
+        x_sl: TensorType["B", int],
+        beta: float = 1,
+        free_nats: float = 0,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "h_dim"] = None,
+    ):
+        loss, metrics, outputs = self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
+        outputs.x_hat = self.srnn.likelihood.sample(outputs.logits)
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: TensorType["B", "x_dim"] = None,
+        h: TensorType["B", "h_dim"] = None,
+    ):
+        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        return self.srnn.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            stop_value=None,
+            use_mode=use_mode,
+            x=x,
+            h=h,
+        )
+
+
+class SRNNAudioGauss(BaseModel):
     def __init__(
         self,
         input_size: int = 200,
@@ -397,7 +465,7 @@ class SRNNAudio(BaseModel):
         dropout: float = 0,
         residual_posterior: bool = False,
     ):
-        """A VRNN for modelling audio waveforms."""
+        """An SRNN for modelling audio waveforms."""
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -440,18 +508,16 @@ class SRNNAudio(BaseModel):
     ):
         loss, metrics, outputs = self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
 
-        for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
+        for metric_name in ["BitsPerDimMetric"]:
             bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
             del metrics[bpd_metric_idx]
 
         seq_mask = outputs.seq_mask.to(bool)
         mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
         std = outputs.logits[1][seq_mask, :].mean().item()
-        bpd = outputs.elbo.cpu() - x_sl * self.input_size
 
         metrics.extend(
             [
-                BitsPerDimMetric(bpd, reduce_by=x_sl),
                 LatestMeanMetric(mse, name="mse"),
                 LatestMeanMetric(std, name="stddev"),
             ]

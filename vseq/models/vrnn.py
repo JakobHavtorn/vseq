@@ -1,8 +1,5 @@
-import math
-
 from types import SimpleNamespace
 from typing import Optional
-from vseq.modules.stft import ISTFT, STFT
 
 import torch
 import torch.nn as nn
@@ -16,12 +13,14 @@ from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, Bi
 from vseq.models import BaseModel
 from vseq.modules.convenience import Permute, View
 from vseq.modules.distributions import (
+    DiscretizedLogisticDense,
     DiscretizedLogisticMixtureDense,
     GaussianDense,
     BernoulliDense,
     CategoricalDense,
     PolarCoordinatesSpectrogram,
 )
+from vseq.modules.stft import ISTFT, STFT
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
@@ -296,21 +295,16 @@ class VRNN(nn.Module):
 
         loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
-        x_hat = logits.argmax(dim=-1)
-
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo"),
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
-            # PerplexityMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(
-            elbo=elbo, log_prob=log_prob, kl=kl, y=y, x_hat=x_hat, logits=logits, seq_mask=seq_mask
-        )
+        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
         return loss, metrics, outputs
 
     def generate(
@@ -553,10 +547,16 @@ class VRNNAudioDML(BaseModel):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
-        likelihood = DiscretizedLogisticMixtureDense(
+        # likelihood = DiscretizedLogisticMixtureDense(
+        #     x_dim=hidden_size,
+        #     y_dim=input_size,
+        #     num_mix=num_mix,
+        #     num_bins=num_bins,
+        #     reduce_dim=-1,
+        # )
+        likelihood = DiscretizedLogisticDense(
             x_dim=hidden_size,
             y_dim=input_size,
-            num_mix=num_mix,
             num_bins=num_bins,
             reduce_dim=-1,
         )
@@ -579,7 +579,9 @@ class VRNNAudioDML(BaseModel):
         free_nats: float = 0,
         h0: TensorType["B", "h_dim"] = None,
     ):
-        return self.vrnn(x, x_sl, beta, free_nats, h0)
+        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h0)
+        outputs.x_hat = self.vrnn.likelihood.sample(outputs.logits)
+        return loss, metrics, outputs
 
     def generate(
         self,
