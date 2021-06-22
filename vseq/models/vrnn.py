@@ -20,7 +20,6 @@ from vseq.modules.distributions import (
     CategoricalDense,
     PolarCoordinatesSpectrogram,
 )
-from vseq.modules.stft import ISTFT, STFT
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
@@ -92,7 +91,7 @@ class VRNNCell(jit.ScriptModule):
         prior_mu, prior_sd = self.prior(h)
 
         # encoder q(z|x)
-        enc_mu, enc_sd = self.encoder(torch.cat([x, h], -1))
+        enc_mu, enc_sd = self.encoder(torch.cat([h, x], -1))
 
         # sampling and reparameterization
         z = rsample_gaussian(enc_mu, enc_sd)
@@ -220,14 +219,14 @@ class VRNN(nn.Module):
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
-        kl = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
-        elbo = log_prob - kl  # (B,)
+        kld = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
+        elbo = log_prob - kld  # (B,)
 
         kld_twise_fn = discount_free_nats(kld_twise, free_nats, shared_dims=-1)
-        kl = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
-        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        kld = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
+        loss = -(log_prob - beta * kld).sum() / x_sl.sum()  # (1,)
 
-        return loss, elbo, log_prob, kl, seq_mask
+        return loss, elbo, log_prob, kld, seq_mask
 
     def forward(
         self,
@@ -292,6 +291,7 @@ class VRNN(nn.Module):
         prior_mu = torch.stack(all_prior_mu, dim=1)
         prior_sd = torch.stack(all_prior_sd, dim=1)
         kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
+        # kld = (kld * 0).detach()
 
         loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
 
@@ -547,19 +547,19 @@ class VRNNAudioDML(BaseModel):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
-        # likelihood = DiscretizedLogisticMixtureDense(
-        #     x_dim=hidden_size,
-        #     y_dim=input_size,
-        #     num_mix=num_mix,
-        #     num_bins=num_bins,
-        #     reduce_dim=-1,
-        # )
-        likelihood = DiscretizedLogisticDense(
+        likelihood = DiscretizedLogisticMixtureDense(
             x_dim=hidden_size,
             y_dim=input_size,
+            num_mix=num_mix,
             num_bins=num_bins,
             reduce_dim=-1,
         )
+        # likelihood = DiscretizedLogisticDense(
+        #     x_dim=hidden_size,
+        #     y_dim=input_size,
+        #     num_bins=num_bins,
+        #     reduce_dim=-1,
+        # )
         self.vrnn = VRNN(
             phi_x=embedding,
             likelihood=likelihood,

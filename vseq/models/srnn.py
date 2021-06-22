@@ -109,14 +109,14 @@ class SRNN(nn.Module):
         log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
-        kl = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
-        elbo = log_prob - kl  # (B,)
+        kld = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
+        elbo = log_prob - kld  # (B,)
 
         kld_twise_fn = discount_free_nats(kld_twise, free_nats, shared_dims=-1)
-        kl = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
-        loss = -(log_prob - beta * kl).sum() / x_sl.sum()  # (1,)
+        kld = (kld_twise_fn * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
+        loss = -(log_prob - beta * kld).sum() / x_sl.sum()  # (1,)
 
-        return loss, elbo, log_prob, kl, seq_mask
+        return loss, elbo, log_prob, kld, seq_mask
 
     def forward(
         self,
@@ -163,7 +163,7 @@ class SRNN(nn.Module):
         all_prior_mu, all_prior_sd = [], []
         z_t_sampled = []
 
-        d = d.permute(1, 0, 2)
+        d = d.permute(1, 0, 2)  # (T, B, D) to (B, T, D)
         a = a.permute(1, 0, 2)
 
         z_t = torch.zeros(batch_size, self.z_dim, device=device) if z0 is None else z0
