@@ -99,3 +99,5 @@ See `experiments/sweep_test.yaml`
 
 Examples of how to write fairly fast custom recurrent cells with `TorchScript` can be found here: 
 https://github.com/pytorch/pytorch/blob/master/benchmarks/fastrnns/custom_lstms.py
+
+Libnear Gaussian State Space Model (https://github.com/rasmusbergpalm/pytorch-lgssm)
