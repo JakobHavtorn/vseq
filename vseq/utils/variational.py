@@ -7,6 +7,42 @@ import torch
 from torchtyping import TensorType
 
 
+def kl_divergence(q_distrib: torch.distributions.Distribution, p_distrib: torch.distributions.Distribution):
+    """Compute Kullback-Leibler divergence KL(q||p) between two distributions.
+
+        KL(q||p) = \int q(x) \log [q(x) / p(x)] dx = - \int q(x) \log [p(x) / q(x)] dx
+
+    Note that the order of the distributions q and p is flipped compared to the usual order.
+    This is done since KL(q||p) is the order used in the ELBO.
+
+    The usual order (which is NOT used here) is
+
+        KL(p || q) = \int p(x) \log [p(x) / q(x)] dx = - \int p(x) \log [q(x) / p(x)] dx
+
+    Consider two probability distributions P and Q.
+    Usually, P represents the data, the observations, or a measured probability distribution.
+    Distribution Q represents instead a theory, a model, a description or an approximation of P.
+    
+    The Kullback–Leibler divergence is then interpreted as the average difference of the number of bits
+    required for encoding samples of P using a code optimized for Q rather than one optimized for P.
+    
+    In other words, the KL-divergence is the extra number of bits required for encoding samples of P using
+    a code optimized for Q instead of one optimized for P.
+
+    Args:
+        q_distrib (Distribution): A :class:`~torch.distributions.Distribution` object.
+        p_distrib (Distribution): A :class:`~torch.distributions.Distribution` object.
+
+    Returns:
+        Tensor: A batch of KL divergences of shape `batch_shape` in units of nats.
+
+    Raises:
+        NotImplementedError: If the distribution types have not been registered via
+            :meth:`register_kl`.
+    """
+    return torch.distributions.kl_divergence(q_distrib, p_distrib)
+
+
 def kl_divergence_mc(
     q_distrib: torch.distributions.Distribution, p_distrib: torch.distributions.Distribution, z: torch.Tensor
 ):
@@ -16,11 +52,11 @@ def kl_divergence_mc(
 
     Args:
         z: Sample or samples from the variational distribution `q_distrib`.
-        q_distrib: Variational distribution.
-        p_distrib: Target distribution.
+        q_distrib (Distribution): A :class:`~torch.distributions.Distribution` object.
+        p_distrib (Distribution): A :class:`~torch.distributions.Distribution` object.
 
     Returns:
-        tuple: Spatial KL divergence and log-likelihood of samples under q and under p (torch.Tensor)
+        tuple: KL divergence and log-likelihood of samples under q and under p (torch.Tensor)
     """
     q_logprob = q_distrib.log_prob(z)
     p_logprob = p_distrib.log_prob(z)
@@ -32,6 +68,45 @@ def kl_divergence_mc(
 def kl_divergence_gaussian(mu_q: torch.Tensor, sd_q: torch.Tensor, mu_p: torch.Tensor, sd_p: torch.Tensor):
     """Elementwise analytical KL divergence between two Gaussian distributions KL(q||p) (no reduction applied)."""
     return sd_p.log() - sd_q.log() + (sd_q.pow(2) + (mu_q - mu_p).pow(2)) / (2 * sd_p.pow(2)) - 0.5
+
+
+def discount_free_nats(
+    kld: TensorType["B":..., "shared":...],
+    free_nats: float = None,
+    shared_dims: Union[Tuple[int], int] = None,
+) -> torch.Tensor:
+    """Free bits as introduced in [1] but renamed to free nats because that's what it really is with log_e.
+
+    In the paper they divide all latents Z into K groups. This implementation assumes a that each KL tensor passed
+    to __call__ is one such group.
+
+    By default, this method discounts `free_nats` units of nats elementwise in the KL regardless of its shape.
+
+    If the KL tensor has more dimensions than the batch dimension, the free_nats budget can be optionally
+    shared across those dimensions by setting `shared_dims`. E.g. if `kld.shape` is (32, 10) and `shared_dims` is -1,
+    each of the 10 elements in the last dimension will get 1/10th of the free nats budget. If `kld.shape` is (32, 10, 10)
+    and `shared_dims` is (-2, -1) each of the 10*10=100 elements will get 1 / 100th.
+
+    The returned KL with `free_nats` discounted is equal to max(kld, freebits_per_dim)
+
+    [1] https://arxiv.org/pdf/1606.04934
+    """
+    if free_nats is None or free_nats == 0:
+        return kld
+
+    if isinstance(shared_dims, int):
+        shared_dims = (shared_dims,)
+
+    # equally divide free nats budget over the elements in shared_dims
+    if shared_dims is not None:
+        n_elements = math.prod([kld.shape[d] for d in shared_dims])
+        min_kl_per_dim = free_nats / n_elements
+    else:
+        min_kl_per_dim = free_nats
+
+    min_kl_per_dim = torch.tensor(min_kl_per_dim, dtype=kld.dtype, device=kld.device)
+    freenats_kl = torch.maximum(kld, min_kl_per_dim)
+    return freenats_kl
 
 
 @torch.jit.script
@@ -62,11 +137,10 @@ def rsample_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-
     return sample
 
 
-# @torch.jit.script
 def rsample_discretized_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
     """Return a sample from a discretized logistic with values standardized to be in [-1, 1]
     
-    This is done by sampling the corresponding continuous logistic and clamping values outside\
+    This is done by sampling the corresponding continuous logistic and clamping values outside
     the interval to the endpoints.
     """
     return rsample_logistic(mu, log_scale, eps).clamp(-1, 1)
@@ -159,42 +233,3 @@ def rsample_discretized_logistic_mixture_rgb(parameters: torch.Tensor, num_mix: 
 
     x = torch.stack([x0, x1, x2], dim=1)
     return x
-
-
-def discount_free_nats(
-    kl: TensorType["B":..., "shared":...],
-    free_nats: float = None,
-    shared_dims: Union[Tuple[int], int] = None,
-) -> torch.Tensor:
-    """Free bits as introduced in [1] but renamed to free nats because that's what it really is with log_e.
-
-    In the paper they divide all latents Z into K groups. This implementation assumes a that each KL tensor passed
-    to __call__ is one such group.
-
-    By default, this method discounts `free_nats` units of nats elementwise in the KL regardless of its shape.
-
-    If the KL tensor has more dimensions than the batch dimension, the free_nats budget can be optionally
-    shared across those dimensions by setting `shared_dims`. E.g. if `kl.shape` is (32, 10) and `shared_dims` is -1,
-    each of the 10 elements in the last dimension will get 1/10th of the free nats budget. If `kl.shape` is (32, 10, 10)
-    and `shared_dims` is (-2, -1) each of the 10*10=100 elements will get 1 / 100th.
-
-    The returned KL with `free_nats` discounted is equal to max(kl, freebits_per_dim)
-
-    [1] https://arxiv.org/pdf/1606.04934
-    """
-    if free_nats is None or free_nats == 0:
-        return kl
-
-    if isinstance(shared_dims, int):
-        shared_dims = (shared_dims,)
-
-    # equally divide free nats budget over the elements in shared_dims
-    if shared_dims is not None:
-        n_elements = math.prod([kl.shape[d] for d in shared_dims])
-        min_kl_per_dim = free_nats / n_elements
-    else:
-        min_kl_per_dim = free_nats
-
-    min_kl_per_dim = torch.tensor(min_kl_per_dim, dtype=kl.dtype, device=kl.device)
-    freenats_kl = torch.maximum(kl, min_kl_per_dim)
-    return freenats_kl
