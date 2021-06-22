@@ -1,4 +1,3 @@
-from functools import reduce
 import math
 
 from copy import deepcopy
@@ -6,29 +5,39 @@ from typing import List, Optional, Set, Union
 
 import torch
 
-from vseq.utils.operations import detach, detach_to_device
+from vseq.utils.operations import detach
 
 
 class Metric:
     base_tags = set()
     _str_value_fmt = "<.3"
 
-    def __init__(self, name: str, tags: Set[str] = None):
+    def __init__(self, name: str, tags: Set[str] = None, log_to_console: bool = True, log_to_framework: bool = True):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
+        self._log_to_console = log_to_console
+        self._log_to_framework = log_to_framework
 
     @property
     def value(self):
         """Primary value of the metric to be used for logging"""
         raise NotImplementedError()
 
-    def update(self, metric):
-        """Update the metric (e.g. running mean)"""
-        raise NotImplementedError()
-
     @property
     def str_value(self):
         return f"{self.value:{self._str_value_fmt}f}"
+
+    @property
+    def log_to_console(self):
+        return self._log_to_console
+
+    @property
+    def log_to_framework(self):
+        return self._log_to_framework
+
+    def update(self, metric):
+        """Update the metric (e.g. running mean)"""
+        raise NotImplementedError()
 
     @staticmethod
     def get_best(metrics):
@@ -70,7 +79,7 @@ class LatestMeanMetric(Metric):
             tags (Set[str]): Tags to use for grouping with other metrics.
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
         """
-        super().__init__(name, tags)
+        super().__init__(name=name, tags=tags)
 
         values = detach(values)
         reduce_by = detach(reduce_by)
@@ -100,6 +109,8 @@ class RunningMeanMetric(Metric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
         """Create a running mean metric that maintains the running mean when updated.
 
@@ -110,7 +121,7 @@ class RunningMeanMetric(Metric):
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
             weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
         """
-        super().__init__(name=name, tags=tags)
+        super().__init__(name=name, tags=tags, log_to_console=log_to_console, log_to_framework=log_to_framework)
 
         values = detach(values)
         reduce_by = detach(reduce_by)
@@ -157,7 +168,7 @@ class AccuracyMetric(Metric):
         tags: Set[str] = None,
     ):
         """Standard classification accuracy"""
-        super().__init__(name, tags)
+        super().__init__(name=name, tags=tags)
         predictions = detach(predictions)
         labels = detach(labels)
         self.correct = (predictions == labels).sum().item()
@@ -183,8 +194,18 @@ class LossMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
 
 
 class LLMetric(RunningMeanMetric):
@@ -198,8 +219,18 @@ class LLMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
 
 
 class KLMetric(RunningMeanMetric):
@@ -212,8 +243,18 @@ class KLMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
 
 
 class BitsPerDimMetric(RunningMeanMetric):
@@ -228,9 +269,19 @@ class BitsPerDimMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
         values = -values / math.log(2)
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
 
 
 class PerplexityMetric(BitsPerDimMetric):
@@ -247,8 +298,18 @@ class PerplexityMetric(BitsPerDimMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
 
     @property
     def value(self):

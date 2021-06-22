@@ -1,3 +1,4 @@
+import math
 from types import SimpleNamespace
 from typing import List, Optional, Tuple, Union
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
@@ -13,8 +14,12 @@ from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, r
 from vseq.utils.operations import sequence_mask
 
 
-# class RSSMCell(torch.jit.ScriptModule):
-class RSSMCell(nn.Module):
+def get_exponential_time_factors(abs_factor, n_levels):
+    """Return exponentially increasing temporal abstraction factors with base `abs_factor`"""
+    return [abs_factor ** l for l in range(n_levels)]
+
+
+class RSSMCell(torch.jit.ScriptModule):
     def __init__(self, z_dim: int, h_dim: int, e_dim: int, c_dim: int):
         """Recurrent State Space Model cell
 
@@ -75,6 +80,7 @@ class RSSMCell(nn.Module):
 
         return (z_new, h_new), distributions
 
+    @torch.jit.export
     def generate(self, state: Tuple[torch.Tensor, torch.Tensor], context: torch.Tensor, use_mode: bool = False):
         z, h = state
 
@@ -91,9 +97,8 @@ class RSSMCell(nn.Module):
 
 
 class MultiLevelEncoder(nn.Module):
-    def __init__(self, n_levels: int):
+    def __init__(self):
         super().__init__()
-        self.n_levels = n_levels
 
     def forward(self, x: TensorType["B", "T", "C"]) -> List[TensorType["B", "T", "D"]]:
         raise NotImplementedError()
@@ -103,20 +108,19 @@ class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
     def __init__(
         self,
         in_dim: int,
-        h_dim: int,
+        h_size: Union[int, List[int]],
         time_factors: List[int],
-        proj_dim: int = None,
+        proj_size: Union[int, List[int]] = None,
         n_dense: int = 3,
         activation: nn.Module = nn.ReLU,
         pad_mode: str = "constant",
         pad_value: float = 0.0,
     ):
-        super().__init__(n_levels=len(time_factors))
+        super().__init__()
 
-        self.time_factors = time_factors
         self.in_dim = in_dim
-        self.proj_dim = proj_dim
-        self.h_dim = h_dim
+        self.time_factors = time_factors
+        self.proj_size = proj_size
         self.n_dense = n_dense
         self.activation = activation
         self.pad_mode = pad_mode
@@ -124,19 +128,22 @@ class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
 
         n_levels = len(time_factors)
 
-        project_out = (proj_dim is not None) and (proj_dim > 0)
+        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
+        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
+
+        project_out = (proj_size is not None) and (proj_size > 0)
 
         self.levels = nn.ModuleList()
-        self.levels.extend([self.get_level(in_dim, h_dim, n_dense, activation)])
-        self.levels.extend([self.get_level(h_dim, h_dim, n_dense, activation) for _ in range(1, n_levels)])
+        self.levels.extend([self.get_level(in_dim, h_size[0], n_dense, activation)])
+        self.levels.extend([self.get_level(h_size[l-1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
 
         if project_out:
-            self.out_proj = nn.ModuleList([self.get_level(h_dim, proj_dim, 1, activation) for _ in range(n_levels)])
+            self.out_proj = nn.ModuleList([self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)])
 
         self.n_levels = n_levels
+        self.h_size = h_size
         self.project_out = project_out
-        self.n_dense = n_dense
-        self.out_dim = proj_dim if project_out else h_dim
+        self.out_size = proj_size if project_out else h_size
 
     @staticmethod
     def get_level(in_dim, h_dim, n_dense, activation):
@@ -176,6 +183,38 @@ class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
         return encodings
 
 
+class MultiLevelEncoderConvolutional(MultiLevelEncoder):
+    def __init__(
+        self,
+        in_dim: int,
+        h_size: Union[int, List[int]],
+        time_factors: List[int],
+        proj_size: Union[int, List[int]] = None,
+        n_dense: int = 3,
+        activation: nn.Module = nn.ReLU,
+        pad_mode: str = "constant",
+        pad_value: float = 0.0,
+    ):
+        super().__init__()
+
+        self.in_dim = in_dim
+        self.time_factors = time_factors
+        self.proj_size = proj_size
+        self.n_dense = n_dense
+        self.activation = activation
+        self.pad_mode = pad_mode
+        self.pad_value = pad_value
+
+        n_levels = len(time_factors)
+
+        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
+        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
+
+        project_out = (proj_size is not None) and (proj_size > 0)
+
+        raise NotImplementedError()
+
+
 class EncoderAudioStacked(MultiLevelEncoderAudioStacked):
     def __init__(
         self,
@@ -189,8 +228,8 @@ class EncoderAudioStacked(MultiLevelEncoderAudioStacked):
     ):
         super().__init__(
             in_dim=in_dim,
-            h_dim=h_dim,
-            proj_dim=proj_dim,
+            h_size=h_dim,
+            proj_size=proj_dim,
             n_dense=n_dense,
             activation=activation,
             pad_mode=pad_mode,
@@ -225,37 +264,51 @@ class CWVAE(nn.Module):
         likelihood: nn.Module,
         z_size: Union[int, List[int]],
         h_size: Union[int, List[int]],
-        time_factors: Optional[List[int]] = None,
+        time_factors: List[int],
     ):
         super().__init__()
 
         assert len(z_size) == len(h_size), "Must give equal number of levels for stochastic and deterministic state"
-        assert time_factors is None or len(time_factors) == len(z_size), "Must give as many time factors as levels"
+        assert isinstance(time_factors, int) or len(time_factors) == len(z_size), "Must give as many time factors as levels"
         assert encoder.n_levels == len(z_size), "Number of levels in encoder and in latent dimensions must match"
 
         self.encoder = encoder
         self.decoder = decoder
         self.likelihood = likelihood
+        self.n_levels = len(time_factors)
+        self.time_factors = time_factors
 
-        if time_factors is None:
-            self.time_factors = self.get_exponential_time_factors(encoder.n_levels)
-        else:
-            self.time_factors = time_factors
-
-        self.z_size = [z_size] * encoder.n_levels if isinstance(z_size, int) else z_size
-        self.h_size = [h_size] * encoder.n_levels if isinstance(h_size, int) else h_size
+        self.z_size = [z_size] * self.n_levels if isinstance(z_size, int) else z_size
+        self.h_size = [h_size] * self.n_levels if isinstance(h_size, int) else h_size
         self.c_size = [z_dim + h_dim for z_dim, h_dim in zip(self.z_size[1:], self.h_size[1:])] + [0]
 
-        self.n_levels = encoder.n_levels
-
         cells = []
-        for h_dim, z_dim, c_dim in zip(self.h_size, self.z_size, self.c_size):
-            cells.append(RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=encoder.out_dim, c_dim=c_dim))
+        for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.out_size):
+            cells.append(RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=e_dim, c_dim=c_dim))
         self.cells = nn.ModuleList(cells)
 
-    @staticmethod
-    def get_exponential_time_factors(n_levels):
-        return [2 ** l for l in range(n_levels)]
+    def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
+        kld_metrics_nats = [
+            KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.n_levels)
+        ]
+        kld_metrics_bpd = [
+            KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(math.log(2) * x_sl / self.time_factors[l]))
+            for l in range(self.n_levels)
+        ]
+        metrics = [
+            LossMetric(loss, weight_by=elbo.numel()),
+            LLMetric(elbo, name="elbo (nats)"),
+            LLMetric(elbo, name="elbo (bpt)", reduce_by=-(math.log(2) * x_sl)),
+            LLMetric(log_prob, name="rec (nats)", log_to_console=False),
+            LLMetric(log_prob, name="rec (bpt)", reduce_by=-(math.log(2) * x_sl)),
+            KLMetric(kld, name="kl (nats)"),
+            KLMetric(kld, name="kl (bpt)", reduce_by=(math.log(2) * x_sl)),
+            *kld_metrics_nats,
+            *kld_metrics_bpd,
+            LatestMeanMetric(beta, name="beta"),
+            LatestMeanMetric(free_nats, name="free_nats"),
+        ]
+        return metrics
 
     def compute_elbo(
         self,
@@ -267,15 +320,13 @@ class CWVAE(nn.Module):
         free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
-
         seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
-        seq_mask = seq_mask.unsqueeze(-1)
 
         log_prob_twise = self.likelihood.log_prob(y, parameters) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
-        klds = []
-        klds_fn = []
+        klds, klds_fn = [], []
+        seq_mask = seq_mask.unsqueeze(-1)  # Broadcast to latent dimension
         for l in range(self.n_levels):
             mask = seq_mask[:, :: self.time_factors[l]]
             klds.append((kld_layerwise[l] * mask).sum((1, 2)))  # (B,)
@@ -293,9 +344,7 @@ class CWVAE(nn.Module):
         self,
         x: TensorType["B", "T", "D"],
         x_sl: TensorType["B", int],
-        d0: TensorType["num_layers", "B", "h_dim"] = None,
-        a0: TensorType["num_layers", "B", "h_dim"] = None,
-        z0: TensorType["B", "z_dim"] = None,
+        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
         beta: float = 1,
         free_nats: float = 0,
     ):
@@ -307,15 +356,12 @@ class CWVAE(nn.Module):
         encodings_t = [enc.unbind(1) for enc in encodings]
 
         # initial context for top layer
-        # context = torch.zeros(x.size(0), self.c_size[-1])
         context = [torch.empty(x.size(0), 0, device=x.device)] * len(encodings_t[-1])
 
         # initial RSSM state (z, h)
-        states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells]
+        states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
 
-        # all_states = [[] for _ in range(self.n_levels)]
-        # all_distributions = [[] for _ in range(self.n_levels)]
-        all_kl_divergences = [[] for _ in range(self.n_levels)]
+        kl_divs = [[] for _ in range(self.n_levels)]
         t = 0
         for l in range(self.n_levels - 1, -1, -1):
             all_states = []
@@ -323,7 +369,6 @@ class CWVAE(nn.Module):
             T = len(encodings_t[l])
             for t in range(T):
                 # reset stochastic state whenever the layer above ticks (never reset top)
-                # concate actions to context??
 
                 # cell forward
                 states[l], distributions = self.cells[l](
@@ -347,30 +392,18 @@ class CWVAE(nn.Module):
             prior_sd = torch.stack([all_distributions[t].prior_sd for t in range(T)], dim=1)
 
             kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
-            all_kl_divergences[l] = kld
+            kl_divs[l] = kld
 
         context = torch.stack(context, dim=1)
         dec = self.decoder(context)
 
         parameters = self.likelihood(dec)
 
-        loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(
-            y, parameters, all_kl_divergences, x_sl, beta, free_nats
-        )
+        loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, kl_divs, x_sl, beta, free_nats)
 
-        kld_metrics = [KLMetric(klds[l], name=f"kl_{l}") for l in range(self.n_levels)]
-        metrics = [
-            LossMetric(loss, weight_by=elbo.numel()),
-            LLMetric(elbo, name="elbo"),
-            LLMetric(log_prob, name="rec"),
-            KLMetric(kld, name="kl"),
-            *kld_metrics,
-            BitsPerDimMetric(elbo, reduce_by=x_sl),
-            LatestMeanMetric(beta, name="beta"),
-            LatestMeanMetric(free_nats, name="free_nats"),
-        ]
+        metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats)
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
-        outputs.x_hat = self.likelihood.sample(parameters)  # TODO Remove
+        outputs.x_hat = self.likelihood.sample(outputs.parameters)
         return loss, metrics, outputs
 
     def generate(self):
@@ -380,24 +413,64 @@ class CWVAE(nn.Module):
 class CWVAEAudioStacked(BaseModel):
     def __init__(
         self,
-        input_size: int,
-        z_size: List[int],
-        h_size: int,
-        time_factors: Union[int, List[int]],
+        input_size: int = 200,
+        z_size: Union[int, List[int]] = 64,
+        h_size: Union[int, List[int]] = 128,
+        time_factors: Union[int, List[int]] = 6,
+        n_levels: int = 3,
         n_dense: int = 3,
+        num_mix: int = 10,
+        num_bins: int = 256,
     ):
         super().__init__()
 
         self.input_size = input_size
         self.z_size = z_size
         self.h_size = h_size
+        self.n_levels = n_levels
         self.n_dense = n_dense
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+
+        if isinstance(time_factors, int):
+            time_factors = get_exponential_time_factors(time_factors, self.n_levels)
+
         self.time_factors = time_factors
 
-        encoder = MultiLevelEncoderAudioStacked()
-        decoder = DecoderAudioStacked()
-        likelihood = DiscretizedLogisticMixtureDense()
-        self.cwvae = CWVAE(encoder, decoder, likelihood, z_size=z_size, time_factors=time_factors)
+        bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
+        bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
+        bot_c_size = bot_z_size + bot_h_size
 
-    def forward(self, x, x_sl):
-        return self.cwvae(x, x_sl)
+        encoder = MultiLevelEncoderAudioStacked(
+            in_dim=input_size,
+            h_size=h_size,
+            time_factors=time_factors,
+            n_dense=n_dense,
+        )
+
+        decoder = DecoderAudioStacked(
+            in_dim=bot_c_size,
+            h_dim=bot_h_size,
+            n_dense=n_dense,
+        )
+
+        likelihood = DiscretizedLogisticMixtureDense(
+            x_dim=bot_h_size,
+            y_dim=input_size,
+            num_mix=num_mix,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+
+        self.cwvae = CWVAE(encoder, decoder, likelihood, z_size=z_size, h_size=h_size, time_factors=time_factors)
+
+    def forward(
+        self,
+        x: TensorType["B", "T", "D"],
+        x_sl: TensorType["B", int],
+        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
+        beta: float = 1,
+        free_nats: float = 0,
+    ):
+        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats)
+        return loss, metrics, outputs

@@ -1,4 +1,5 @@
 import re
+import psutil
 
 from datetime import datetime
 from blessed import Terminal
@@ -119,10 +120,12 @@ class Tracker:
 
     def steps(self, loader: Union[str, DataLoader]):
         self.set(loader)
-        for batch in loader:
+        iterator = iter(loader)
+        for batch in iterator:
             yield batch
             if self.do_print():
                 self.print()
+
         self.unset()
 
     def epochs(self, N) -> Iterator[int]:
@@ -157,7 +160,9 @@ class Tracker:
 
         if self.is_ddp and self.rank == 0:
             for rank in reversed(range(self.world_size)):
-                rich.print(rank_string(rank) + " " + source_string(self.source) + " " * self.last_log_line_len, flush=True)
+                rich.print(
+                    rank_string(rank) + " " + source_string(self.source) + " " * self.last_log_line_len, flush=True
+                )
             rich.print(f"Running DDP with world_size={self.world_size}", flush=True, end="\r")
 
         if self.is_ddp:
@@ -233,7 +238,16 @@ class Tracker:
 
         # metrics string
         sep = " [magenta]|[/]"  # +19 format pr metric
-        ms = "".join([f"{sep} {metric.name} = {metric.str_value}" for metric in self.metrics[source].values()]) + sep
+        ms = (
+            "".join(
+                [
+                    f"{sep} {metric.name} = {metric.str_value}"
+                    for metric in self.metrics[source].values()
+                    if metric.log_to_console
+                ]
+            )
+            + sep
+        )
 
         # full log string
         sp = f"{ss} - {ps}"

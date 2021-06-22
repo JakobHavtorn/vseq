@@ -36,14 +36,14 @@
 | SRNN      | 1.01 (e1000)        |     | DL 1 mix (8 free nats, 50000)                            |
 | SRNN      | 1.055 (e600)        |     | DL 1 mix (8 free nats, 10000)                            |
 |           |                     |     |                                                          |
-| CWVAE     |                     |     | DLM 10 mix (no kl cost, autoencoding)                    |
-| CWVAE     |                     |     | DLM 10 mix                                               |
-| CWVAE     |                     |     | DLM 10 mix (1 free nats)                                 |
+| CWVAE     | running             |     | DLM 10 mix (no kl cost, autoencoding)                    |
+| CWVAE     | running             |     | DLM 10 mix                                               |
+| CWVAE     | running             |     | DLM 10 mix (1 free nats)                                 |
 |           |                     |     |                                                          |
 |           |                     |     |                                                          |
 |           |                     |     |                                                          |
-| Wavenet   |                     |     | 200 stacked frames                                       |
-| Wavenet   |                     |     | 20 stacked frames                                        |
-| Wavenet   |                     |     | no stacked frames (pure waveform)                        |
+| Wavenet   | (ms)                |     | 200 stacked frames                                       |
+| Wavenet   | (ms)                |     | 20 stacked frames                                        |
+| Wavenet   | (ms)                |     | no stacked frames (pure waveform)                        |
 
 
