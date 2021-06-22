@@ -32,7 +32,6 @@ def hard_sigmoid(x, a: Union[float, Tensor] = 1 / 3):
     return output
 
 
-@torch.jit.script
 def reverse_sequences(x, x_sl, batch_first: bool = False):
     """Reverse a sequence keeping right padding untouched and in position.
 

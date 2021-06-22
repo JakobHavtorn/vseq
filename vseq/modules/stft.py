@@ -8,7 +8,7 @@ import torch.nn as nn
 from torchtyping import TensorType
 
 
-class STFT(nn.Module):
+class PolarCoordinatesSTFT(nn.Module):
     def __init__(
         self,
         n_fft: int,
@@ -61,7 +61,7 @@ class STFT(nn.Module):
         return stft
 
 
-class ISTFT(nn.Module):
+class PolarCoordinatesISTFT(nn.Module):
     def __init__(
         self,
         n_fft: int,

@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from vseq.modules.distributions import DiscretizedLogisticDense
 
 import torch
 import torch.nn as nn
@@ -10,7 +9,7 @@ from tqdm import tqdm
 
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric, PerplexityMetric
 from vseq.models import BaseModel
-from vseq.modules import CategoricalDense, GaussianDense, WordDropout
+from vseq.modules import CategoricalDense, GaussianDense, WordDropout, DiscretizedLogisticDense, DiscretizedLogisticMixtureDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
 from vseq.utils.operations import sequence_mask, reverse_sequences
 
@@ -397,19 +396,19 @@ class SRNNAudioDML(BaseModel):
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
-        # likelihood = DiscretizedLogisticMixtureDense(
-        #     x_dim=hidden_size,
-        #     y_dim=input_size,
-        #     num_mix=num_mix,
-        #     num_bins=num_bins,
-        #     reduce_dim=-1,
-        # )
-        likelihood = DiscretizedLogisticDense(
+        likelihood = DiscretizedLogisticMixtureDense(
             x_dim=hidden_size,
             y_dim=input_size,
+            num_mix=num_mix,
             num_bins=num_bins,
             reduce_dim=-1,
         )
+        # likelihood = DiscretizedLogisticDense(
+        #     x_dim=hidden_size,
+        #     y_dim=input_size,
+        #     num_bins=num_bins,
+        #     reduce_dim=-1,
+        # )
         self.srnn = SRNN(
             x_embedding=embedding,
             likelihood=likelihood,
