@@ -239,3 +239,9 @@ class Dequantize(Transform):
 
     def forward(self, x):
         return x + torch.rand_like(x)
+
+
+class StackWaveform(nn.Unflatten):
+    def __init__(self, stack_frames: int = 100, input_length: int = 16000):
+        assert input_length % stack_frames == 0
+        super().__init__(dim=(stack_frames, int(input_length / stack_frames)))
