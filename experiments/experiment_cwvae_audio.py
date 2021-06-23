@@ -107,7 +107,7 @@ model = vseq.models.CWVAEAudioStacked(
     z_size=args.latent_size,
     h_size=args.hidden_size,
     time_factors=args.time_factors,
-    n_dense=args.n_dense
+    n_dense=args.n_dense,
 )
 
 print(model)

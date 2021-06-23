@@ -1,13 +1,13 @@
 import math
 from types import SimpleNamespace
 from typing import List, Optional, Tuple, Union
-from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
 
 import torch
 import torch.nn as nn
 
 from torchtyping import TensorType
 
+from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLogisticMixtureDense, GaussianDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
@@ -292,17 +292,17 @@ class CWVAE(nn.Module):
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.n_levels)
         ]
         kld_metrics_bpd = [
-            KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(math.log(2) * x_sl / self.time_factors[l]))
+            BitsPerDimMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / self.time_factors[l]))
             for l in range(self.n_levels)
         ]
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo (nats)"),
-            LLMetric(elbo, name="elbo (bpt)", reduce_by=-(math.log(2) * x_sl)),
+            BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=-(x_sl)),
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
-            LLMetric(log_prob, name="rec (bpt)", reduce_by=-(math.log(2) * x_sl)),
+            BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=-(x_sl)),
             KLMetric(kld, name="kl (nats)"),
-            KLMetric(kld, name="kl (bpt)", reduce_by=(math.log(2) * x_sl)),
+            BitsPerDimMetric(kld, name="kl (bpt)", reduce_by=(x_sl)),
             *kld_metrics_nats,
             *kld_metrics_bpd,
             LatestMeanMetric(beta, name="beta"),

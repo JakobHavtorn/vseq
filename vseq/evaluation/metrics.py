@@ -12,11 +12,19 @@ class Metric:
     base_tags = set()
     _str_value_fmt = "<.3"
 
-    def __init__(self, name: str, tags: Set[str] = None, log_to_console: bool = True, log_to_framework: bool = True):
+    def __init__(
+        self,
+        name: str,
+        tags: Set[str] = None,
+        get_best: str = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
+    ):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
-        self._log_to_console = log_to_console
-        self._log_to_framework = log_to_framework
+        self.get_best = GET_BEST[get_best] if get_best is not None else GET_BEST["none"]
+        self.log_to_console = log_to_console
+        self.log_to_framework = log_to_framework
 
     @property
     def value(self):
@@ -27,22 +35,9 @@ class Metric:
     def str_value(self):
         return f"{self.value:{self._str_value_fmt}f}"
 
-    @property
-    def log_to_console(self):
-        return self._log_to_console
-
-    @property
-    def log_to_framework(self):
-        return self._log_to_framework
-
     def update(self, metric):
         """Update the metric (e.g. running mean)"""
         raise NotImplementedError()
-
-    @staticmethod
-    def get_best(metrics):
-        """Return the best from list of metrics"""
-        return None
 
     def copy(self):
         return deepcopy(self)
@@ -51,14 +46,19 @@ class Metric:
         return f"{self.__class__.__name__}(name={self.name}, value={self.str_value})"
 
 
-@staticmethod
 def min_value(metrics: List[Metric]):
     return min(metrics, key=lambda m: m.value)
 
 
-@staticmethod
 def max_value(metrics: List[Metric]):
     return max(metrics, key=lambda m: m.value)
+
+
+def no_value(metrics: List[Metric]):
+    return None
+
+
+GET_BEST = dict(none=no_value, min=min_value, max=max_value)
 
 
 class LatestMeanMetric(Metric):
@@ -69,6 +69,7 @@ class LatestMeanMetric(Metric):
         values: Union[torch.Tensor, float],
         name: str,
         tags: Set[str] = None,
+        get_best: str = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
     ):
         """Create a latest mean metric that maintains the latest mean when updated.
@@ -79,7 +80,7 @@ class LatestMeanMetric(Metric):
             tags (Set[str]): Tags to use for grouping with other metrics.
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
         """
-        super().__init__(name=name, tags=tags)
+        super().__init__(name=name, tags=tags, get_best=get_best)
 
         values = detach(values)
         reduce_by = detach(reduce_by)
@@ -107,6 +108,7 @@ class RunningMeanMetric(Metric):
         values: Union[torch.Tensor, float],
         name: str,
         tags: Set[str] = None,
+        get_best: str = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
         log_to_console: bool = True,
@@ -121,7 +123,9 @@ class RunningMeanMetric(Metric):
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
             weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
         """
-        super().__init__(name=name, tags=tags, log_to_console=log_to_console, log_to_framework=log_to_framework)
+        super().__init__(
+            name=name, tags=tags, get_best=get_best, log_to_console=log_to_console, log_to_framework=log_to_framework
+        )
 
         values = detach(values)
         reduce_by = detach(reduce_by)
@@ -158,7 +162,6 @@ class RunningMeanMetric(Metric):
 
 class AccuracyMetric(Metric):
     _str_value_fmt = "6.4"  # 6.4321
-    get_best = max_value
 
     def __init__(
         self,
@@ -166,9 +169,13 @@ class AccuracyMetric(Metric):
         labels: Union[torch.Tensor, float],
         name: str = "accuracy",
         tags: Set[str] = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
     ):
         """Standard classification accuracy"""
-        super().__init__(name=name, tags=tags)
+        super().__init__(
+            name=name, tags=tags, get_best="max", log_to_console=log_to_console, log_to_framework=log_to_framework
+        )
         predictions = detach(predictions)
         labels = detach(labels)
         self.correct = (predictions == labels).sum().item()
@@ -185,7 +192,6 @@ class AccuracyMetric(Metric):
 
 class LossMetric(RunningMeanMetric):
     base_tags = {"losses"}
-    get_best = min_value
 
     def __init__(
         self,
@@ -203,6 +209,7 @@ class LossMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
+            get_best="min",
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -210,7 +217,6 @@ class LossMetric(RunningMeanMetric):
 
 class LLMetric(RunningMeanMetric):
     base_tags = {"log_likelihoods"}
-    get_best = max_value
 
     def __init__(
         self,
@@ -228,6 +234,7 @@ class LLMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
+            get_best="max",
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -259,7 +266,6 @@ class KLMetric(RunningMeanMetric):
 
 class BitsPerDimMetric(RunningMeanMetric):
     base_tags = set()
-    get_best = min_value
     _str_value_fmt = "<5.3"  # 5.321
 
     def __init__(
@@ -279,6 +285,7 @@ class BitsPerDimMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
+            get_best="min",
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -288,7 +295,6 @@ class PerplexityMetric(BitsPerDimMetric):
     """Perplexity computed as $2^{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}$"""
 
     base_tags = set()
-    get_best = min_value
     _str_value_fmt = "<8.3"  # 8765.321
 
     def __init__(
@@ -307,6 +313,7 @@ class PerplexityMetric(BitsPerDimMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
+            get_best="min",
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
