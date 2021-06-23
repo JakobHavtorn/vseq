@@ -35,7 +35,7 @@ parser.add_argument("--num_layers", default=2, type=int, help="number of nn.Tran
 parser.add_argument("--num_heads", default=2, type=int, help="number of heads in the multiheadattention models")
 parser.add_argument("--dropout", default=0.2, type=float, help="inter LSTM layer dropout probability")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])

@@ -37,7 +37,7 @@ parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of 
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
 parser.add_argument("--free_nats_start_value", default=8, type=float, help="free bits per timestep")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])

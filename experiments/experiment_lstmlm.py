@@ -38,7 +38,7 @@ parser.add_argument("--dropout", default=0.0, type=float, help="inter LSTM layer
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
