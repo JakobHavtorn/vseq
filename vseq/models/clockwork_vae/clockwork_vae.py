@@ -310,9 +310,9 @@ class CWVAE(nn.Module):
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo (nats)"),
-            BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=-x_sl),
+            BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=x_sl),
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
-            BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=-x_sl),
+            BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=x_sl),
             KLMetric(kld, name="kl (nats)"),
             BitsPerDimMetric(-kld, name="kl (bpt)", reduce_by=x_sl),
             *kld_metrics_nats,
