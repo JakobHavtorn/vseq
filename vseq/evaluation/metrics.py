@@ -10,7 +10,7 @@ from vseq.utils.operations import detach
 
 class Metric:
     base_tags = set()
-    _str_value_fmt = "<10.3"
+    _str_value_fmt = "<.3"
 
     def __init__(self, name: str, tags: set):
         self.name = name
@@ -49,7 +49,7 @@ def max_value(metrics: List[Metric]):
 
 
 class AccuracyMetric(Metric):
-    _str_value_fmt = "<10.3"
+    _str_value_fmt = "6.4"  # 6.4321
     get_best = max_value
 
     def __init__(
@@ -76,7 +76,7 @@ class AccuracyMetric(Metric):
 
 
 class RunningMeanMetric(Metric):
-    _str_value_fmt = "<10.3"
+    _str_value_fmt = "<.3"
 
     def __init__(
         self,
@@ -177,7 +177,7 @@ class KLMetric(RunningMeanMetric):
 class BitsPerDimMetric(RunningMeanMetric):
     base_tags = set()
     get_best = min_value
-    _str_value_fmt = "<5.3"
+    _str_value_fmt = "<5.3"  # 5.321
 
     def __init__(
         self,
@@ -192,15 +192,11 @@ class BitsPerDimMetric(RunningMeanMetric):
 
 
 class PerplexityMetric(BitsPerDimMetric):
-    """Perplexity computed as $2^{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}$
-
-    Args:
-        RunningMeanMetric ([type]): [description]
-    """
+    """Perplexity computed as $2^{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}$"""
 
     base_tags = set()
     get_best = min_value
-    _str_value_fmt = "<8.3"
+    _str_value_fmt = "<8.3"  # 8765.321
 
     def __init__(
         self,
