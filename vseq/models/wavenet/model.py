@@ -109,16 +109,16 @@ class WaveNet(BaseModel):
         self,
         target: TensorType["B", "T", int],
         x_sl: TensorType["B", int],
-        output: TensorType["B", "T", "C", float],
+        logits: TensorType["B", "C", "T", float],
     ):
         """Compute the loss as negative log-likelihood per frame, masked and mormalized according to sequence lengths.
 
         Args:
             target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) of quantized integers.
             x_sl (torch.LongTensor): Sequence lengths of examples in the batch.
-            output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
+            logits (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
         """
-        nll = self.nll_criterion(output, target)
+        nll = self.nll_criterion(logits, target)
         mask = sequence_mask(x_sl, device=nll.device)
         nll *= mask
         nll = nll.sum(1)  # sum T
@@ -148,14 +148,15 @@ class WaveNet(BaseModel):
         output = self.causal(x)
         skip_connections = self.res_stack(output, skip_size=x.size(2))
         output = torch.sum(skip_connections, dim=0)
-        output = self.out_convs(output)
+        logits = self.out_convs(output)
 
-        loss, ll = self.compute_loss(target, x_sl, output)
+        loss, ll = self.compute_loss(target, x_sl, logits)
 
-        categorical = D.Categorical(logits=output.transpose(1, 2))
+        x_hat = logits.argmax(1) / (self.out_classes - 1)
+        x_hat = (2 * x_hat) - 1
 
         metrics = [LossMetric(loss, weight_by=ll.numel()), LLMetric(ll), BitsPerDimMetric(ll, reduce_by=x_sl)]
-        output = SimpleNamespace(loss=loss, ll=ll, logits=output, categorical=categorical, target=target)
+        output = SimpleNamespace(loss=loss, ll=ll, logits=logits, target=target, x_hat=x_hat)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
@@ -170,7 +171,7 @@ class WaveNet(BaseModel):
 
         x = x.transpose(1, 2)  # (B, C, T)
 
-        outputs = []
+        x_hat = []
         for _ in tqdm.tqdm(range(n_frames)):
 
             output = self.causal(x, pad=False)
@@ -180,7 +181,7 @@ class WaveNet(BaseModel):
 
             categorical = D.Categorical(logits=output.transpose(1, 2))
             x_new = categorical.sample()  # Value in {0, ..., 255}
-            outputs.append(x_new)
+            x_hat.append(x_new)
 
             # prepare prediction as next input
             if self.in_channels == 1:
@@ -194,5 +195,7 @@ class WaveNet(BaseModel):
 
             x = torch.cat([x[:, :, 1:], x_new], dim=2)  # FIFO along T
 
-        outputs = torch.hstack(outputs)
-        return outputs
+        x_hat = torch.hstack(x_hat)
+        x_hat = x_hat / (self.out_classes - 1)  # To [0, 1]
+        x_hat = x_hat * 2 - 1  # To [-1, 1]
+        return x_hat
