@@ -121,7 +121,6 @@ class WaveNet(BaseModel):
         nll = self.nll_criterion(logits, target)
         mask = sequence_mask(x_sl, device=nll.device)
         nll *= mask
-        nll = nll.sum(1)  # sum T
         loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
         return loss, -nll
 
@@ -150,13 +149,13 @@ class WaveNet(BaseModel):
         output = torch.sum(skip_connections, dim=0)
         logits = self.out_convs(output)
 
-        loss, ll = self.compute_loss(target, x_sl, logits)
+        loss, log_prob = self.compute_loss(target, x_sl, logits)
 
         x_hat = logits.argmax(1) / (self.out_classes - 1)
         x_hat = (2 * x_hat) - 1
 
-        metrics = [LossMetric(loss, weight_by=ll.numel()), LLMetric(ll), BitsPerDimMetric(ll, reduce_by=x_sl)]
-        output = SimpleNamespace(loss=loss, ll=ll, logits=logits, target=target, x_hat=x_hat)
+        metrics = [LossMetric(loss, weight_by=log_prob.numel()), LLMetric(log_prob), BitsPerDimMetric(log_prob, reduce_by=x_sl)]
+        output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
