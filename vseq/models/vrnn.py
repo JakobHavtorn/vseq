@@ -27,7 +27,9 @@ from vseq.utils.dict import list_of_dict_to_dict_of_list
 
 
 class VRNNCell(jit.ScriptModule):
-    def __init__(self, x_dim: int, h_dim: int, z_dim: int, condition_h_on_x: bool = True):
+    def __init__(
+        self, x_dim: int, h_dim: int, z_dim: int, condition_h_on_x: bool = True, residual_posterior: bool = False
+    ):
         """Variational Recurrent Neural Network (VRNN) cell from [1].
 
         Uses unimodal isotropic gaussian distributions for inference, prior, and generative models.
@@ -46,6 +48,7 @@ class VRNNCell(jit.ScriptModule):
         self.h_dim = h_dim
         self.z_dim = z_dim
         self.condition_h_on_x = condition_h_on_x
+        self.residual_posterior = residual_posterior
 
         self.phi_z = nn.Sequential(
             nn.Linear(z_dim, h_dim),
@@ -93,6 +96,9 @@ class VRNNCell(jit.ScriptModule):
         # encoder q(z|x)
         enc_mu, enc_sd = self.encoder(torch.cat([h, x], -1))
 
+        if self.residual_posterior:
+            enc_mu = enc_mu + prior_mu
+
         # sampling and reparameterization
         z = rsample_gaussian(enc_mu, enc_sd)
 
@@ -136,6 +142,7 @@ class VRNN(nn.Module):
         h_dim: int,
         z_dim: int,
         o_dim: int,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
         word_dropout: float = 0,
@@ -185,10 +192,17 @@ class VRNN(nn.Module):
         self.h_dim = h_dim
         self.z_dim = z_dim
         self.o_dim = o_dim
+        self.residual_posterior = residual_posterior
         self.condition_h_on_x = condition_h_on_x
         self.condition_x_on_h = condition_x_on_h
 
-        self.vrnn_cell = VRNNCell(x_dim=x_dim, h_dim=h_dim, z_dim=z_dim, condition_h_on_x=condition_h_on_x)
+        self.vrnn_cell = VRNNCell(
+            x_dim=x_dim,
+            h_dim=h_dim,
+            z_dim=z_dim,
+            condition_h_on_x=condition_h_on_x,
+            residual_posterior=residual_posterior,
+        )
 
         decoder_in_dim = 2 * h_dim if condition_x_on_h else h_dim
         self.decoder = nn.Sequential(
@@ -384,6 +398,7 @@ class VRNNLM(BaseModel):
         embedding_dim: int = 300,
         hidden_size: int = 256,
         latent_size: int = 64,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
         word_dropout: float = 0,
@@ -400,6 +415,7 @@ class VRNNLM(BaseModel):
         self.embedding_dim = embedding_dim
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.residual_posterior = residual_posterior
         self.word_dropout = word_dropout
         self.dropout = dropout
         self.delimiter_token_idx = delimiter_token_idx
@@ -416,6 +432,7 @@ class VRNNLM(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=num_embeddings,
+            residual_posterior=residual_posterior,
             condition_h_on_x=condition_h_on_x,
             condition_x_on_h=condition_x_on_h,
             word_dropout=word_dropout,
@@ -457,6 +474,7 @@ class VRNN_MIDI(BaseModel):
         input_size: int = 88,
         hidden_size: int = 256,
         latent_size: int = 64,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
     ):
@@ -465,6 +483,7 @@ class VRNN_MIDI(BaseModel):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.residual_posterior = residual_posterior
         self.condition_h_on_x = condition_h_on_x
         self.condition_x_on_h = condition_x_on_h
 
@@ -485,6 +504,7 @@ class VRNN_MIDI(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
+            residual_posterior=residual_posterior,
             condition_h_on_x=condition_h_on_x,
             condition_x_on_h=condition_x_on_h,
         )
@@ -524,6 +544,7 @@ class VRNNAudioDML(BaseModel):
         input_size: int = 200,
         hidden_size: int = 256,
         latent_size: int = 64,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
         num_mix: int = 10,
@@ -534,6 +555,7 @@ class VRNNAudioDML(BaseModel):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.residual_posterior = residual_posterior
         self.condition_h_on_x = condition_h_on_x
         self.condition_x_on_h = condition_x_on_h
         self.num_mix = num_mix
@@ -567,6 +589,7 @@ class VRNNAudioDML(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
+            residual_posterior=residual_posterior,
             condition_h_on_x=condition_h_on_x,
             condition_x_on_h=condition_x_on_h,
         )
@@ -608,6 +631,7 @@ class VRNNAudioGauss(BaseModel):
         input_size: int = 200,
         hidden_size: int = 256,
         latent_size: int = 64,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
     ):
@@ -616,6 +640,7 @@ class VRNNAudioGauss(BaseModel):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.latent_size = latent_size
+        self.residual_posterior = residual_posterior
         self.condition_h_on_x = condition_h_on_x
         self.condition_x_on_h = condition_x_on_h
 
@@ -636,6 +661,7 @@ class VRNNAudioGauss(BaseModel):
             h_dim=hidden_size,
             z_dim=latent_size,
             o_dim=input_size,
+            residual_posterior=residual_posterior,
             condition_h_on_x=condition_h_on_x,
             condition_x_on_h=condition_x_on_h,
         )
@@ -695,6 +721,7 @@ class VRNNAudioSpec(BaseModel):
         window: Optional[torch.Tensor] = None,
         hidden_size: int = 256,
         latent_size: int = 64,
+        residual_posterior: bool = False,
         condition_h_on_x: bool = True,
         condition_x_on_h: bool = True,
     ):

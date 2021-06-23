@@ -20,7 +20,7 @@ def get_exponential_time_factors(abs_factor, n_levels):
 
 
 class RSSMCell(torch.jit.ScriptModule):
-    def __init__(self, z_dim: int, h_dim: int, e_dim: int, c_dim: int):
+    def __init__(self, z_dim: int, h_dim: int, e_dim: int, c_dim: int, residual_posterior: bool = False):
         """Recurrent State Space Model cell
 
         Args:
@@ -35,6 +35,7 @@ class RSSMCell(torch.jit.ScriptModule):
         self.h_dim = h_dim
         self.e_dim = e_dim
         self.c_dim = c_dim
+        self.residual_posterior = residual_posterior
 
         self.gru_in = nn.Sequential(nn.Linear(z_dim + c_dim, h_dim), nn.ReLU())
         self.gru_cell = nn.GRUCell(h_dim, h_dim)
@@ -73,6 +74,9 @@ class RSSMCell(torch.jit.ScriptModule):
         prior_mu, prior_sd = self.prior(h_new)
 
         enc_mu, enc_sd = self.posterior(torch.cat([h_new, enc_inputs], dim=-1))
+
+        if self.residual_posterior:
+            enc_mu = enc_mu + prior_mu
 
         z_new = rsample_gaussian(enc_mu, enc_sd)
 
@@ -135,10 +139,12 @@ class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
 
         self.levels = nn.ModuleList()
         self.levels.extend([self.get_level(in_dim, h_size[0], n_dense, activation)])
-        self.levels.extend([self.get_level(h_size[l-1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
+        self.levels.extend([self.get_level(h_size[l - 1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
 
         if project_out:
-            self.out_proj = nn.ModuleList([self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)])
+            self.out_proj = nn.ModuleList(
+                [self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)]
+            )
 
         self.n_levels = n_levels
         self.h_size = h_size
@@ -265,11 +271,14 @@ class CWVAE(nn.Module):
         z_size: Union[int, List[int]],
         h_size: Union[int, List[int]],
         time_factors: List[int],
+        residual_posterior: bool = False,
     ):
         super().__init__()
 
         assert len(z_size) == len(h_size), "Must give equal number of levels for stochastic and deterministic state"
-        assert isinstance(time_factors, int) or len(time_factors) == len(z_size), "Must give as many time factors as levels"
+        assert isinstance(time_factors, int) or len(time_factors) == len(
+            z_size
+        ), "Must give as many time factors as levels"
         assert encoder.n_levels == len(z_size), "Number of levels in encoder and in latent dimensions must match"
 
         self.encoder = encoder
@@ -277,6 +286,7 @@ class CWVAE(nn.Module):
         self.likelihood = likelihood
         self.n_levels = len(time_factors)
         self.time_factors = time_factors
+        self.residual_posterior = residual_posterior
 
         self.z_size = [z_size] * self.n_levels if isinstance(z_size, int) else z_size
         self.h_size = [h_size] * self.n_levels if isinstance(h_size, int) else h_size
@@ -284,7 +294,9 @@ class CWVAE(nn.Module):
 
         cells = []
         for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.out_size):
-            cells.append(RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=e_dim, c_dim=c_dim))
+            cells.append(
+                RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=e_dim, c_dim=c_dim, residual_posterior=residual_posterior)
+            )
         self.cells = nn.ModuleList(cells)
 
     def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
@@ -292,17 +304,17 @@ class CWVAE(nn.Module):
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.n_levels)
         ]
         kld_metrics_bpd = [
-            BitsPerDimMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / self.time_factors[l]))
+            BitsPerDimMetric(-klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / self.time_factors[l]))
             for l in range(self.n_levels)
         ]
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo (nats)"),
-            BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=-(x_sl)),
+            BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=-x_sl),
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
-            BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=-(x_sl)),
+            BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=-x_sl),
             KLMetric(kld, name="kl (nats)"),
-            BitsPerDimMetric(kld, name="kl (bpt)", reduce_by=(x_sl)),
+            BitsPerDimMetric(-kld, name="kl (bpt)", reduce_by=x_sl),
             *kld_metrics_nats,
             *kld_metrics_bpd,
             LatestMeanMetric(beta, name="beta"),
@@ -418,6 +430,7 @@ class CWVAEAudioStacked(BaseModel):
         h_size: Union[int, List[int]] = 128,
         time_factors: Union[int, List[int]] = 6,
         n_levels: int = 3,
+        residual_posterior: bool = False,
         n_dense: int = 3,
         num_mix: int = 10,
         num_bins: int = 256,
@@ -428,6 +441,7 @@ class CWVAEAudioStacked(BaseModel):
         self.z_size = z_size
         self.h_size = h_size
         self.n_levels = n_levels
+        self.residual_posterior = residual_posterior
         self.n_dense = n_dense
         self.num_mix = num_mix
         self.num_bins = num_bins
@@ -462,7 +476,15 @@ class CWVAEAudioStacked(BaseModel):
             reduce_dim=-1,
         )
 
-        self.cwvae = CWVAE(encoder, decoder, likelihood, z_size=z_size, h_size=h_size, time_factors=time_factors)
+        self.cwvae = CWVAE(
+            encoder=encoder,
+            decoder=decoder,
+            likelihood=likelihood,
+            z_size=z_size,
+            h_size=h_size,
+            time_factors=time_factors,
+            residual_posterior=residual_posterior,
+        )
 
     def forward(
         self,
