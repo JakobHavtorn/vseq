@@ -73,6 +73,7 @@ class WaveNet(BaseModel):
 
         if in_channels > 1:
             self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
+            # TODO Could be depth-wise separable (i.e. one kernel shared for all channels)
             self.causal = CausalConv1d(res_channels, res_channels, receptive_field=self.receptive_field)
         else:
             self.embedding = None
