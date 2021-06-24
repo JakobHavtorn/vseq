@@ -69,8 +69,8 @@ class LatestMeanMetric(Metric):
         values: Union[torch.Tensor, float],
         name: str,
         tags: Set[str] = None,
-        get_best: str = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: str = None,
     ):
         """Create a latest mean metric that maintains the latest mean when updated.
 
@@ -108,9 +108,9 @@ class RunningMeanMetric(Metric):
         values: Union[torch.Tensor, float],
         name: str,
         tags: Set[str] = None,
-        get_best: str = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: str = None,
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
@@ -169,12 +169,13 @@ class AccuracyMetric(Metric):
         labels: Union[torch.Tensor, float],
         name: str = "accuracy",
         tags: Set[str] = None,
+        get_best: float = "min",
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
         """Standard classification accuracy"""
         super().__init__(
-            name=name, tags=tags, get_best="max", log_to_console=log_to_console, log_to_framework=log_to_framework
+            name=name, tags=tags, get_best=get_best, log_to_console=log_to_console, log_to_framework=log_to_framework
         )
         predictions = detach(predictions)
         labels = detach(labels)
@@ -200,6 +201,7 @@ class LossMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = "min",
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
@@ -209,7 +211,7 @@ class LossMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
-            get_best="min",
+            get_best=get_best,
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -225,6 +227,7 @@ class LLMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = "max",
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
@@ -234,7 +237,7 @@ class LLMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
-            get_best="max",
+            get_best=get_best,
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -250,6 +253,7 @@ class KLMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = None,
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
@@ -259,6 +263,7 @@ class KLMetric(RunningMeanMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
+            get_best=get_best,
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -275,17 +280,18 @@ class BitsPerDimMetric(RunningMeanMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = "min",
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
-        values = -values / math.log(2)
+        values = -detach(values) / math.log(2)
         super().__init__(
             values=values,
             name=name,
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
-            get_best="min",
+            get_best=get_best,
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -304,6 +310,7 @@ class PerplexityMetric(BitsPerDimMetric):
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = "min",
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
@@ -313,7 +320,7 @@ class PerplexityMetric(BitsPerDimMetric):
             tags=tags,
             reduce_by=reduce_by,
             weight_by=weight_by,
-            get_best="min",
+            get_best=get_best,
             log_to_console=log_to_console,
             log_to_framework=log_to_framework,
         )
@@ -321,3 +328,52 @@ class PerplexityMetric(BitsPerDimMetric):
     @property
     def value(self):
         return 2 ** self._value
+
+
+class HoyerSparsityMetric(RunningMeanMetric):
+    def __init__(
+        self,
+        values: torch.Tensor,
+        name: str = "hoyer sparsity",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: float = "max",
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
+    ):
+        """Sparsity of representation as computed in [1] and presented in [2].
+
+        Args:
+            values (torch.Tensor): Tensor of shape (*, D) where sparsity is computed over D and averaged over *.
+            name (str): [description]
+            tags (Set[str]): [description]
+            reduce_by (Optional[Union[torch.Tensor, float]]): [description]
+            weight_by (Optional[Union[torch.Tensor, float]]): [description]
+            normalze (bool, optional): Normalize the values with the running standard deviation per dimension.
+                                       This normalisation is important as one could achieve a “sparse” representation
+                                       simply by having different dimensions vary along different length scales.
+                                       Defaults to True.
+
+        [1] Hurley and Rickard, 2008
+        [2] http://arxiv.org/abs/1812.02833 p. 7
+        """
+        values = self.compute_sparsity(detach(values))
+        super().__init__(
+            values=values,
+            name=name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            get_best=get_best,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
+
+    def compute_sparsity(self, values: torch.Tensor) -> torch.Tensor:
+        D = values.size(-1)
+        sqrt_d = math.sqrt(D)
+        l1 = torch.linalg.norm(values, ord=1, dim=-1)
+        l2 = torch.linalg.norm(values, ord=2, dim=-1)
+        hoyer_sparsity = (sqrt_d - l1/l2) / (sqrt_d - 1)
+        return hoyer_sparsity
