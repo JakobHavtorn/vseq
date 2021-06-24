@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-from torch.nn import functional as F
 from torchtyping import TensorType
 
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric, PerplexityMetric
@@ -14,6 +13,12 @@ from vseq.models.base_model import BaseModel
 from vseq.modules.dropout import WordDropout
 from vseq.utils.operations import sequence_mask
 from vseq.utils.log_likelihoods import categorical_ll
+
+
+# TODO Refactor:
+# TODO Create CWRNNLM class
+# TODO Create CWRNNCell class
+# TODO Create CWRNN
 
 
 def recurrent_mask(n_clocks, hidden_size):
@@ -50,11 +55,27 @@ class CWRNNLM(BaseModel):
         hidden_size,
         clock_periods,
         delimiter_token_idx: int,
-        full_recurrence=False,
-        learn_state=True,
+        full_recurrence: bool = False,
+        learn_state: bool = False,
         dropout_rate: float = 0.0,
         word_dropout_rate: float = 0.0,
     ):
+        """Clockwork RNN as introduced in [1].
+
+        Args:
+            embedding_dim (int): Size of embedding
+            num_embeddings (int): Number of tokens
+            hidden_size (int): Size of the hidden state per clock rate
+            clock_periods (List[int]): List of clock periods from fastest to slowest e.g. [1, 2, 4]
+            delimiter_token_idx (int): Index of delimiter token
+            full_recurrence (bool, optional): If True, use full recurrence. If False, condition faster units on slower
+                                              units (but not slower on faster). Defaults to False.
+            learn_state (bool, optional): If True, the initial state h0 is a learned parameter. Defaults to False.
+            dropout_rate (float, optional): Dropout applied for hidden to output transform. Defaults to 0.0.
+            word_dropout_rate (float, optional): Word dropout applied to the input. Defaults to 0.0.
+
+        [1] A Clockwork RNN. Koutnik et. al. 2014. http://arxiv.org/abs/1402.3511
+        """
         super().__init__()
 
         self.embedding_dim = embedding_dim
@@ -90,7 +111,9 @@ class CWRNNLM(BaseModel):
         self.embedding = nn.Embedding(num_embeddings=num_embeddings + 1, embedding_dim=embedding_dim)
         self.mask_token_idx = num_embeddings
 
-        self.word_dropout = WordDropout(word_dropout_rate, mask_value=self.mask_token_idx) if word_dropout_rate else None
+        self.word_dropout = (
+            WordDropout(word_dropout_rate, mask_value=self.mask_token_idx) if word_dropout_rate else None
+        )
         self.dropout = nn.Dropout(dropout_rate) if dropout_rate else None
 
         self.reset_parameters()
@@ -104,11 +127,6 @@ class CWRNNLM(BaseModel):
             self.Wh.data *= self.utri_mask
 
     def forward(self, x: TensorType["B", "timesteps", int], x_sl: TensorType["B", int]):
-        # TODO Refactor:
-        # TODO Create CWRNNLM class
-        # TODO Create CWRNNCell class
-        # TODO Create CWRNN
-
         y = x[:, 1:].clone().detach()  # Remove start token, batch_first=False and prevent from being masked
         x, x_sl = x[:, :-1], x_sl - 1  # Remove end token
 
@@ -127,7 +145,12 @@ class CWRNNLM(BaseModel):
                 self.Wh.data *= self.utri_mask
 
             # ======================================
-            # NOTE 11.6Hz
+            # 1. Full multiplication with all parameters and element-wise multiplication with 1 or 0
+            # 2. Row-wise indexing into weight matrices and biases to do only needed calculations followed by masked update of state
+            # 3. Exploit contiguous property of the active blocks to do efficient indexing and state update via concatenation.
+            # ======================================
+            # ======================================
+            # NOTE 1: 11.6Hz
             # active = []
             # for i in range(len(self.schedules)):
             #     active.append(int(t % self.schedules[i] == 0))
@@ -140,7 +163,7 @@ class CWRNNLM(BaseModel):
             # ======================================
 
             # ======================================
-            # NOTE 5.6 Hz
+            # NOTE 2: 5.6 Hz
             # active = []
             # for i in range(len(self.schedules)):
             #     active.append(t % self.schedules[i] == 0)
@@ -153,7 +176,7 @@ class CWRNNLM(BaseModel):
             # ======================================
 
             # ======================================
-            # NOTE 16.4Hz
+            # NOTE 3: 16.4Hz
             active = [(t % clock_period) == 0 for clock_period in self.clock_periods]
             index = sum(active) * self.hidden_size
 
@@ -186,11 +209,6 @@ class CWRNNLM(BaseModel):
 
     def generate(self, n_samples: int = 1, t_max: int = 100, use_mode: bool = False):
         pass
-
-
-# 1. Full multiplication with all parameters and element-wise multiplication with 1 or 0
-# 2. Row-wise indexing into weight matrices and biases to do only needed calculations followed by masked update of state
-# 3. Exploit contiguous property of the active blocks to do efficient indexing and state update via concatenation.
 
 
 """
