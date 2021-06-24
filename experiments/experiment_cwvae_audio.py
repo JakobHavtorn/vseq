@@ -13,7 +13,7 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import SpectrogramBatcher
+from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
 from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
 from vseq.data.transforms import StackWaveform
@@ -24,12 +24,12 @@ from vseq.training.annealers import CosineAnnealer
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=64, type=int, help="batch size")
+parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
 parser.add_argument("--hidden_size", default=[512, 512, 512], type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
 parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+", help="dimensionality of latent state in CWVAE")
-parser.add_argument("--time_factors", default=6, type=int, nargs="+", help="temporal abstraction factor")
+parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
 parser.add_argument("--n_dense", default=3, type=int, help="dense layers for embedding per level")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
@@ -70,8 +70,8 @@ rich.print(vars(args))
 # transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
 
 loader = AudioLoader("wav", cache=False)
-batcher = SpectrogramBatcher()
-transform = StackWaveform(args.stack_frames)
+batcher = AudioBatcher(padding_module=args.time_factors[0])
+transform = None  #StackWaveform(args.stack_frames)
 modalities = [(loader, transform, batcher)]
 
 train_dataset = BaseDataset(
@@ -102,8 +102,7 @@ test_loader = DataLoader(
 )
 
 
-model = vseq.models.CWVAEAudioStacked(
-    input_size=args.stack_frames,
+model = vseq.models.CWVAEAudioDense(
     z_size=args.latent_size,
     h_size=args.hidden_size,
     time_factors=args.time_factors,
@@ -138,11 +137,12 @@ for epoch in tracker.epochs(args.epochs):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
-        torch.nn.utils.clip_grad_value_(model.parameters(), 1)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+        # torch.nn.utils.clip_grad_value_(model.parameters(), 1)
         optimizer.step()
 
         tracker.update(metrics)
+        # break
 
     model.eval()
     with torch.no_grad():
@@ -152,12 +152,13 @@ for epoch in tracker.epochs(args.epochs):
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
+            # break
 
         reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
-        # samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-    # tracker.log(samples=samples, reconstructions=reconstructions)
-    tracker.log(reconstructions=reconstructions)
+    tracker.log(samples=samples, reconstructions=reconstructions)
+    # tracker.log(reconstructions=reconstructions)
     # tracker.log()

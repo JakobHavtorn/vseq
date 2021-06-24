@@ -68,15 +68,22 @@ class FixedLengthBatcher(Batcher):
         # TODO Pad all inputs to same length
 
 
+def get_length_modulo(length: int, module: int = None):
+    if module is None:
+        return length
+    return length + (module - length % module) % module
+
+
 class AudioBatcher(Batcher):
-    def __init__(self) -> None:
+    def __init__(self, padding_module: int = None) -> None:
         super().__init__()
+        self.padding_module = padding_module
 
     def collate(self, batch: List[torch.Tensor]):
         """Zero pad batch of audio waveforms (T,) to maximum temporal length and concatenate"""
         sequence_lengths = [audio.shape[0] for audio in batch]
 
-        T = max(sequence_lengths)
+        T = get_length_modulo(max(sequence_lengths), self.padding_module)
         N = len(batch)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)

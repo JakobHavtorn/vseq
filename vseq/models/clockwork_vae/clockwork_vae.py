@@ -1,4 +1,3 @@
-import math
 from types import SimpleNamespace
 from typing import List, Optional, Tuple, Union
 
@@ -100,6 +99,34 @@ class RSSMCell(torch.jit.ScriptModule):
         return (z_new, h_new), distributions
 
 
+class StackWaveform(nn.Module):
+    def __init__(self, stack_size: int, pad_value: float = 0.0):
+        super().__init__()
+        self.stack_size = stack_size
+        self.pad_value = pad_value
+
+    def forward(self, x: TensorType["B":..., "T"], x_sl: TensorType["B", int] = None):
+        padding = (self.stack_size - x.size(-1) % self.stack_size) % self.stack_size
+        x = torch.cat([x, torch.full((*x.shape[:-1], padding,), fill_value=self.pad_value, device=x.device)], dim=-1)
+        x = x.view(*x.shape[:-1], -1, self.stack_size)  # (B, ..., T / stack_size, stack_size)
+        if x_sl is None:
+            return x, padding
+        x_sl = (x_sl + padding) // self.stack_size
+        return x, x_sl, padding
+
+    def reverse(self, x: TensorType["B":..., "T"], padding: Optional[int] = None, x_sl: TensorType["B", int] = None):
+        x = x.view(*x.shape[:-2], x.shape[-2] * self.stack_size)
+        if padding is None:
+            return x
+
+        x = x[..., :-padding]
+        if x_sl is None:
+            return x
+
+        x_sl = x_sl + self.stack_size - padding
+        return x, x_sl
+
+
 class MultiLevelEncoder(nn.Module):
     def __init__(self):
         super().__init__()
@@ -108,7 +135,89 @@ class MultiLevelEncoder(nn.Module):
         raise NotImplementedError()
 
 
-class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
+class MultiLevelEncoderAudioDense(MultiLevelEncoder):
+    def __init__(
+        self,
+        h_size: Union[int, List[int]],
+        time_factors: List[int],
+        proj_size: Union[int, List[int]] = None,
+        n_dense: int = 3,
+        activation: nn.Module = nn.ReLU,
+    ):
+        super().__init__()
+
+        self.time_factors = time_factors
+        self.proj_size = proj_size
+        self.n_dense = n_dense
+        self.activation = activation
+
+        n_levels = len(time_factors)
+
+        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
+        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
+
+        project_out = (proj_size is not None) and (proj_size > 0)
+
+        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  #float('nan'))
+
+        self.levels = nn.ModuleList()
+        self.levels.extend([self.get_level(time_factors[0], h_size[0], n_dense, activation)])
+        self.levels.extend([self.get_level(h_size[l - 1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
+
+        if project_out:
+            self.out_proj = nn.ModuleList(
+                [self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)]
+            )
+
+        self.n_levels = n_levels
+        self.h_size = h_size
+        self.project_out = project_out
+        self.out_size = proj_size if project_out else h_size
+
+    @staticmethod
+    def get_level(in_dim, h_dim, n_dense, activation, o_dim: int = None):
+        o_dim = h_dim if o_dim is None else o_dim
+
+        level = [nn.Linear(in_dim, h_dim), activation()]
+        for _ in range(1, n_dense-1):
+            level.extend([nn.Linear(h_dim, h_dim), activation()])
+        
+        level.extend([nn.Linear(h_dim, o_dim), activation()])
+        return nn.Sequential(*level)
+
+    def compute_encoding(self, level: int, pre_enc: TensorType["B", "T", "D"]) -> TensorType["B", "T//factor", "D"]:
+        B, T, D = pre_enc.shape
+        n_merge_steps = int(self.time_factors[level] / self.time_factors[0])  # first step merge done by stacking waveform
+        n_pad_steps = (n_merge_steps - T % n_merge_steps) % n_merge_steps
+        padding = (0, 0, 0, n_pad_steps, 0, 0)  # pad D-dim by (0, 0) and T-dim by (0, N) and B-dim by (0, 0)
+        pre_enc = torch.nn.functional.pad(pre_enc, padding, mode="constant", value=0)
+        pre_enc = pre_enc.view(B, -1, n_merge_steps, D)
+        enc = pre_enc.sum(2)
+        return enc
+
+    def forward(self, x: TensorType["B", "T", "D", float]) -> List[TensorType["B", "T", "D", float]]:
+        """Encode a sequence of inputs to multiple representations at different timescales.
+
+        The representation at level `l` will be of length `T // time_factors[l]`.
+
+        Args:
+            x (torch.Tensor): Input sequence
+
+        Returns:
+            List[torch.Tensor]: List of encodings per level
+        """
+        encodings = []
+        hidden, padding = self.stack_waveform(x)
+        # import IPython; IPython.embed(using=False)
+        for l in range(self.n_levels):
+            hidden = self.levels[l](hidden)
+            pre_enc = self.out_proj[l](hidden) if self.project_out else hidden
+            encoding = self.compute_encoding(l, pre_enc) if self.time_factors[l] != 1 else pre_enc
+            encodings.append(encoding)
+        return encodings
+
+
+class MultiLevelEncoderConv1D(MultiLevelEncoder):
     def __init__(
         self,
         in_dim: int,
@@ -189,39 +298,7 @@ class MultiLevelEncoderAudioStacked(MultiLevelEncoder):
         return encodings
 
 
-class MultiLevelEncoderConvolutional(MultiLevelEncoder):
-    def __init__(
-        self,
-        in_dim: int,
-        h_size: Union[int, List[int]],
-        time_factors: List[int],
-        proj_size: Union[int, List[int]] = None,
-        n_dense: int = 3,
-        activation: nn.Module = nn.ReLU,
-        pad_mode: str = "constant",
-        pad_value: float = 0.0,
-    ):
-        super().__init__()
-
-        self.in_dim = in_dim
-        self.time_factors = time_factors
-        self.proj_size = proj_size
-        self.n_dense = n_dense
-        self.activation = activation
-        self.pad_mode = pad_mode
-        self.pad_value = pad_value
-
-        n_levels = len(time_factors)
-
-        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
-        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
-
-        project_out = (proj_size is not None) and (proj_size > 0)
-
-        raise NotImplementedError()
-
-
-class EncoderAudioStacked(MultiLevelEncoderAudioStacked):
+class EncoderAudioDense(MultiLevelEncoderAudioDense):
     def __init__(
         self,
         in_dim: int,
@@ -247,19 +324,32 @@ class EncoderAudioStacked(MultiLevelEncoderAudioStacked):
         return super().forward(self, x)[0]
 
 
-class DecoderAudioStacked(nn.Module):
+class DecoderAudioDense(nn.Module):
     def __init__(
         self,
         in_dim: int,
         h_dim: int,
+        o_dim: int,
+        time_factors: List[int],
         n_dense: int = 3,
         activation: nn.Module = nn.ReLU,
     ):
         super().__init__()
-        self.decoder = MultiLevelEncoderAudioStacked.get_level(in_dim, h_dim, n_dense, activation)
+        self.in_dim = in_dim        
+        self.h_dim = h_dim
+        self.o_dim = o_dim
+        self.time_factors = time_factors
+        self.n_dense = n_dense
+        self.activation = activation
+        self.decoder = MultiLevelEncoderAudioDense.get_level(in_dim, h_dim, n_dense, activation, o_dim=o_dim * time_factors[0])
+        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  #float('nan'))
 
     def forward(self, x):
-        return self.decoder(x)
+        # import IPython; IPython.embed()
+        hidden = self.decoder(x)
+        hidden = hidden.view(hidden.size(0), -1, self.o_dim)
+        # hidden = self.stack_waveform.reverse(hidden)
+        return hidden
 
 
 class CWVAE(nn.Module):
@@ -314,7 +404,7 @@ class CWVAE(nn.Module):
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
             BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=x_sl),
             KLMetric(kld, name="kl (nats)"),
-            BitsPerDimMetric(-kld, name="kl (bpt)", reduce_by=x_sl),
+            BitsPerDimMetric(-kld, name="kl (bpt)", reduce_by=x_sl / self.time_factors[0]),
             *kld_metrics_nats,
             *kld_metrics_bpd,
             LatestMeanMetric(beta, name="beta"),
@@ -324,7 +414,7 @@ class CWVAE(nn.Module):
 
     def compute_elbo(
         self,
-        y: TensorType["B", "T"],
+        y: TensorType["B", "T", "D"],
         parameters: TensorType["B", "T", "D"],
         kld_layerwise: List[TensorType["B", "T", "latent_size"]],
         x_sl: TensorType["B", int],
@@ -332,15 +422,15 @@ class CWVAE(nn.Module):
         free_nats: float = 0,
     ):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
-        seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
+        seq_mask = sequence_mask(x_sl, max_len=y.shape[1], dtype=float, device=y.device)
 
-        log_prob_twise = self.likelihood.log_prob(y, parameters) * seq_mask
+        log_prob_twise = self.likelihood.log_prob(y.unsqueeze(-1), parameters) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
         klds, klds_fn = [], []
         seq_mask = seq_mask.unsqueeze(-1)  # Broadcast to latent dimension
         for l in range(self.n_levels):
-            mask = seq_mask[:, :: self.time_factors[l]]
+            mask = seq_mask[:, :: self.time_factors[l]]  # Faster than creating new mask
             klds.append((kld_layerwise[l] * mask).sum((1, 2)))  # (B,)
             klds_fn.append((discount_free_nats(kld_layerwise[l], free_nats, shared_dims=-1) * mask).sum((1, 2)))  # (B,)
 
@@ -359,6 +449,7 @@ class CWVAE(nn.Module):
         state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
         beta: float = 1,
         free_nats: float = 0,
+        x_sl_norm: TensorType["B", int] = None,
     ):
         # target
         y = x.clone().detach()
@@ -383,9 +474,7 @@ class CWVAE(nn.Module):
                 # reset stochastic state whenever the layer above ticks (never reset top)
 
                 # cell forward
-                states[l], distributions = self.cells[l](
-                    enc_inputs=encodings_t[l][t], state=states[l], context=context[t]
-                )
+                states[l], distributions = self.cells[l](encodings_t[l][t], states[l], context[t])
 
                 all_states.append(states[l])
                 all_distributions.append(distributions)
@@ -413,6 +502,7 @@ class CWVAE(nn.Module):
 
         loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, kl_divs, x_sl, beta, free_nats)
 
+        x_sl = x_sl if x_sl_norm is None else x_sl_norm
         metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats)
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
         outputs.x_hat = self.likelihood.sample(outputs.parameters)
@@ -422,10 +512,11 @@ class CWVAE(nn.Module):
         pass
 
 
-class CWVAEAudioStacked(BaseModel):
+
+class CWVAEAudio(BaseModel):
     def __init__(
         self,
-        input_size: int = 200,
+        num_embeddings: Optional[int] = None,
         z_size: Union[int, List[int]] = 64,
         h_size: Union[int, List[int]] = 128,
         time_factors: Union[int, List[int]] = 6,
@@ -434,10 +525,11 @@ class CWVAEAudioStacked(BaseModel):
         n_dense: int = 3,
         num_mix: int = 10,
         num_bins: int = 256,
+        stack_size: int = 200,
     ):
         super().__init__()
 
-        self.input_size = input_size
+        self.num_embeddings = num_embeddings
         self.z_size = z_size
         self.h_size = h_size
         self.n_levels = n_levels
@@ -445,6 +537,7 @@ class CWVAEAudioStacked(BaseModel):
         self.n_dense = n_dense
         self.num_mix = num_mix
         self.num_bins = num_bins
+        self.stack_size = stack_size
 
         if isinstance(time_factors, int):
             time_factors = get_exponential_time_factors(time_factors, self.n_levels)
@@ -455,14 +548,19 @@ class CWVAEAudioStacked(BaseModel):
         bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
         bot_c_size = bot_z_size + bot_h_size
 
-        encoder = MultiLevelEncoderAudioStacked(
+        if num_embeddings is not None:
+            self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=bot_h_size)
+        else:
+            self.embedding = None
+
+        encoder = MultiLevelEncoderAudioConv(
             in_dim=input_size,
             h_size=h_size,
             time_factors=time_factors,
             n_dense=n_dense,
         )
 
-        decoder = DecoderAudioStacked(
+        decoder = DecoderAudioConv(
             in_dim=bot_c_size,
             h_dim=bot_h_size,
             n_dense=n_dense,
@@ -488,7 +586,89 @@ class CWVAEAudioStacked(BaseModel):
 
     def forward(
         self,
-        x: TensorType["B", "T", "D"],
+        x: TensorType["B", "T"],
+        x_sl: TensorType["B", int],
+        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
+        beta: float = 1,
+        free_nats: float = 0,
+    ):
+    #     x, x_sl_stacked, padding = self.stack_waveform(x, x_sl)
+    #     loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats, x_sl_norm=x_sl)
+    #     outputs.x_hat, _ = self.stack_waveform.reverse(outputs.x_hat, x_sl_stacked, padding)
+
+        loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats)
+        return loss, metrics, outputs
+
+
+class CWVAEAudioDense(BaseModel):
+    def __init__(
+        self,
+        z_size: Union[int, List[int]] = 64,
+        h_size: Union[int, List[int]] = 128,
+        time_factors: Union[int, List[int]] = 6,
+        n_levels: int = 3,
+        residual_posterior: bool = False,
+        n_dense: int = 3,
+        num_mix: int = 10,
+        num_bins: int = 256,
+        stack_size: int = 200,
+    ):
+        super().__init__()
+
+        self.z_size = z_size
+        self.h_size = h_size
+        self.n_levels = n_levels
+        self.residual_posterior = residual_posterior
+        self.n_dense = n_dense
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+        self.stack_size = stack_size
+
+        if isinstance(time_factors, int):
+            time_factors = get_exponential_time_factors(time_factors, self.n_levels)
+
+        self.time_factors = time_factors
+
+        bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
+        bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
+        bot_c_size = bot_z_size + bot_h_size
+
+
+        likelihood = DiscretizedLogisticMixtureDense(
+            x_dim=3 * num_mix,
+            y_dim=1,
+            num_mix=num_mix,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+
+        encoder = MultiLevelEncoderAudioDense(
+            h_size=h_size,
+            time_factors=time_factors,
+            n_dense=n_dense,
+        )
+
+        decoder = DecoderAudioDense(
+            in_dim=bot_c_size,
+            h_dim=bot_h_size,
+            o_dim=likelihood.out_features,
+            time_factors=time_factors,
+            n_dense=n_dense,
+        )
+
+        self.cwvae = CWVAE(
+            encoder=encoder,
+            decoder=decoder,
+            likelihood=likelihood,
+            z_size=z_size,
+            h_size=h_size,
+            time_factors=time_factors,
+            residual_posterior=residual_posterior,
+        )
+
+    def forward(
+        self,
+        x: TensorType["B", "T"],
         x_sl: TensorType["B", int],
         state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
         beta: float = 1,
@@ -496,3 +676,29 @@ class CWVAEAudioStacked(BaseModel):
     ):
         loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats)
         return loss, metrics, outputs
+
+
+"""
+│    └─Sequential: 2-3                             [32, 1, 1024]             [32, 1, 512]              --                        --                        --
+│    │    └─Linear: 3-11                           [32, 1, 1024]             [32, 1, 512]              524,800                   [1024, 512]               16,793,600
+│    │    └─ReLU: 3-12                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
+│    │    └─Linear: 3-13                           [32, 1, 512]              [32, 1, 512]              262,656                   [512, 512]                8,404,992
+│    │    └─ReLU: 3-14                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
+│    │    └─Linear: 3-15                           [32, 1, 512]              [32, 1, 512]              262,656                   [512, 512]                8,404,992
+│    │    └─ReLU: 3-16                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
+│    └─DiscretizedLogisticMixtureDense: 2-4        [32, 1, 512]              [32, 1, 200, 10]          --                        --                        --
+│    │    └─Linear: 3-17                           [32, 1, 512]              [32, 1, 6000]             3,078,000                 [512, 6000]               98,496,000
+"""
+
+
+"""
+│    └─Sequential: 2-3                             [32, T/200, 1024]         [32, T/200, 512]          --                        --                        --
+│    │    └─Linear: 3-11                           [32, T/200, 1024]         [32, T/200, 512]          524,800                   [1024, 512]               16,793,600
+│    │    └─ReLU: 3-12                             [32, T/200, 512]          [32, T/200, 512]          --                        --                        --
+│    │    └─Linear: 3-13                           [32, T/200, 512]          [32, T/200, 512]          262,656                   [512, 512]                8,404,992
+│    │    └─ReLU: 3-14                             [32, T/200, 512]          [32, T/200, 512]          --                        --                        --
+│    │    └─Linear: 3-15                           [32, T/200, 512]          [32, T, 512]              3,072,000                [512, 6000]               8,404,992
+│    │    └─ReLU: 3-16                             [32, T, 30]               [32, T, 30]               --                        --                        --
+│    └─DiscretizedLogisticMixtureDense: 2-4        [32, T, 30]               [32, T, 30]               --                        --                        --
+│    │    └─Linear: 3-17                           [32, T, 30]               [32, T, 30]               15,390                    [512, 30]                 98,496,000
+"""
