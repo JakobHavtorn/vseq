@@ -90,9 +90,7 @@ def test_wavenet_causality_gradient_slice(wavenet, slice_idx):
 
     loss, metrics, output = wavenet(x, x_sl)
 
-    log_prob_per_timestep = output.categorical.log_prob(output.target)
-
-    log_prob_per_timestep[:, :slice_idx].sum().backward()
+    output.log_prob[:, :slice_idx].sum().backward()
 
     assert (
         x.grad[:, : slice_idx - 1, :] != 0

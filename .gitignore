@@ -154,3 +154,5 @@ VSEQ.env
 # miscellaneous
 miscellaneous
 misc
+
+*.ipynb 

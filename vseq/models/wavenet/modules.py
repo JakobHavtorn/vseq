@@ -1,38 +1,50 @@
 """Mdules for WaveNet"""
 
 import torch
+import torch.nn as nn
 
 from torchtyping import TensorType
 
 
-class CausalConv1d(torch.nn.Module):
+class CausalConv1d(nn.Module):
     """Causal Convolution for WaveNet. Causality imposed by removing last timestep of output (and left same padding)"""
 
-    def __init__(self, in_channels: int, out_channels: int, receptive_field: int):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        receptive_field: int,
+        kernel_size: int = 2,
+        activation: nn.Module = None,
+        **kwargs
+    ):
         super().__init__()
         self.receptive_field = receptive_field
-        self.conv = torch.nn.Conv1d(in_channels, out_channels, kernel_size=2, bias=False)
-        # TODO Add activation function and bias?
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, **kwargs)
+        self.activation = activation() if activation else None
 
     def init_weights_for_test(self):
         for m in self.modules():
-            if isinstance(m, torch.nn.Conv1d):
+            if isinstance(m, nn.Conv1d):
                 m.weight.data.fill_(1)
-                # m.bias.data.fill_(0)
+                if hasattr(m, "bias"):
+                    m.bias.data.fill_(0)
 
     def causal_padding(self, x):
         """Pad with receptive field and remove last input (causal convolution)"""
-        return torch.nn.functional.pad(x, (self.receptive_field, -1))
+        return nn.functional.pad(x, (self.receptive_field, -1))
 
     def forward(self, x: TensorType["B", "C", "T", float], pad: bool = True):
         if pad:
             x = self.causal_padding(x)
         output = self.conv(x)
+        if self.activation is not None:
+            output = self.activation(output)
         return output
 
 
-class ResidualBlock(torch.nn.Module):
-    def __init__(self, res_channels, dilation):
+class ResidualBlock(nn.Module):
+    def __init__(self, res_channels, dilation, kernel_size: int = 2):
         """Residual block
 
         Args:
@@ -41,10 +53,10 @@ class ResidualBlock(torch.nn.Module):
         """
         super().__init__()
 
-        self.dilated = torch.nn.Conv1d(res_channels, res_channels, kernel_size=2, dilation=dilation)
-        self.conv1x1 = torch.nn.Conv1d(res_channels, res_channels, kernel_size=1)
-        self.gate_tanh = torch.nn.Tanh()
-        self.gate_sigmoid = torch.nn.Sigmoid()
+        self.dilated = nn.Conv1d(res_channels, res_channels, kernel_size=kernel_size, dilation=dilation)
+        self.conv1x1 = nn.Conv1d(res_channels, res_channels, kernel_size=1)
+        self.gate_tanh = nn.Tanh()
+        self.gate_sigmoid = nn.Sigmoid()
 
     def forward(self, x, skip_size):
         """
@@ -70,7 +82,7 @@ class ResidualBlock(torch.nn.Module):
         return output, skip
 
 
-class ResidualStack(torch.nn.Module):
+class ResidualStack(nn.Module):
     def __init__(self, n_layers, n_stacks, res_channels):
         """Stack residual blocks by layer and stack size
 
@@ -86,7 +98,7 @@ class ResidualStack(torch.nn.Module):
 
         self.dilations = self.build_dilations()
 
-        res_blocks = torch.nn.ModuleList()
+        res_blocks = nn.ModuleList()
         for dilation in self.dilations:
             block = ResidualBlock(res_channels, dilation)
             res_blocks.append(block)
@@ -121,7 +133,7 @@ class ResidualStack(torch.nn.Module):
         return torch.stack(skip_connections)
 
 
-class OutConv1d(torch.nn.Module):
+class OutConv1d(nn.Module):
     def __init__(self, in_channels: int, out_channels: int):
         """The last network of WaveNet. Outputs log probabilities of frame classes.
 
@@ -134,11 +146,11 @@ class OutConv1d(torch.nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        self.relu1 = torch.nn.ReLU()
-        self.conv1 = torch.nn.Conv1d(in_channels, in_channels, kernel_size=1)
-        self.relu2 = torch.nn.ReLU()
-        self.conv2 = torch.nn.Conv1d(in_channels, out_channels, kernel_size=1)
-        self.log_softmax = torch.nn.LogSoftmax(dim=1)
+        self.relu1 = nn.ReLU()
+        self.conv1 = nn.Conv1d(in_channels, in_channels, kernel_size=1)
+        self.relu2 = nn.ReLU()
+        self.conv2 = nn.Conv1d(in_channels, out_channels, kernel_size=1)
+        self.log_softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, x):
         output = self.relu1(x)
