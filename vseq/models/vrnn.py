@@ -114,12 +114,15 @@ class VRNNCell(jit.ScriptModule):
         outputs = SimpleNamespace(z=z, enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
         return h, phi_z, enc_mu, enc_sd, prior_mu, prior_sd, outputs
 
-    def generate(self, x: TensorType["B", "x_dim"], h: TensorType["B", "h_dim"]):
+    def generate(self, x: TensorType["B", "x_dim"], h: TensorType["B", "h_dim"], use_mode: bool = False):
         # prior p(z)
         prior_mu, prior_sd = self.prior(h)
 
         # sampling and reparameterization
-        z = rsample_gaussian(prior_mu, prior_sd)
+        if use_mode:
+            z = prior_mu
+        else:
+            z = rsample_gaussian(prior_mu, prior_sd)
 
         # z features
         phi_z = self.phi_z(z)
