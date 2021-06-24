@@ -57,6 +57,10 @@ class RSSMCell(torch.jit.ScriptModule):
         device = device if device is not None else self.prior[0].weight.device
         return (torch.zeros(batch_size, self.z_dim, device=device), torch.zeros(batch_size, self.h_dim, device=device))
 
+    def get_empty_context(self, batch_size: int, device: str = None):
+        device = device if device is not None else self.prior[0].weight.device
+        return torch.empty(batch_size, 0, device=device)
+
     def forward(
         self,
         enc_inputs: torch.Tensor,
@@ -64,7 +68,6 @@ class RSSMCell(torch.jit.ScriptModule):
         context: torch.Tensor,
         use_mode: bool = False,
     ):
-        # context is the state of the above cell (zeros for top most)
         z, h = state
 
         gru_in = self.gru_in(torch.cat([z, context], dim=-1))
@@ -107,7 +110,20 @@ class StackWaveform(nn.Module):
 
     def forward(self, x: TensorType["B":..., "T"], x_sl: TensorType["B", int] = None):
         padding = (self.stack_size - x.size(-1) % self.stack_size) % self.stack_size
-        x = torch.cat([x, torch.full((*x.shape[:-1], padding,), fill_value=self.pad_value, device=x.device)], dim=-1)
+        x = torch.cat(
+            [
+                x,
+                torch.full(
+                    (
+                        *x.shape[:-1],
+                        padding,
+                    ),
+                    fill_value=self.pad_value,
+                    device=x.device,
+                ),
+            ],
+            dim=-1,
+        )
         x = x.view(*x.shape[:-1], -1, self.stack_size)  # (B, ..., T / stack_size, stack_size)
         if x_sl is None:
             return x, padding
@@ -158,7 +174,7 @@ class MultiLevelEncoderAudioDense(MultiLevelEncoder):
 
         project_out = (proj_size is not None) and (proj_size > 0)
 
-        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  #float('nan'))
+        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  # float('nan'))
 
         self.levels = nn.ModuleList()
         self.levels.extend([self.get_level(time_factors[0], h_size[0], n_dense, activation)])
@@ -179,15 +195,17 @@ class MultiLevelEncoderAudioDense(MultiLevelEncoder):
         o_dim = h_dim if o_dim is None else o_dim
 
         level = [nn.Linear(in_dim, h_dim), activation()]
-        for _ in range(1, n_dense-1):
+        for _ in range(1, n_dense - 1):
             level.extend([nn.Linear(h_dim, h_dim), activation()])
-        
+
         level.extend([nn.Linear(h_dim, o_dim), activation()])
         return nn.Sequential(*level)
 
     def compute_encoding(self, level: int, pre_enc: TensorType["B", "T", "D"]) -> TensorType["B", "T//factor", "D"]:
         B, T, D = pre_enc.shape
-        n_merge_steps = int(self.time_factors[level] / self.time_factors[0])  # first step merge done by stacking waveform
+        n_merge_steps = int(
+            self.time_factors[level] / self.time_factors[0]
+        )  # first step merge done by stacking waveform
         n_pad_steps = (n_merge_steps - T % n_merge_steps) % n_merge_steps
         padding = (0, 0, 0, n_pad_steps, 0, 0)  # pad D-dim by (0, 0) and T-dim by (0, N) and B-dim by (0, 0)
         pre_enc = torch.nn.functional.pad(pre_enc, padding, mode="constant", value=0)
@@ -335,14 +353,16 @@ class DecoderAudioDense(nn.Module):
         activation: nn.Module = nn.ReLU,
     ):
         super().__init__()
-        self.in_dim = in_dim        
+        self.in_dim = in_dim
         self.h_dim = h_dim
         self.o_dim = o_dim
         self.time_factors = time_factors
         self.n_dense = n_dense
         self.activation = activation
-        self.decoder = MultiLevelEncoderAudioDense.get_level(in_dim, h_dim, n_dense, activation, o_dim=o_dim * time_factors[0])
-        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  #float('nan'))
+        self.decoder = MultiLevelEncoderAudioDense.get_level(
+            in_dim, h_dim, n_dense, activation, o_dim=o_dim * time_factors[0]
+        )
+        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  # float('nan'))
 
     def forward(self, x):
         # import IPython; IPython.embed()
@@ -424,7 +444,7 @@ class CWVAE(nn.Module):
         """Return reduced loss for batch and non-reduced ELBO, log p(x|z) and KL-divergence"""
         seq_mask = sequence_mask(x_sl, max_len=y.shape[1], dtype=float, device=y.device)
 
-        log_prob_twise = self.likelihood.log_prob(y.unsqueeze(-1), parameters) * seq_mask
+        log_prob_twise = self.likelihood.log_prob(y, parameters) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
         klds, klds_fn = [], []
@@ -449,17 +469,18 @@ class CWVAE(nn.Module):
         state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
         beta: float = 1,
         free_nats: float = 0,
-        x_sl_norm: TensorType["B", int] = None,
+        y: Optional[TensorType["B", "T", "D"]] = None,
     ):
         # target
-        y = x.clone().detach()
+        if y is None:
+            y = x.clone().detach()
 
         # compute encodings
         encodings = self.encoder(x)
         encodings_t = [enc.unbind(1) for enc in encodings]
 
         # initial context for top layer
-        context = [torch.empty(x.size(0), 0, device=x.device)] * len(encodings_t[-1])
+        context = [self.cells[0].get_empty_context(batch_size=x.size(0))] * len(encodings_t[-1])
 
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
@@ -502,15 +523,63 @@ class CWVAE(nn.Module):
 
         loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, kl_divs, x_sl, beta, free_nats)
 
-        x_sl = x_sl if x_sl_norm is None else x_sl_norm
         metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats)
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
         outputs.x_hat = self.likelihood.sample(outputs.parameters)
         return loss, metrics, outputs
 
-    def generate(self):
-        pass
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: Optional[TensorType["B", "T", "D"]] = None,
+        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
+    ):
+        if x is not None:
+            raise NotImplementedError("Conditional generation is not implemented")
+            # TODO Run a forward pass over x to get conditional initial state0 (assert state0 is None)
+            #      Construct context as concatenation of state0 of layer above (empty for top layer)
+        else:
+            # initial context for top layer
+            context = [self.cells[0].get_empty_context(batch_size=n_samples)] * (max_timesteps // self.time_factors[-1])
 
+            # initial RSSM state (z, h)
+            states = [cell.get_initial_state(batch_size=n_samples) for cell in self.cells] if state0 is None else state0
+
+        for l in range(self.n_levels - 1, -1, -1):
+            all_states = []
+            all_distributions = []
+            T = max_timesteps // self.time_factors[l]  # The upscaling factor of the decoder
+            for t in range(T):
+                # reset stochastic state whenever the layer above ticks (never reset top)
+
+                # cell forward
+                states[l], distributions = self.cells[l].generate(states[l], context[t], use_mode=use_mode)
+
+                all_states.append(states[l])
+                all_distributions.append(distributions)
+
+            # update context for below layer as cat(z_l, h_l)
+            context = [torch.cat(all_states[t], dim=-1) for t in range(T)]
+            if l >= 1:
+                # repeat to temporal resolution of below layer
+                factor = int(self.time_factors[l] / self.time_factors[l - 1])
+                context = [context[i // factor] for i in range(len(context) * factor)]
+
+        context = torch.stack(context, dim=1)
+        dec = self.decoder(context)
+
+        parameters = self.likelihood(dec)
+
+        if use_mode:
+            x = self.likelihood.mode(parameters)
+        else:
+            x = self.likelihood.sample(parameters)
+
+        x_sl = torch.ones(n_samples, dtype=torch.int) * max_timesteps
+        outputs = SimpleNamespace(context=context, all_distributions=all_distributions)
+        return (x, x_sl), outputs
 
 
 class CWVAEAudio(BaseModel):
@@ -592,9 +661,9 @@ class CWVAEAudio(BaseModel):
         beta: float = 1,
         free_nats: float = 0,
     ):
-    #     x, x_sl_stacked, padding = self.stack_waveform(x, x_sl)
-    #     loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats, x_sl_norm=x_sl)
-    #     outputs.x_hat, _ = self.stack_waveform.reverse(outputs.x_hat, x_sl_stacked, padding)
+        #     x, x_sl_stacked, padding = self.stack_waveform(x, x_sl)
+        #     loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats, x_sl_norm=x_sl)
+        #     outputs.x_hat, _ = self.stack_waveform.reverse(outputs.x_hat, x_sl_stacked, padding)
 
         loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats)
         return loss, metrics, outputs
@@ -632,7 +701,6 @@ class CWVAEAudioDense(BaseModel):
         bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
         bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
         bot_c_size = bot_z_size + bot_h_size
-
 
         likelihood = DiscretizedLogisticMixtureDense(
             x_dim=3 * num_mix,
@@ -674,31 +742,23 @@ class CWVAEAudioDense(BaseModel):
         beta: float = 1,
         free_nats: float = 0,
     ):
-        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats)
+        y = x.detach().clone().unsqueeze(-1)  # Create target with channel dim for DML
+        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats, y)
         return loss, metrics, outputs
 
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: Optional[TensorType["B", "T", "D"]] = None,
+        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
+    ):
+        return self.cwvae.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            use_mode=use_mode,
+            x=x,
+            state0=state0,
+        )
 
-"""
-│    └─Sequential: 2-3                             [32, 1, 1024]             [32, 1, 512]              --                        --                        --
-│    │    └─Linear: 3-11                           [32, 1, 1024]             [32, 1, 512]              524,800                   [1024, 512]               16,793,600
-│    │    └─ReLU: 3-12                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
-│    │    └─Linear: 3-13                           [32, 1, 512]              [32, 1, 512]              262,656                   [512, 512]                8,404,992
-│    │    └─ReLU: 3-14                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
-│    │    └─Linear: 3-15                           [32, 1, 512]              [32, 1, 512]              262,656                   [512, 512]                8,404,992
-│    │    └─ReLU: 3-16                             [32, 1, 512]              [32, 1, 512]              --                        --                        --
-│    └─DiscretizedLogisticMixtureDense: 2-4        [32, 1, 512]              [32, 1, 200, 10]          --                        --                        --
-│    │    └─Linear: 3-17                           [32, 1, 512]              [32, 1, 6000]             3,078,000                 [512, 6000]               98,496,000
-"""
-
-
-"""
-│    └─Sequential: 2-3                             [32, T/200, 1024]         [32, T/200, 512]          --                        --                        --
-│    │    └─Linear: 3-11                           [32, T/200, 1024]         [32, T/200, 512]          524,800                   [1024, 512]               16,793,600
-│    │    └─ReLU: 3-12                             [32, T/200, 512]          [32, T/200, 512]          --                        --                        --
-│    │    └─Linear: 3-13                           [32, T/200, 512]          [32, T/200, 512]          262,656                   [512, 512]                8,404,992
-│    │    └─ReLU: 3-14                             [32, T/200, 512]          [32, T/200, 512]          --                        --                        --
-│    │    └─Linear: 3-15                           [32, T/200, 512]          [32, T, 512]              3,072,000                [512, 6000]               8,404,992
-│    │    └─ReLU: 3-16                             [32, T, 30]               [32, T, 30]               --                        --                        --
-│    └─DiscretizedLogisticMixtureDense: 2-4        [32, T, 30]               [32, T, 30]               --                        --                        --
-│    │    └─Linear: 3-17                           [32, T, 30]               [32, T, 30]               15,390                    [512, 30]                 98,496,000
-"""

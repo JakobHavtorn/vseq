@@ -379,7 +379,6 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
 
     def forward(self, x):
         parameters = self.params(x) # (*, D x 3 x self.num_mix)
-        # TODO Do we really need this view? Can't we simply chunk in 3 to get three # (*, D, self.num_mix)?
         parameters = parameters.view(parameters.shape[:-1] + (self.y_dim, self.num_mix * 3))  # (*, D, 3 x self.num_mix)
         logit_probs, means, log_scales = parameters.chunk(3, dim=-1)  # (*, D, self.num_mix)
         log_scales = log_scales.clamp(min=-7.0)

@@ -26,7 +26,7 @@ from vseq.training.annealers import CosineAnnealer
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
+# parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
 parser.add_argument("--hidden_size", default=[512, 512, 512], type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
 parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+", help="dimensionality of latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
@@ -34,7 +34,7 @@ parser.add_argument("--n_dense", default=3, type=int, help="dense layers for emb
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
-parser.add_argument("--free_nats_start_value", default=1, type=float, help="free bits per timestep")
+parser.add_argument("--free_nats_start_value", default=4, type=float, help="free bits per timestep")
 parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -142,7 +142,6 @@ for epoch in tracker.epochs(args.epochs):
         optimizer.step()
 
         tracker.update(metrics)
-        # break
 
     model.eval()
     with torch.no_grad():
@@ -152,13 +151,10 @@ for epoch in tracker.epochs(args.epochs):
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
-            # break
 
         reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000)
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
     tracker.log(samples=samples, reconstructions=reconstructions)
-    # tracker.log(reconstructions=reconstructions)
-    # tracker.log()
