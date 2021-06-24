@@ -68,10 +68,18 @@ class FixedLengthBatcher(Batcher):
         # TODO Pad all inputs to same length
 
 
-def get_length_modulo(length: int, module: int = None):
+def get_modulo_padding(length: int, module: int = None):
+    """Return the size of padding to add to `length` to make it evenly divisible by `modulo`"""
+    if module is None:
+        return 0
+    return (module - length % module) % module
+
+
+def get_modulo_length(length: int, module: int = None):
+    """Return the smallest number larger than `length` evenly divisible by `modulo`"""
     if module is None:
         return length
-    return length + (module - length % module) % module
+    return length + get_modulo_padding(length, module)
 
 
 class AudioBatcher(Batcher):
@@ -83,7 +91,7 @@ class AudioBatcher(Batcher):
         """Zero pad batch of audio waveforms (T,) to maximum temporal length and concatenate"""
         sequence_lengths = [audio.shape[0] for audio in batch]
 
-        T = get_length_modulo(max(sequence_lengths), self.padding_module)
+        T = get_modulo_length(max(sequence_lengths), self.padding_module)
         N = len(batch)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
