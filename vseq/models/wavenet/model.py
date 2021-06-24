@@ -29,7 +29,7 @@ class InputSizeError(Exception):
 class WaveNet(BaseModel):
     def __init__(
         self,
-        num_embeddings: Optional[int] = 256,
+        num_embeddings: Optional[int] = None,
         out_classes: int = 256,
         n_layers: int = 10,
         n_stacks: int = 5,
@@ -72,11 +72,13 @@ class WaveNet(BaseModel):
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
         if num_embeddings is not None:
-            self.embedding = nn.Embedding(num_embeddings=num_embeddings, num_embeddings=res_channels)
-            self.causal = CausalConv1d(res_channels, res_channels, receptive_field=self.receptive_field)
+            self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=res_channels)
+            self.causal = CausalConv1d(
+                res_channels, res_channels, receptive_field=self.receptive_field, bias=False, groups=res_channels
+            )
         else:
             self.embedding = None
-            self.causal = CausalConv1d(1, res_channels, receptive_field=self.receptive_field)
+            self.causal = CausalConv1d(1, res_channels, receptive_field=self.receptive_field, activation=nn.ReLU)
 
         self.res_stack = ResidualStack(n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels)
 
@@ -89,7 +91,7 @@ class WaveNet(BaseModel):
         """Compute and return the receptive field of a WaveNet model"""
         layers = [2 ** i for i in range(0, n_layers)] * n_stacks
         receptive_field = np.sum(layers)
-        receptive_field = receptive_field + 2  # Plus two for causal conv
+        receptive_field = receptive_field + 2  # Plus two from causal conv kernel size
         return int(receptive_field)
 
     def check_input_size(self, x: TensorType["B", "C", "T"]):
@@ -154,7 +156,11 @@ class WaveNet(BaseModel):
         x_hat = logits.argmax(1) / (self.out_classes - 1)
         x_hat = (2 * x_hat) - 1
 
-        metrics = [LossMetric(loss, weight_by=log_prob.numel()), LLMetric(log_prob), BitsPerDimMetric(log_prob, reduce_by=x_sl)]
+        metrics = [
+            LossMetric(loss, weight_by=log_prob.numel()),
+            LLMetric(log_prob),
+            BitsPerDimMetric(log_prob, reduce_by=x_sl),
+        ]
         output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat)
         return loss, metrics, output
 

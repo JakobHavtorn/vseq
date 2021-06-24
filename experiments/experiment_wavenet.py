@@ -106,12 +106,12 @@ val_loader = DataLoader(
 model = vseq.models.WaveNet(
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    in_channels=args.in_channels,
+    num_embeddings=args.num_embeddings,
     res_channels=args.res_channels,
     out_classes=256,
 )
 (x, x_sl), metadata = next(iter(train_loader))
-model.summary(input_data=x, x_sl=x_sl)
+model.summary(input_example=x, x_sl=x_sl)
 model = model.to(device)
 print(model)
 rich.print(model.receptive_field)
