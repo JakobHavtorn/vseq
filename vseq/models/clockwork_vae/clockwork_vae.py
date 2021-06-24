@@ -1,3 +1,5 @@
+import math
+
 from types import SimpleNamespace
 from typing import List, Optional, Tuple, Union
 
@@ -110,20 +112,7 @@ class StackWaveform(nn.Module):
 
     def forward(self, x: TensorType["B":..., "T"], x_sl: TensorType["B", int] = None):
         padding = (self.stack_size - x.size(-1) % self.stack_size) % self.stack_size
-        x = torch.cat(
-            [
-                x,
-                torch.full(
-                    (
-                        *x.shape[:-1],
-                        padding,
-                    ),
-                    fill_value=self.pad_value,
-                    device=x.device,
-                ),
-            ],
-            dim=-1,
-        )
+        x = torch.cat([x, torch.full((*x.shape[:-1], padding), fill_value=self.pad_value, device=x.device)], dim=-1)
         x = x.view(*x.shape[:-1], -1, self.stack_size)  # (B, ..., T / stack_size, stack_size)
         if x_sl is None:
             return x, padding
@@ -226,7 +215,6 @@ class MultiLevelEncoderAudioDense(MultiLevelEncoder):
         """
         encodings = []
         hidden, padding = self.stack_waveform(x)
-        # import IPython; IPython.embed(using=False)
         for l in range(self.n_levels):
             hidden = self.levels[l](hidden)
             pre_enc = self.out_proj[l](hidden) if self.project_out else hidden
@@ -365,10 +353,8 @@ class DecoderAudioDense(nn.Module):
         self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  # float('nan'))
 
     def forward(self, x):
-        # import IPython; IPython.embed()
         hidden = self.decoder(x)
         hidden = hidden.view(hidden.size(0), -1, self.o_dim)
-        # hidden = self.stack_waveform.reverse(hidden)
         return hidden
 
 
@@ -414,7 +400,7 @@ class CWVAE(nn.Module):
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.n_levels)
         ]
         kld_metrics_bpd = [
-            BitsPerDimMetric(-klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / self.time_factors[l]))
+            KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / (math.log(2) * self.time_factors[l])))
             for l in range(self.n_levels)
         ]
         metrics = [
@@ -424,7 +410,7 @@ class CWVAE(nn.Module):
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
             BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=x_sl),
             KLMetric(kld, name="kl (nats)"),
-            BitsPerDimMetric(-kld, name="kl (bpt)", reduce_by=x_sl / self.time_factors[0]),
+            KLMetric(kld, name="kl (bpt)", reduce_by=x_sl / (math.log(2) * self.time_factors[0])),
             *kld_metrics_nats,
             *kld_metrics_bpd,
             LatestMeanMetric(beta, name="beta"),
@@ -761,4 +747,3 @@ class CWVAEAudioDense(BaseModel):
             x=x,
             state0=state0,
         )
-

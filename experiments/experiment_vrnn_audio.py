@@ -135,8 +135,8 @@ for epoch in tracker.epochs(args.epochs):
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
-        torch.nn.utils.clip_grad_value_(model.parameters(), 1)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
+        # torch.nn.utils.clip_grad_value_(model.parameters(), 1)
         optimizer.step()
 
         tracker.update(metrics)
