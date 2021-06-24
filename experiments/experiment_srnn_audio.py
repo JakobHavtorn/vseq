@@ -1,5 +1,4 @@
 import argparse
-import math
 
 import torch
 import wandb
@@ -154,11 +153,9 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-        # reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+        reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
-        # samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000 // args.stack_frames)
+        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-        # tracker.log(samples=samples, reconstructions=reconstructions)
-        
-    tracker.log()
+    tracker.log(samples=samples, reconstructions=reconstructions)

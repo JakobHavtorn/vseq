@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import torch
+from torch._C import dtype
 import torch.nn as nn
 import torch.nn.init as init
 
@@ -9,7 +10,12 @@ from tqdm import tqdm
 
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric, PerplexityMetric
 from vseq.models import BaseModel
-from vseq.modules import CategoricalDense, GaussianDense, WordDropout, DiscretizedLogisticDense, DiscretizedLogisticMixtureDense
+from vseq.modules import (
+    CategoricalDense,
+    GaussianDense,
+    WordDropout,
+    DiscretizedLogisticMixtureDense,
+)
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
 from vseq.utils.operations import sequence_mask, reverse_sequences
 
@@ -95,7 +101,7 @@ class SRNN(nn.Module):
     def compute_elbo(
         self,
         y: TensorType["B", "T"],
-        logits: TensorType["B", "T", "D"],
+        parameters: TensorType["B", "T", "D"],
         kld_twise: TensorType["B", "T", "latent_size"],
         x_sl: TensorType["B", int],
         beta: float = 1,
@@ -105,7 +111,7 @@ class SRNN(nn.Module):
 
         seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
 
-        log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
+        log_prob_twise = self.likelihood.log_prob(y, parameters) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
         kld = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
@@ -194,7 +200,7 @@ class SRNN(nn.Module):
 
         dec = self.dropout(dec) if self.dropout is not None else dec
 
-        logits = self.likelihood(dec)  # (B, T, D)
+        parameters = self.likelihood(dec)  # (B, T, D)
 
         enc_mu = torch.stack(all_enc_mu, dim=1)
         enc_sd = torch.stack(all_enc_sd, dim=1)
@@ -202,7 +208,7 @@ class SRNN(nn.Module):
         prior_sd = torch.stack(all_prior_sd, dim=1)
         kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
 
-        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
+        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, parameters, kld, x_sl, beta, free_nats)
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -218,7 +224,7 @@ class SRNN(nn.Module):
             log_prob=log_prob,
             kl=kl,
             y=y,
-            logits=logits,
+            parameters=parameters,
             seq_mask=seq_mask,
             d=d_n,
             a=a_n,
@@ -238,36 +244,67 @@ class SRNN(nn.Module):
         stop_value: float = None,
         use_mode: bool = False,
     ):
-        # TODO Implement SRNN generation
+        # device
         device = self.forward_recurrent.weight_hh_l0.device
 
-        # Conditional generation
-        if x is not None:
-            x_sl = torch.full_like(x, fill_value=x.size(1))
-            _, _, outputs = self.forward(x, x_sl, u, d0=d0, a0=a0, z0=z0)
-            d0 = outputs.d
-            a0 = outputs.a
+        if x.size(1) > 1:
+            # conditional generation
+            x_sl = torch.full_like(x, fill_value=x.size(1)-1)
+            u_in = u[:, :x.size(1)-1, :] if u is not None else u
+            _, _, outputs = self.forward(x[:, :-1, :], x_sl, u_in, d0=d0, a0=a0, z0=z0)
+            d_t = outputs.d
             z_t = outputs.z
+            x = x[:, -1, :]
+            u = u[:, :x.size(1)-1, :]
         else:
-            d0 = torch.zeros(self.num_layers, n_samples, self.h_dim, device=device) if d0 is None else d0
-            a0 = torch.zeros(self.num_layers, n_samples, self.h_dim, device=device) if a0 is None else a0
+            # unconditional generation
+            x_sl = torch.zeros(n_samples)
+            d_t = torch.zeros(self.num_layers, n_samples, self.h_dim, device=device) if d0 is None else d0
             z_t = torch.zeros(n_samples, self.z_dim, device=device) if z0 is None else z0
 
-        all_prior_mu, all_prior_sd = [], []
-        z_t_sampled = []
+        all_x = []
+        all_z = []
 
         seq_active = torch.ones(n_samples, dtype=torch.int)
         all_ended, t = False, 0  # Used to condition while loop
-
-        pbar = tqdm(total=max_timesteps)
         while not all_ended and t < max_timesteps:
-            
+            if u is None:
+                u_embedding = self.x_embedding(x)
+            else:
+                u_embedding = u[:, t, :]
+
+            u_embedding = u_embedding.permute(1, 0, 2)  # (T, B, D)
+
+            d_t, d_n = self.forward_recurrent(u_embedding, d_t)
+            d_t = d_t.squeeze(0)
+
+            # prior conditioned on d_t and z_{t-1}
+            prior_mu_t, prior_sd_t = self.prior(torch.cat([d_t, z_t], dim=-1))
+
+            # sampling and reparameterization
+            if use_mode:
+                z_t = prior_mu_t
+            else:
+                z_t = rsample_gaussian(prior_mu_t, prior_sd_t)
+
+            dec = self.decoder(torch.cat([z_t, d_t], dim=-1))
+
+            dec = self.dropout(dec) if self.dropout is not None else dec
+
+            parameters = self.likelihood(dec)  # (B, T, D)
+
+            x = self.likelihood.sample(parameters)
 
             all_x.append(x)
-            all_outputs.append(outputs)
+            all_z.append(z_t)
+
+            x = x.unsqueeze(1)
+            d_t = d_t.unsqueeze(0)
 
             # Update sequence length
             x_sl += seq_active
+
+            # Check for sequence ending
             seq_ending = x == stop_value  # (,), (B,) or (B, D*)
             if isinstance(seq_ending, torch.Tensor):
                 seq_ending = seq_ending.all(*list(range(1, seq_ending.ndim))) if seq_ending.ndim > 1 else seq_ending
@@ -279,12 +316,10 @@ class SRNN(nn.Module):
             # Update loop conditions
             t += 1
             all_ended = torch.all(1 - seq_active).item()
-            pbar.update(1)
 
-        pbar.close()
         x = torch.stack(all_x, dim=1)
 
-        outputs = SimpleNamespace(**list_of_dict_to_dict_of_list([vars(ns) for ns in all_outputs]))
+        outputs = SimpleNamespace()
         return (x, x_sl), outputs
 
 
@@ -432,7 +467,7 @@ class SRNNAudioDML(BaseModel):
         z0: TensorType["B", "h_dim"] = None,
     ):
         loss, metrics, outputs = self.srnn(x=x, x_sl=x_sl, d0=d0, a0=a0, z0=z0, beta=beta, free_nats=free_nats)
-        outputs.x_hat = self.srnn.likelihood.sample(outputs.logits)
+        outputs.x_hat = self.srnn.likelihood.sample(outputs.parameters)
         return loss, metrics, outputs
 
     def generate(
@@ -440,17 +475,22 @@ class SRNNAudioDML(BaseModel):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
-        x: TensorType["B", "x_dim"] = None,
-        h: TensorType["B", "h_dim"] = None,
+        x: TensorType["B", "T", "x_dim"] = None,
+        u: TensorType["B", "T", "x_dim"] = None,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "z_dim"] = None,
     ):
-        x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
+        x = torch.zeros(n_samples, 1, self.input_size, device=self.device) if x is None else x
         return self.srnn.generate(
+            x=x,
+            u=u,
+            d0=d0,
+            a0=a0,
+            z0=z0,
             n_samples=n_samples,
             max_timesteps=max_timesteps,
-            stop_value=None,
             use_mode=use_mode,
-            x=x,
-            h=h,
         )
 
 
@@ -512,8 +552,8 @@ class SRNNAudioGauss(BaseModel):
             del metrics[bpd_metric_idx]
 
         seq_mask = outputs.seq_mask.to(bool)
-        mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
-        std = outputs.logits[1][seq_mask, :].mean().item()
+        mse = ((outputs.y[seq_mask, :] - outputs.parameters[0][seq_mask, :]) ** 2).mean().sqrt().item()
+        std = outputs.parameters[1][seq_mask, :].mean().item()
 
         metrics.extend(
             [
@@ -529,15 +569,20 @@ class SRNNAudioGauss(BaseModel):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
-        x: TensorType["B", "x_dim"] = None,
-        h: TensorType["B", "h_dim"] = None,
+        x: TensorType["B", "T", "x_dim"] = None,
+        u: TensorType["B", "T", "x_dim"] = None,
+        d0: TensorType["num_layers", "B", "h_dim"] = None,
+        a0: TensorType["num_layers", "B", "h_dim"] = None,
+        z0: TensorType["B", "z_dim"] = None,
     ):
         x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
         return self.srnn.generate(
+            x=x,
+            u=u,
+            d0=d0,
+            a0=a0,
+            z0=z0,
             n_samples=n_samples,
             max_timesteps=max_timesteps,
-            stop_value=None,
             use_mode=use_mode,
-            x=x,
-            h=h,
         )
