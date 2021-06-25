@@ -14,7 +14,7 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import TIMIT_TRAIN, TIMIT_TEST
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import Compose, Quantize, RandomSegment, Scale, MuLawEncode, StackWaveform
+from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, Scale, MuLawEncode, StackWaveform
 from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
@@ -67,7 +67,9 @@ rich.print(vars(args))
 
 if args.input_coding == "mu_law":
     wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=args.num_bits))
+    decode_transform = MuLawDecode(bits=args.num_bits)
 elif args.input_coding == "frames":
+    decode_transform = None
     if args.stack_frames == 1:
         wavenet_transform = Compose(RandomSegment(length=16000))
     else:
@@ -146,9 +148,11 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
 
+        output.x_hat = decode_transform(output.x_hat) if decode_transform is not None else output.x_hat
         reconstructions = [wandb.Audio(output.x_hat[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
+        x = model.generate(n_samples=2, n_frames=12800 // args.stack_frames)
+        x = decode_transform(x) if decode_transform is not None else x
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
         tracker.log(samples=samples, reconstructions=reconstructions)

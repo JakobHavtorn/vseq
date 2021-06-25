@@ -29,7 +29,7 @@ class InputSizeError(Exception):
 class WaveNet(BaseModel):
     def __init__(
         self,
-        num_embeddings: Optional[int] = None,
+        in_channels: Optional[int] = None,
         out_classes: int = 256,
         n_layers: int = 10,
         n_stacks: int = 5,
@@ -52,11 +52,11 @@ class WaveNet(BaseModel):
                  -> *skip* ---------------------------------------- + ----------------> *skip*
 
         Args:
-            num_embeddings (int): Number of embeddings to (optionally) use for input. If `None`, work on raw pcm.
+            in_channels (int): Number of embeddings to (optionally) use for input. If `None`, work on raw pcm.
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
-            res_channels (int): Number of channels in residual blocks (and embedding if num_embeddings > 1).
+            res_channels (int): Number of channels in residual blocks (and embedding if in_channels > 1).
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -65,14 +65,14 @@ class WaveNet(BaseModel):
 
         self.n_layers = n_layers
         self.n_stacks = n_stacks
-        self.num_embeddings = num_embeddings
+        self.in_channels = in_channels
         self.res_channels = res_channels
         self.out_classes = out_classes
 
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
-        if num_embeddings is not None:
-            self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=res_channels)
+        if in_channels is not None:
+            self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
             self.causal = CausalConv1d(
                 res_channels, res_channels, receptive_field=self.receptive_field, bias=False, groups=res_channels
             )
@@ -135,7 +135,7 @@ class WaveNet(BaseModel):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
-        if self.num_embeddings is None:
+        if self.in_channels is None:
             x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
             target = self._get_target(x)
         else:
@@ -166,7 +166,7 @@ class WaveNet(BaseModel):
 
     def generate(self, n_samples: int, n_frames: int = 48000):
         """Generate samples from the WaveNet starting from a zero vector"""
-        if self.num_embeddings is None:
+        if self.in_channels is None:
             # start with floats of zeros
             x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
         else:
@@ -189,7 +189,7 @@ class WaveNet(BaseModel):
             x_hat.append(x_new)
 
             # prepare prediction as next input
-            if self.num_embeddings is None:
+            if self.in_channels is None:
                 x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
                 x_new = x_new / (self.out_classes - 1)  # To [0, 1]
                 x_new = x_new * 2 - 1  # To [-1, 1]
