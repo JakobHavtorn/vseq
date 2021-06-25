@@ -12,9 +12,9 @@ import vseq.models
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
-from vseq.data.datapaths import LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TRAIN
+from vseq.data.datapaths import TIMIT_TRAIN, TIMIT_TEST
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import Compose, Quantize, RandomSegment, Scale, MuLawEncode
+from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, Scale, MuLawEncode, StackWaveform
 from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
@@ -30,6 +30,8 @@ parser.add_argument("--n_layers", default=10, type=int, help="number of layers p
 parser.add_argument("--n_stacks", default=4, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
+parser.add_argument("--num_bits", default=8, type=int, help="number of bits for mu_law encoding (note the data bits depth)")
+parser.add_argument("--stack_frames", default=1, type=int, help="Number of audio frames to stack in feature vector if input_coding is frames")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
@@ -37,7 +39,7 @@ parser.add_argument("--wandb_group", default=None, type=str, help="custom group 
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 if args.seed is None:
     args.seed = get_random_seed()
@@ -46,10 +48,10 @@ set_seed(args.seed)
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
-if args.input_coding == "mu_law":
-    args.in_channels = 256
-elif args.input_coding == "frames":
-    args.in_channels = 1
+if args.input_coding == "frames":
+    args.num_embeddings = None
+elif args.input_coding == "mu_law":
+    args.num_embeddings = 2 ** args.num_bits
 else:
     raise ValueError()
 
@@ -64,20 +66,25 @@ rich.print(vars(args))
 
 
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8))
+    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=args.num_bits))
+    decode_transform = MuLawDecode(bits=args.num_bits)
 elif args.input_coding == "frames":
-    wavenet_transform = Compose(RandomSegment(length=16000))
+    decode_transform = None
+    if args.stack_frames == 1:
+        wavenet_transform = Compose(RandomSegment(length=16000))
+    else:
+        wavenet_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
 
 modalities = [
-    (AudioLoader("flac"), wavenet_transform, AudioBatcher()),
+    (AudioLoader("wav"), wavenet_transform, AudioBatcher()),
 ]
 
 train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
+    source=TIMIT_TRAIN,
     modalities=modalities,
 )
 val_dataset = BaseDataset(
-    source=LIBRISPEECH_DEV_CLEAN,
+    source=TIMIT_TEST,
     modalities=modalities,
 )
 
@@ -101,20 +108,18 @@ val_loader = DataLoader(
 model = vseq.models.WaveNet(
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    in_channels=args.in_channels,
+    num_embeddings=args.num_embeddings,
     res_channels=args.res_channels,
     out_classes=256,
 )
+(x, x_sl), metadata = next(iter(train_loader))
+model.summary(input_example=x, x_sl=x_sl)
 model = model.to(device)
 print(model)
 rich.print(model.receptive_field)
 wandb.watch(model, log="all", log_freq=len(train_loader))
+
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
-
-# (x, x_sl), metadata = next(iter(train_loader))
-# x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
 
 
 tracker = Tracker()
@@ -142,16 +147,21 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-        tracker.log()
 
-        # save samples
-        x = model.generate(n_samples=32, n_frames=96000)
-        x = x.unsqueeze(-1).to(torch.uint8).cpu()
-        for i in range(len(x)):
-            torchaudio.save(
-                f"./wavenet_samples/model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
-                x[i],
-                sample_rate=16000,
-                channels_first=False,
-                encoding="ULAW",
-            )
+        output.x_hat = decode_transform(output.x_hat) if decode_transform is not None else output.x_hat
+        reconstructions = [wandb.Audio(output.x_hat[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+
+        x = model.generate(n_samples=2, n_frames=12800 // args.stack_frames)
+        x = decode_transform(x) if decode_transform is not None else x
+        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+
+        tracker.log(samples=samples, reconstructions=reconstructions)
+
+        # for i in range(len(x)):
+        #     torchaudio.save(
+        #         f"./wavenet_samples/model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
+        #         x[i],
+        #         sample_rate=16000,
+        #         channels_first=False,
+        #         encoding="ULAW",
+        #     )

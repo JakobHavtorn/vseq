@@ -1,7 +1,7 @@
 """WaveNet main model"""
 
 from types import SimpleNamespace
-from typing import List
+from typing import List, Optional
 from torch.tensor import Tensor
 
 import tqdm
@@ -29,7 +29,7 @@ class InputSizeError(Exception):
 class WaveNet(BaseModel):
     def __init__(
         self,
-        in_channels: int = 256,
+        in_channels: Optional[int] = None,
         out_classes: int = 256,
         n_layers: int = 10,
         n_stacks: int = 5,
@@ -52,7 +52,7 @@ class WaveNet(BaseModel):
                  -> *skip* ---------------------------------------- + ----------------> *skip*
 
         Args:
-            in_channels (int): Number of channels in the input data.
+            in_channels (int): Number of embeddings to (optionally) use for input. If `None`, work on raw pcm.
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
@@ -71,12 +71,14 @@ class WaveNet(BaseModel):
 
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
-        if in_channels > 1:
+        if in_channels is not None:
             self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
-            self.causal = CausalConv1d(res_channels, res_channels, receptive_field=self.receptive_field)
+            self.causal = CausalConv1d(
+                res_channels, res_channels, receptive_field=self.receptive_field, bias=False, groups=res_channels
+            )
         else:
             self.embedding = None
-            self.causal = CausalConv1d(in_channels, res_channels, receptive_field=self.receptive_field)
+            self.causal = CausalConv1d(1, res_channels, receptive_field=self.receptive_field, activation=nn.ReLU)
 
         self.res_stack = ResidualStack(n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels)
 
@@ -89,7 +91,7 @@ class WaveNet(BaseModel):
         """Compute and return the receptive field of a WaveNet model"""
         layers = [2 ** i for i in range(0, n_layers)] * n_stacks
         receptive_field = np.sum(layers)
-        receptive_field = receptive_field + 2  # Plus two for causal conv
+        receptive_field = receptive_field + 2  # Plus two from causal conv kernel size
         return int(receptive_field)
 
     def check_input_size(self, x: TensorType["B", "C", "T"]):
@@ -109,19 +111,18 @@ class WaveNet(BaseModel):
         self,
         target: TensorType["B", "T", int],
         x_sl: TensorType["B", int],
-        output: TensorType["B", "T", "C", float],
+        logits: TensorType["B", "C", "T", float],
     ):
         """Compute the loss as negative log-likelihood per frame, masked and mormalized according to sequence lengths.
 
         Args:
             target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) of quantized integers.
             x_sl (torch.LongTensor): Sequence lengths of examples in the batch.
-            output (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
+            logits (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
         """
-        nll = self.nll_criterion(output, target)
+        nll = self.nll_criterion(logits, target)
         mask = sequence_mask(x_sl, device=nll.device)
         nll *= mask
-        nll = nll.sum(1)  # sum T
         loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
         return loss, -nll
 
@@ -134,7 +135,7 @@ class WaveNet(BaseModel):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
-        if self.in_channels == 1:
+        if self.in_channels is None:
             x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
             target = self._get_target(x)
         else:
@@ -148,19 +149,24 @@ class WaveNet(BaseModel):
         output = self.causal(x)
         skip_connections = self.res_stack(output, skip_size=x.size(2))
         output = torch.sum(skip_connections, dim=0)
-        output = self.out_convs(output)
+        logits = self.out_convs(output)
 
-        loss, ll = self.compute_loss(target, x_sl, output)
+        loss, log_prob = self.compute_loss(target, x_sl, logits)
 
-        categorical = D.Categorical(logits=output.transpose(1, 2))
+        x_hat = logits.argmax(1) / (self.out_classes - 1)
+        x_hat = (2 * x_hat) - 1
 
-        metrics = [LossMetric(loss, weight_by=ll.numel()), LLMetric(ll), BitsPerDimMetric(ll, reduce_by=x_sl)]
-        output = SimpleNamespace(loss=loss, ll=ll, logits=output, categorical=categorical, target=target)
+        metrics = [
+            LossMetric(loss, weight_by=log_prob.numel()),
+            LLMetric(log_prob),
+            BitsPerDimMetric(log_prob, reduce_by=x_sl),
+        ]
+        output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
         """Generate samples from the WaveNet starting from a zero vector"""
-        if self.in_channels == 1:
+        if self.in_channels is None:
             # start with floats of zeros
             x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
         else:
@@ -170,7 +176,7 @@ class WaveNet(BaseModel):
 
         x = x.transpose(1, 2)  # (B, C, T)
 
-        outputs = []
+        x_hat = []
         for _ in tqdm.tqdm(range(n_frames)):
 
             output = self.causal(x, pad=False)
@@ -180,10 +186,10 @@ class WaveNet(BaseModel):
 
             categorical = D.Categorical(logits=output.transpose(1, 2))
             x_new = categorical.sample()  # Value in {0, ..., 255}
-            outputs.append(x_new)
+            x_hat.append(x_new)
 
             # prepare prediction as next input
-            if self.in_channels == 1:
+            if self.in_channels is None:
                 x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
                 x_new = x_new / (self.out_classes - 1)  # To [0, 1]
                 x_new = x_new * 2 - 1  # To [-1, 1]
@@ -194,5 +200,7 @@ class WaveNet(BaseModel):
 
             x = torch.cat([x[:, :, 1:], x_new], dim=2)  # FIFO along T
 
-        outputs = torch.hstack(outputs)
-        return outputs
+        x_hat = torch.hstack(x_hat)
+        x_hat = x_hat / (self.out_classes - 1)  # To [0, 1]
+        x_hat = x_hat * 2 - 1  # To [-1, 1]
+        return x_hat

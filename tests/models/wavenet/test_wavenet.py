@@ -12,7 +12,7 @@ from vseq.models.wavenet.model import WaveNet, InputSizeError
 
 N_LAYERS = 5  # 10 in paper
 N_STACKS = 2  # 5 in paper
-IN_CHANNELS = 1  # 256 in paper. quantized and one-hot input.
+IN_CHANNELS = None  # 256 in paper. quantized and one-hot input.
 RES_CHANNELS = 512  # 512 in paper
 OUT_CLASSES = 256
 
@@ -20,7 +20,7 @@ OUT_CLASSES = 256
 def generate_dummy(dummy_length):
     # x = np.arange(0, dummy_length, dtype=np.float32)
     x = np.random.uniform(low=-1, high=1, size=(1, dummy_length)).astype(np.float32)
-    x = np.reshape(x, [1, dummy_length, IN_CHANNELS])  # [B, T, C]
+    x = np.reshape(x, [1, dummy_length, IN_CHANNELS or 1])  # [B, T, C]
     x = torch.from_numpy(x)
     x_sl = torch.LongTensor([dummy_length])
     return x, x_sl
@@ -90,9 +90,7 @@ def test_wavenet_causality_gradient_slice(wavenet, slice_idx):
 
     loss, metrics, output = wavenet(x, x_sl)
 
-    log_prob_per_timestep = output.categorical.log_prob(output.target)
-
-    log_prob_per_timestep[:, :slice_idx].sum().backward()
+    output.log_prob[:, :slice_idx].sum().backward()
 
     assert (
         x.grad[:, : slice_idx - 1, :] != 0
