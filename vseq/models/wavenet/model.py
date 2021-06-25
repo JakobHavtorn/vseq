@@ -2,8 +2,9 @@
 
 from types import SimpleNamespace
 from typing import List, Optional
-from torch.tensor import Tensor
+import logging
 
+from torch.tensor import Tensor
 import tqdm
 import numpy as np
 import torch
@@ -14,10 +15,12 @@ from torchtyping import TensorType
 
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 from vseq.utils.operations import sequence_mask
+from vseq.data.transforms import Reshape
 
 from .modules import CausalConv1d, ResidualStack, OutConv1d
 from ..base_model import BaseModel
 
+LOGGER = logging.getLogger(name=__file__)
 
 class InputSizeError(Exception):
     def __init__(self, input_size, receptive_field):
@@ -29,6 +32,7 @@ class InputSizeError(Exception):
 class WaveNet(BaseModel):
     def __init__(
         self,
+        in_channels: int = 1,
         num_embeddings: Optional[int] = None,
         out_classes: int = 256,
         n_layers: int = 10,
@@ -63,6 +67,9 @@ class WaveNet(BaseModel):
         """
         super().__init__()
 
+        if in_channels is not None:
+            self.in_channels = in_channels
+
         self.n_layers = n_layers
         self.n_stacks = n_stacks
         self.num_embeddings = num_embeddings
@@ -72,17 +79,30 @@ class WaveNet(BaseModel):
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
         if num_embeddings is not None:
-            self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=res_channels)
+            self.embedding = nn.Embedding(
+                num_embeddings=num_embeddings, embedding_dim=res_channels
+            )
             self.causal = CausalConv1d(
-                res_channels, res_channels, receptive_field=self.receptive_field, bias=False, groups=res_channels
+                in_channels=res_channels,
+                out_channels=res_channels,
+                receptive_field=self.receptive_field,
+                bias=False,
+                groups=res_channels,
             )
         else:
             self.embedding = None
-            self.causal = CausalConv1d(1, res_channels, receptive_field=self.receptive_field, activation=nn.ReLU)
+            self.causal = CausalConv1d(
+                in_channels=in_channels,
+                out_channels=res_channels,
+                receptive_field=self.receptive_field,
+                activation=nn.ReLU,
+            )
 
-        self.res_stack = ResidualStack(n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels)
+        self.res_stack = ResidualStack(
+            n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels
+        )
 
-        self.out_convs = OutConv1d(res_channels, out_classes)
+        self.out_convs = OutConv1d(res_channels, out_classes * in_channels)
 
         self.nll_criterion = torch.nn.NLLLoss(reduction="none")
 
@@ -124,6 +144,8 @@ class WaveNet(BaseModel):
         """
         nll = self.nll_criterion(logits, target)
         mask = sequence_mask(x_sl, device=nll.device)
+        if mask.size() != nll.size():
+            mask = mask.unsqueeze(-1).expand(nll.size())
         nll *= mask
         loss = nll.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
         return loss, -nll
@@ -143,7 +165,6 @@ class WaveNet(BaseModel):
         else:
             target = x.clone()
             x = self.embedding(x)  # (B, T, C)
-        
         x = x.transpose(1, 2)  # (B, C, T)
 
         # Add this to allow for returning x
@@ -157,6 +178,13 @@ class WaveNet(BaseModel):
         output = torch.sum(skip_connections, dim=0)
         logits = self.out_convs(output)
 
+        if self.in_channels > 1:
+            logits = logits.view(
+                logits.size(0),
+                self.out_classes,
+                logits.size(-1),
+                logits.size(1) // self.out_classes,
+            )
         loss, log_prob = self.compute_loss(target, x_sl, logits)
 
         x_hat = logits.argmax(1) / (self.out_classes - 1)
@@ -167,7 +195,9 @@ class WaveNet(BaseModel):
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl),
         ]
-        output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat)
+        output = SimpleNamespace(
+            loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat
+        )
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):

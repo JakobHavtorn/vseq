@@ -1,12 +1,13 @@
 import os
 import uuid
 from time import time
+import logging
+LOGGER = logging.getLogger(name=__file__)
 
 from dataclasses import dataclass
 from typing import Union
 
 import torchaudio
-
 
 def memoize(func):
     cache = dict()
@@ -61,6 +62,7 @@ def load_text(file_path):
 
 
 def load_audio(file_path, sum_channels: bool = False):
+    # LOGGER.debug(f"FILE PATH {file_path}")
     metadata = torchaudio.info(file_path)
     audio, _ = torchaudio.load(file_path)
 

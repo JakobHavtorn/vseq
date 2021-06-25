@@ -79,6 +79,7 @@ class StackWaveform(Transform):
     def __init__(self, n_frames: int = 200):
         super().__init__()
         self.n_frames = n_frames
+        
 
     def forward(self, x):
         padding = (self.n_frames - x.size(0)) % self.n_frames
