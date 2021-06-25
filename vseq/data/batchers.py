@@ -84,16 +84,16 @@ class SpectrogramBatcher(Batcher):
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
-        """Zero pad batch of spectrograms (F, T) to maximum temporal length and concatenate"""
-        sequence_lengths = [spectrogram.shape[1] for spectrogram in batch]
+        """Zero pad batch of spectrograms (T, F) to maximum temporal length and concatenate"""
+        sequence_lengths = [sample.shape[0] for sample in batch]
 
         T = max(sequence_lengths)
         N = len(batch)
-        F = batch[0].shape[0]
+        F = batch[0].shape[1]
 
-        collated_batch = torch.zeros((N, F, T), dtype=batch[0].dtype)
+        collated_batch = torch.zeros((N, T, F), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
-            collated_batch[i, :, :seq_len] = batch[i]
+            collated_batch[i, :seq_len, :] = batch[i]
 
         return collated_batch, torch.LongTensor(sequence_lengths)
 

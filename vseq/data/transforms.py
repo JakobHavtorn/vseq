@@ -81,10 +81,14 @@ class StackWaveform(Transform):
         self.n_frames = n_frames
 
     def forward(self, x):
-        padding = self.n_frames - x.size(0) % self.n_frames
-        x = torch.cat([x, torch.zeros(padding)])
+        padding = (self.n_frames - x.size(0)) % self.n_frames
+        if padding != 0:
+            x = torch.cat([x, torch.zeros(padding)])
         x = x.view(-1, self.n_frames)
         return x
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(n_frames={self.n_frames})"
 
 
 class RandomSegment(Transform):
@@ -251,9 +255,3 @@ class Dequantize(Transform):
 
     def forward(self, x):
         return x + torch.rand_like(x)
-
-
-class StackWaveform(nn.Unflatten):
-    def __init__(self, stack_frames: int = 100, input_length: int = 16000):
-        assert input_length % stack_frames == 0
-        super().__init__(dim=(stack_frames, int(input_length / stack_frames)))
