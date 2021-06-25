@@ -2,7 +2,6 @@ import argparse
 import logging
 
 import torch
-import torchaudio
 import wandb
 import rich
 
@@ -30,6 +29,7 @@ parser.add_argument("--n_layers", default=10, type=int, help="number of layers p
 parser.add_argument("--n_stacks", default=4, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
+parser.add_argument("--num_bits", default=8, type=int, help="number of bits for mu_law encoding (note the data bits depth)")
 parser.add_argument("--stack_frames", default=1, type=int, help="Number of audio frames to stack in feature vector if input_coding is frames")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
@@ -47,10 +47,10 @@ set_seed(args.seed)
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
-if args.input_coding == "mu_law":
-    args.in_channels = 256
-elif args.input_coding == "frames":
-    args.in_channels = 1
+if args.input_coding == "frames":
+    args.num_embeddings = None
+elif args.input_coding == "mu_law":
+    args.num_embeddings = 2 ** args.num_bits
 else:
     raise ValueError()
 
@@ -65,7 +65,7 @@ rich.print(vars(args))
 
 
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=8))
+    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=args.num_bits))
 elif args.input_coding == "frames":
     if args.stack_frames == 1:
         wavenet_transform = Compose(RandomSegment(length=16000))
@@ -105,7 +105,7 @@ val_loader = DataLoader(
 model = vseq.models.WaveNet(
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    in_channels=args.in_channels,
+    num_embeddings=args.num_embeddings,
     res_channels=args.res_channels,
     out_classes=256,
 )
