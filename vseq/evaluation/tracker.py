@@ -121,10 +121,15 @@ class Tracker:
     def steps(self, loader: Union[str, DataLoader]):
         self.set(loader)
         iterator = iter(loader)
+        # ps = [psutil.Process(w.pid) for w in iterator._workers]
         for batch in iterator:
             yield batch
             if self.do_print():
                 self.print()
+            # TODO Report dataloader worker utilization
+            # import IPython; IPython.embed()
+            # cpu_util = [p.cpu_percent(interval=0.0) for p in ps]
+            # print(cpu_util)
 
         self.unset()
 

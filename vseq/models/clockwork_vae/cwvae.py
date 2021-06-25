@@ -11,13 +11,15 @@ from torchtyping import TensorType
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLogisticMixtureDense, GaussianDense
-from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian, rsample_gaussian
+from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
+from .coders import MultiLevelEncoderAudioDense, DecoderAudioDense
 
-def get_exponential_time_factors(abs_factor, n_levels):
+
+def get_exponential_time_factors(abs_factor, num_levels):
     """Return exponentially increasing temporal abstraction factors with base `abs_factor`"""
-    return [abs_factor ** l for l in range(n_levels)]
+    return [abs_factor ** l for l in range(num_levels)]
 
 
 class RSSMCell(torch.jit.ScriptModule):
@@ -82,7 +84,7 @@ class RSSMCell(torch.jit.ScriptModule):
         if self.residual_posterior:
             enc_mu = enc_mu + prior_mu
 
-        z_new = rsample_gaussian(enc_mu, enc_sd)
+        z_new = self.posterior[-1].rsample((enc_mu, enc_sd)) if not use_mode else prior_mu
 
         distributions = SimpleNamespace(enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
 
@@ -96,266 +98,11 @@ class RSSMCell(torch.jit.ScriptModule):
         h_new = self.gru_cell(gru_in, h)
 
         prior_mu, prior_sd = self.prior(h_new)
-
-        z_new = rsample_gaussian(prior_mu, prior_sd)
+        z_new = self.prior[-1].rsample((prior_mu, prior_sd)) if not use_mode else prior_mu
 
         distributions = SimpleNamespace(prior_mu=prior_mu, prior_sd=prior_sd)
 
         return (z_new, h_new), distributions
-
-
-class StackWaveform(nn.Module):
-    def __init__(self, stack_size: int, pad_value: float = 0.0):
-        super().__init__()
-        self.stack_size = stack_size
-        self.pad_value = pad_value
-
-    def forward(self, x: TensorType["B":..., "T"], x_sl: TensorType["B", int] = None):
-        padding = (self.stack_size - x.size(-1) % self.stack_size) % self.stack_size
-        x = torch.cat([x, torch.full((*x.shape[:-1], padding), fill_value=self.pad_value, device=x.device)], dim=-1)
-        x = x.view(*x.shape[:-1], -1, self.stack_size)  # (B, ..., T / stack_size, stack_size)
-        if x_sl is None:
-            return x, padding
-        x_sl = (x_sl + padding) // self.stack_size
-        return x, x_sl, padding
-
-    def reverse(self, x: TensorType["B":..., "T"], padding: Optional[int] = None, x_sl: TensorType["B", int] = None):
-        x = x.view(*x.shape[:-2], x.shape[-2] * self.stack_size)
-        if padding is None:
-            return x
-
-        x = x[..., :-padding]
-        if x_sl is None:
-            return x
-
-        x_sl = x_sl + self.stack_size - padding
-        return x, x_sl
-
-
-class MultiLevelEncoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x: TensorType["B", "T", "C"]) -> List[TensorType["B", "T", "D"]]:
-        raise NotImplementedError()
-
-
-class MultiLevelEncoderAudioDense(MultiLevelEncoder):
-    def __init__(
-        self,
-        h_size: Union[int, List[int]],
-        time_factors: List[int],
-        proj_size: Union[int, List[int]] = None,
-        n_dense: int = 3,
-        activation: nn.Module = nn.ReLU,
-    ):
-        super().__init__()
-
-        self.time_factors = time_factors
-        self.proj_size = proj_size
-        self.n_dense = n_dense
-        self.activation = activation
-
-        n_levels = len(time_factors)
-
-        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
-        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
-
-        project_out = (proj_size is not None) and (proj_size > 0)
-
-        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  # float('nan'))
-
-        self.levels = nn.ModuleList()
-        self.levels.extend([self.get_level(time_factors[0], h_size[0], n_dense, activation)])
-        self.levels.extend([self.get_level(h_size[l - 1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
-
-        if project_out:
-            self.out_proj = nn.ModuleList(
-                [self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)]
-            )
-
-        self.n_levels = n_levels
-        self.h_size = h_size
-        self.project_out = project_out
-        self.out_size = proj_size if project_out else h_size
-
-    @staticmethod
-    def get_level(in_dim, h_dim, n_dense, activation, o_dim: int = None):
-        o_dim = h_dim if o_dim is None else o_dim
-
-        level = [nn.Linear(in_dim, h_dim), activation()]
-        for _ in range(1, n_dense - 1):
-            level.extend([nn.Linear(h_dim, h_dim), activation()])
-
-        level.extend([nn.Linear(h_dim, o_dim), activation()])
-        return nn.Sequential(*level)
-
-    def compute_encoding(self, level: int, pre_enc: TensorType["B", "T", "D"]) -> TensorType["B", "T//factor", "D"]:
-        B, T, D = pre_enc.shape
-        n_merge_steps = int(
-            self.time_factors[level] / self.time_factors[0]
-        )  # first step merge done by stacking waveform
-        n_pad_steps = (n_merge_steps - T % n_merge_steps) % n_merge_steps
-        padding = (0, 0, 0, n_pad_steps, 0, 0)  # pad D-dim by (0, 0) and T-dim by (0, N) and B-dim by (0, 0)
-        pre_enc = torch.nn.functional.pad(pre_enc, padding, mode="constant", value=0)
-        pre_enc = pre_enc.view(B, -1, n_merge_steps, D)
-        enc = pre_enc.sum(2)
-        return enc
-
-    def forward(self, x: TensorType["B", "T", "D", float]) -> List[TensorType["B", "T", "D", float]]:
-        """Encode a sequence of inputs to multiple representations at different timescales.
-
-        The representation at level `l` will be of length `T // time_factors[l]`.
-
-        Args:
-            x (torch.Tensor): Input sequence
-
-        Returns:
-            List[torch.Tensor]: List of encodings per level
-        """
-        encodings = []
-        hidden, padding = self.stack_waveform(x)
-        for l in range(self.n_levels):
-            hidden = self.levels[l](hidden)
-            pre_enc = self.out_proj[l](hidden) if self.project_out else hidden
-            encoding = self.compute_encoding(l, pre_enc) if self.time_factors[l] != 1 else pre_enc
-            encodings.append(encoding)
-        return encodings
-
-
-class MultiLevelEncoderConv1D(MultiLevelEncoder):
-    def __init__(
-        self,
-        in_dim: int,
-        h_size: Union[int, List[int]],
-        time_factors: List[int],
-        proj_size: Union[int, List[int]] = None,
-        n_dense: int = 3,
-        activation: nn.Module = nn.ReLU,
-        pad_mode: str = "constant",
-        pad_value: float = 0.0,
-    ):
-        super().__init__()
-
-        self.in_dim = in_dim
-        self.time_factors = time_factors
-        self.proj_size = proj_size
-        self.n_dense = n_dense
-        self.activation = activation
-        self.pad_mode = pad_mode
-        self.pad_value = pad_value
-
-        n_levels = len(time_factors)
-
-        h_size = [h_size] * n_levels if isinstance(h_size, int) else h_size
-        proj_size = [proj_size] * n_levels if isinstance(proj_size, int) else proj_size
-
-        project_out = (proj_size is not None) and (proj_size > 0)
-
-        self.levels = nn.ModuleList()
-        self.levels.extend([self.get_level(in_dim, h_size[0], n_dense, activation)])
-        self.levels.extend([self.get_level(h_size[l - 1], h_size[l], n_dense, activation) for l in range(1, n_levels)])
-
-        if project_out:
-            self.out_proj = nn.ModuleList(
-                [self.get_level(h_size[l], proj_size, 1, activation) for l in range(n_levels)]
-            )
-
-        self.n_levels = n_levels
-        self.h_size = h_size
-        self.project_out = project_out
-        self.out_size = proj_size if project_out else h_size
-
-    @staticmethod
-    def get_level(in_dim, h_dim, n_dense, activation):
-        level = [nn.Linear(in_dim, h_dim), activation()]
-        for _ in range(1, n_dense):
-            level.extend([nn.Linear(h_dim, h_dim), activation()])
-        return nn.Sequential(*level)
-
-    def compute_encoding(self, level: int, pre_enc: TensorType["B", "T", "D"]) -> TensorType["B", "T//factor", "D"]:
-        B, T, D = pre_enc.shape
-        n_merge_steps = self.time_factors[level]
-        n_pad_steps = (n_merge_steps - T % n_merge_steps) % n_merge_steps
-        padding = (0, 0, 0, n_pad_steps, 0, 0)  # pad D-dim by (0, 0) and T-dim by (0, N) and B-dim by (0, 0)
-        pre_enc = torch.nn.functional.pad(pre_enc, padding, mode=self.pad_mode, value=self.pad_value)
-        pre_enc = pre_enc.view(B, -1, n_merge_steps, D)
-        enc = pre_enc.sum(2)
-        return enc
-
-    def forward(self, x: TensorType["B", "T", "D", float]) -> List[TensorType["B", "T", "D", float]]:
-        """Encode a sequence of inputs to multiple representations at different timescales.
-
-        The representation at level `l` will be of length `T // time_factors[l]`.
-
-        Args:
-            x (torch.Tensor): Input sequence
-
-        Returns:
-            List[torch.Tensor]: List of encodings per level
-        """
-        hidden = x
-        encodings = []
-        for l in range(self.n_levels):
-            hidden = self.levels[l](hidden)
-            pre_enc = self.out_proj[l](hidden) if self.project_out else hidden
-            encoding = self.compute_encoding(l, pre_enc) if self.time_factors[l] != 1 else pre_enc
-            encodings.append(encoding)
-        return encodings
-
-
-class EncoderAudioDense(MultiLevelEncoderAudioDense):
-    def __init__(
-        self,
-        in_dim: int,
-        h_dim: int,
-        proj_dim: int,
-        n_dense: int,
-        activation: nn.Module,
-        pad_mode: str,
-        pad_value: float,
-    ):
-        super().__init__(
-            in_dim=in_dim,
-            h_size=h_dim,
-            proj_size=proj_dim,
-            n_dense=n_dense,
-            activation=activation,
-            pad_mode=pad_mode,
-            pad_value=pad_value,
-            time_factors=[1],
-        )
-
-    def forward(self, x: TensorType["B", "T", "D", float]) -> TensorType["B", "T", "D", float]:
-        return super().forward(self, x)[0]
-
-
-class DecoderAudioDense(nn.Module):
-    def __init__(
-        self,
-        in_dim: int,
-        h_dim: int,
-        o_dim: int,
-        time_factors: List[int],
-        n_dense: int = 3,
-        activation: nn.Module = nn.ReLU,
-    ):
-        super().__init__()
-        self.in_dim = in_dim
-        self.h_dim = h_dim
-        self.o_dim = o_dim
-        self.time_factors = time_factors
-        self.n_dense = n_dense
-        self.activation = activation
-        self.decoder = MultiLevelEncoderAudioDense.get_level(
-            in_dim, h_dim, n_dense, activation, o_dim=o_dim * time_factors[0]
-        )
-        self.stack_waveform = StackWaveform(time_factors[0], pad_value=0)  # float('nan'))
-
-    def forward(self, x):
-        hidden = self.decoder(x)
-        hidden = hidden.view(hidden.size(0), -1, self.o_dim)
-        return hidden
 
 
 class CWVAE(nn.Module):
@@ -375,17 +122,17 @@ class CWVAE(nn.Module):
         assert isinstance(time_factors, int) or len(time_factors) == len(
             z_size
         ), "Must give as many time factors as levels"
-        assert encoder.n_levels == len(z_size), "Number of levels in encoder and in latent dimensions must match"
+        assert encoder.num_levels == len(z_size), "Number of levels in encoder and in latent dimensions must match"
 
         self.encoder = encoder
         self.decoder = decoder
         self.likelihood = likelihood
-        self.n_levels = len(time_factors)
+        self.num_levels = len(time_factors)
         self.time_factors = time_factors
         self.residual_posterior = residual_posterior
 
-        self.z_size = [z_size] * self.n_levels if isinstance(z_size, int) else z_size
-        self.h_size = [h_size] * self.n_levels if isinstance(h_size, int) else h_size
+        self.z_size = [z_size] * self.num_levels if isinstance(z_size, int) else z_size
+        self.h_size = [h_size] * self.num_levels if isinstance(h_size, int) else h_size
         self.c_size = [z_dim + h_dim for z_dim, h_dim in zip(self.z_size[1:], self.h_size[1:])] + [0]
 
         cells = []
@@ -397,11 +144,11 @@ class CWVAE(nn.Module):
 
     def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
         kld_metrics_nats = [
-            KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.n_levels)
+            KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.num_levels)
         ]
         kld_metrics_bpd = [
             KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / (math.log(2) * self.time_factors[l])))
-            for l in range(self.n_levels)
+            for l in range(self.num_levels)
         ]
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -435,7 +182,7 @@ class CWVAE(nn.Module):
 
         klds, klds_fn = [], []
         seq_mask = seq_mask.unsqueeze(-1)  # Broadcast to latent dimension
-        for l in range(self.n_levels):
+        for l in range(self.num_levels):
             mask = seq_mask[:, :: self.time_factors[l]]  # Faster than creating new mask
             klds.append((kld_layerwise[l] * mask).sum((1, 2)))  # (B,)
             klds_fn.append((discount_free_nats(kld_layerwise[l], free_nats, shared_dims=-1) * mask).sum((1, 2)))  # (B,)
@@ -471,9 +218,9 @@ class CWVAE(nn.Module):
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
 
-        kl_divs = [[] for _ in range(self.n_levels)]
+        kl_divs = [[] for _ in range(self.num_levels)]
         t = 0
-        for l in range(self.n_levels - 1, -1, -1):
+        for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
             T = len(encodings_t[l])
@@ -533,7 +280,7 @@ class CWVAE(nn.Module):
             # initial RSSM state (z, h)
             states = [cell.get_initial_state(batch_size=n_samples) for cell in self.cells] if state0 is None else state0
 
-        for l in range(self.n_levels - 1, -1, -1):
+        for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
             T = max_timesteps // self.time_factors[l]  # The upscaling factor of the decoder
@@ -568,34 +315,32 @@ class CWVAE(nn.Module):
         return (x, x_sl), outputs
 
 
-class CWVAEAudio(BaseModel):
+class CWVAEAudioConv1D(BaseModel):
     def __init__(
         self,
         num_embeddings: Optional[int] = None,
         z_size: Union[int, List[int]] = 64,
         h_size: Union[int, List[int]] = 128,
         time_factors: Union[int, List[int]] = 6,
-        n_levels: int = 3,
+        num_levels: int = 3,
         residual_posterior: bool = False,
-        n_dense: int = 3,
+        num_level_layers: int = 3,
         num_mix: int = 10,
         num_bins: int = 256,
-        stack_size: int = 200,
     ):
         super().__init__()
 
         self.num_embeddings = num_embeddings
         self.z_size = z_size
         self.h_size = h_size
-        self.n_levels = n_levels
+        self.num_levels = num_levels
         self.residual_posterior = residual_posterior
-        self.n_dense = n_dense
+        self.num_level_layers = num_level_layers
         self.num_mix = num_mix
         self.num_bins = num_bins
-        self.stack_size = stack_size
 
         if isinstance(time_factors, int):
-            time_factors = get_exponential_time_factors(time_factors, self.n_levels)
+            time_factors = get_exponential_time_factors(time_factors, self.num_levels)
 
         self.time_factors = time_factors
 
@@ -604,29 +349,35 @@ class CWVAEAudio(BaseModel):
         bot_c_size = bot_z_size + bot_h_size
 
         if num_embeddings is not None:
+            self.in_channels = num_embeddings
             self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=bot_h_size)
         else:
+            self.in_channels = 1
             self.embedding = None
 
-        encoder = MultiLevelEncoderAudioConv(
-            in_dim=input_size,
-            h_size=h_size,
-            time_factors=time_factors,
-            n_dense=n_dense,
-        )
-
-        decoder = DecoderAudioConv(
-            in_dim=bot_c_size,
-            h_dim=bot_h_size,
-            n_dense=n_dense,
-        )
-
         likelihood = DiscretizedLogisticMixtureDense(
-            x_dim=bot_h_size,
-            y_dim=input_size,
+            x_dim=3 * num_mix,
+            y_dim=1,
             num_mix=num_mix,
             num_bins=num_bins,
             reduce_dim=-1,
+        )
+
+        encoder = MultiLevelEncoderConv1d(
+            in_channels=self.in_channels,
+            h_size=h_size,
+            time_factors=time_factors,
+            proj_size=None,
+            num_level_layers=num_level_layers,
+            activation=nn.ReLU,
+        )
+
+        decoder = DecoderAudioConv1d(
+            in_dim=bot_c_size,
+            h_dim=bot_h_size,
+            o_dim=likelihood.out_features,
+            time_factors=time_factors,
+            num_level_layers=num_level_layers,
         )
 
         self.cwvae = CWVAE(
@@ -647,12 +398,25 @@ class CWVAEAudio(BaseModel):
         beta: float = 1,
         free_nats: float = 0,
     ):
-        #     x, x_sl_stacked, padding = self.stack_waveform(x, x_sl)
-        #     loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats, x_sl_norm=x_sl)
-        #     outputs.x_hat, _ = self.stack_waveform.reverse(outputs.x_hat, x_sl_stacked, padding)
-
-        loss, metrics, outputs = self.cwvae(x, x_sl_stacked, state0, beta, free_nats)
+        y = x.detach().clone().unsqueeze(-1)  # Create target with channel dim for DML
+        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats, y)
         return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: Optional[TensorType["B", "T", "D"]] = None,
+        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
+    ):
+        return self.cwvae.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            use_mode=use_mode,
+            x=x,
+            state0=state0,
+        )
 
 
 class CWVAEAudioDense(BaseModel):
@@ -661,26 +425,24 @@ class CWVAEAudioDense(BaseModel):
         z_size: Union[int, List[int]] = 64,
         h_size: Union[int, List[int]] = 128,
         time_factors: Union[int, List[int]] = 6,
-        n_levels: int = 3,
+        num_levels: int = 3,
         residual_posterior: bool = False,
-        n_dense: int = 3,
+        num_level_layers: int = 3,
         num_mix: int = 10,
         num_bins: int = 256,
-        stack_size: int = 200,
     ):
         super().__init__()
 
         self.z_size = z_size
         self.h_size = h_size
-        self.n_levels = n_levels
+        self.num_levels = num_levels
         self.residual_posterior = residual_posterior
-        self.n_dense = n_dense
+        self.num_level_layers = num_level_layers
         self.num_mix = num_mix
         self.num_bins = num_bins
-        self.stack_size = stack_size
 
         if isinstance(time_factors, int):
-            time_factors = get_exponential_time_factors(time_factors, self.n_levels)
+            time_factors = get_exponential_time_factors(time_factors, self.num_levels)
 
         self.time_factors = time_factors
 
@@ -699,7 +461,7 @@ class CWVAEAudioDense(BaseModel):
         encoder = MultiLevelEncoderAudioDense(
             h_size=h_size,
             time_factors=time_factors,
-            n_dense=n_dense,
+            num_level_layers=num_level_layers,
         )
 
         decoder = DecoderAudioDense(
@@ -707,7 +469,7 @@ class CWVAEAudioDense(BaseModel):
             h_dim=bot_h_size,
             o_dim=likelihood.out_features,
             time_factors=time_factors,
-            n_dense=n_dense,
+            num_level_layers=num_level_layers,
         )
 
         self.cwvae = CWVAE(

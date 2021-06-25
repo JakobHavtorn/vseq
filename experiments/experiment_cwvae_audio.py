@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 
 import torch
 import wandb
@@ -30,7 +31,7 @@ parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--hidden_size", default=[512, 512, 512], type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
 parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+", help="dimensionality of latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
-parser.add_argument("--n_dense", default=3, type=int, help="dense layers for embedding per level")
+parser.add_argument("--num_level_layers", default=3, type=int, help="dense layers for embedding per level")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
@@ -70,7 +71,7 @@ rich.print(vars(args))
 # transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
 
 loader = AudioLoader("wav", cache=False)
-batcher = AudioBatcher(padding_module=args.time_factors[0])
+batcher = AudioBatcher(padding=np.prod(args.time_factors), padding_module=args.time_factors[0])
 transform = None  #StackWaveform(args.stack_frames)
 modalities = [(loader, transform, batcher)]
 
@@ -102,11 +103,12 @@ test_loader = DataLoader(
 )
 
 
-model = vseq.models.CWVAEAudioDense(
+# model = vseq.models.CWVAEAudioDense(
+model = vseq.models.CWVAEAudioConv1D(
     z_size=args.latent_size,
     h_size=args.hidden_size,
     time_factors=args.time_factors,
-    n_dense=args.n_dense,
+    num_level_layers=args.num_level_layers,
 )
 
 print(model)

@@ -1,1 +1,1 @@
-from vseq.models.clockwork_vae.clockwork_vae import *
+from vseq.models.clockwork_vae.cwvae import *
