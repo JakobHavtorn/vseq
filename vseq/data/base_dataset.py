@@ -168,3 +168,6 @@ class BaseDataset(Dataset):
 
     def __len__(self):
         return len(self.examples)
+
+    def __repr__(self) -> str:
+        return f"BaseDataset(\n\tsource={self.source},\n\tloaders={self.loaders},\n\ttransforms={self.transforms},\n\tbatchers={self.batchers},\n\tsort={self.sort})"

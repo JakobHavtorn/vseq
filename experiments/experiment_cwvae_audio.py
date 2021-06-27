@@ -17,7 +17,7 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
 from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import StackWaveform
+from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode, Quantize, StackWaveform
 from vseq.evaluation import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.rand import set_seed, get_random_seed
@@ -27,11 +27,13 @@ from vseq.training.annealers import CosineAnnealer
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-# parser.add_argument("--stack_frames", default=200, type=int, help="Number of audio frames to stack in feature vector")
 parser.add_argument("--hidden_size", default=[512, 512, 512], type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
 parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+", help="dimensionality of latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
 parser.add_argument("--num_level_layers", default=3, type=int, help="dense layers for embedding per level")
+parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
+parser.add_argument("--num_bits", default=8, type=int, help="dense layers for embedding per level")
+parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
@@ -61,19 +63,28 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-# loader = AudioLoader("wav", cache=False)
-# batcher = ListBatcher()
-# mean, variance = BaseDataset(source=TIMIT_TRAIN, modalities=[(loader, None, batcher)], sort=False).compute_statistics(
-#     num_workers=args.num_workers
-# )
+model = vseq.models.CWVAEAudioDense(
+# model = vseq.models.CWVAEAudioConv1D(
+    z_size=args.latent_size,
+    h_size=args.hidden_size,
+    time_factors=args.time_factors,
+    num_level_layers=args.num_level_layers,
+    num_mix=args.num_mix,
+    num_bins=2 ** args.num_bits
+)
 
-# batcher = SpectrogramBatcher()
-# transform = Compose(Normalize(mean=mean, std=math.sqrt(variance)), StackWaveform(args.stack_frames))
 
+decode_transform = []
+encode_transform = []
+if args.input_coding == "mu_law":
+    encode_transform.append(MuLawEncode(bits=args.num_bits))
+    decode_transform.append(MuLawDecode(bits=args.num_bits))
+encode_transform = Compose(*encode_transform)
+decode_transform = Compose(*decode_transform)
+
+batcher = AudioBatcher(padding=model.receptive_field, padding_module=model.receptive_field)
 loader = AudioLoader("wav", cache=False)
-batcher = AudioBatcher(padding=np.prod(args.time_factors), padding_module=args.time_factors[0])
-transform = None  #StackWaveform(args.stack_frames)
-modalities = [(loader, transform, batcher)]
+modalities = [(loader, encode_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=TIMIT_TRAIN,
@@ -83,6 +94,7 @@ test_dataset = BaseDataset(
     source=TIMIT_TEST,
     modalities=modalities,
 )
+rich.print(train_dataset)
 
 train_loader = DataLoader(
     dataset=train_dataset,
@@ -102,14 +114,6 @@ test_loader = DataLoader(
     pin_memory=True,
 )
 
-
-# model = vseq.models.CWVAEAudioDense(
-model = vseq.models.CWVAEAudioConv1D(
-    z_size=args.latent_size,
-    h_size=args.hidden_size,
-    time_factors=args.time_factors,
-    num_level_layers=args.num_level_layers,
-)
 
 print(model)
 x, x_sl = next(iter(train_loader))[0]
@@ -154,9 +158,11 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
+        outputs.x_hat = decode_transform(outputs.x_hat)
         reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
         (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000)
+        x = decode_transform(x)
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
     tracker.log(samples=samples, reconstructions=reconstructions)

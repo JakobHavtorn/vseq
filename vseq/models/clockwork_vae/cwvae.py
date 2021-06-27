@@ -142,6 +142,10 @@ class CWVAE(nn.Module):
             )
         self.cells = nn.ModuleList(cells)
 
+    @property
+    def receptive_field(self):
+        return self.encoder.receptive_field
+
     def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
         kld_metrics_nats = [
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.num_levels)
@@ -389,6 +393,7 @@ class CWVAEAudioConv1D(BaseModel):
             time_factors=time_factors,
             residual_posterior=residual_posterior,
         )
+        self.receptive_field = self.cwvae.receptive_field
 
     def forward(
         self,
@@ -468,7 +473,7 @@ class CWVAEAudioDense(BaseModel):
             in_dim=bot_c_size,
             h_dim=bot_h_size,
             o_dim=likelihood.out_features,
-            time_factors=time_factors,
+            time_factor=time_factors[0],
             num_level_layers=num_level_layers,
         )
 
@@ -481,6 +486,7 @@ class CWVAEAudioDense(BaseModel):
             time_factors=time_factors,
             residual_posterior=residual_posterior,
         )
+        self.receptive_field = self.cwvae.receptive_field
 
     def forward(
         self,

@@ -65,18 +65,16 @@ rich.print(vars(args))
 
 
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=args.num_bits))
+    encode_transform = Compose(RandomSegment(length=16000), MuLawEncode(bits=args.num_bits), Quantize(bits=args.num_bits))
     decode_transform = MuLawDecode(bits=args.num_bits)
 elif args.input_coding == "frames":
     decode_transform = None
     if args.stack_frames == 1:
-        wavenet_transform = Compose(RandomSegment(length=16000))
+        encode_transform = Compose(RandomSegment(length=16000))
     else:
-        wavenet_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
+        encode_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
 
-modalities = [
-    (AudioLoader("wav"), wavenet_transform, AudioBatcher()),
-]
+modalities = [(AudioLoader("wav"), encode_transform, AudioBatcher())]
 
 train_dataset = BaseDataset(
     source=TIMIT_TRAIN,
@@ -150,7 +148,7 @@ for epoch in tracker.epochs(args.epochs):
         output.x_hat = decode_transform(output.x_hat) if decode_transform is not None else output.x_hat
         reconstructions = [wandb.Audio(output.x_hat[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        x = model.generate(n_samples=2, n_frames=12800 // args.stack_frames)
+        x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
         x = decode_transform(x) if decode_transform is not None else x
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 

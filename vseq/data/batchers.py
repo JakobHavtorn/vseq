@@ -49,7 +49,7 @@ class TensorBatcher(Batcher):
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
-        """Concatenate a number of equally sized tensors (B, D1, D2, D3, ...)"""
+        """Concatenate a number of equally sized tensors (B, D1, D2, D3, ...). Sequence length is `tensor.numel()`"""
         sequence_lengths = [tensor.numel() for tensor in batch]
         shapes = [tensor.shape for tensor in batch]
 
@@ -59,13 +59,6 @@ class TensorBatcher(Batcher):
         collated_batch = torch.cat(batch, dim=0)
 
         return collated_batch, torch.LongTensor(sequence_lengths)
-
-
-class FixedLengthBatcher(Batcher):
-    def __init__(self) -> None:
-        super().__init__()
-        raise NotImplementedError()
-        # TODO Pad all inputs to same length
 
 
 def get_modulo_padding(length: int, module: int):

@@ -13,10 +13,16 @@ class Transform(nn.Module):
     def forward(self, x):
         raise NotImplementedError()
 
+    def __repr__(self):
+        name = self.__class__.__name__
+        attrs = vars(self)
+        var_str = ", ".join([f"{k}={v}" for k, v in attrs.items() if k[0] != "_" and k != "training"])
+        return f"{name}({var_str})"
+
 
 class Compose:
     def __init__(self, *transforms):
-        self.transforms = transforms
+        self.transforms = [transform for transform in transforms if transform is not None]
 
     def __call__(self, x):
         return self.forward(x)
@@ -74,18 +80,6 @@ class DecodeInteger(Transform):
     def forward(self, x: str):
         x = self.token_map.decode(x)
         x = self.join_token.join(x)
-        return x
-
-
-class StackWaveform(Transform):
-    def __init__(self, n_frames: int = 200):
-        super().__init__()
-        self.n_frames = n_frames
-
-    def forward(self, x):
-        padding = self.n_frames - x.size(0) % self.n_frames
-        x = torch.cat([x, torch.zeros(padding)])
-        x = x.view(-1, self.n_frames)
         return x
 
 
@@ -159,7 +153,7 @@ class MuLawEncode(Transform):
 
 class MuLawDecode(Transform):
     def __init__(self, bits: int = 8):
-        """Decode PCM audio via µ-law companding from some number of bits (8 by default)"""
+        """Decode PCM (µ-law encoded) audio in [-1, 1] via µ-law companding from some number of bits (8 by default)"""
         super().__init__()
         self.bits = bits
         self.mu = 2 ** bits - 1

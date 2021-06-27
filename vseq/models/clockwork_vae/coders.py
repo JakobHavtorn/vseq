@@ -45,6 +45,39 @@ class MultiLevelEncoderAudioDense(nn.Module):
         num_level_layers: int = 3,
         activation: nn.Module = nn.ReLU,
     ):
+        """Encode a waveform by stacking it into feature vectors of size time_factors[0] and densely transforming.
+
+        The encoder has len(time_factors) outputs and is hence "MultiLevel".
+        The first level downsamples with a factor of time_factor[0] by initially stacking the waveform (stack_waveform).
+        The subsequent levels downsample by summing time_factor[l] consecutive hidden representations (compute_encoding)
+
+        The first level of this encoder is therefore equivalent to a 1D convolution with kernel size and stride equal
+        to time_factor[0] and h_size[0] output channels followed by num_level_layers 1D 1x1 convolutions.
+
+        The subsequent levels are densely connected and are therefore equivalent to 1D 1x1 convolutions.
+
+        Ignoring activations, the first level:
+        ```
+        Conv1d(in_channels=1,           out_channels=hidden_size, kernel_size=stack_size, stride=stack_size)
+        Conv1d(in_channels=hidden_size, out_channels=hidden_size, kernel_size=1, stride=1)
+        Conv1d(in_channels=hidden_size, out_channels=hidden_size, kernel_size=1, stride=1)
+        ```
+
+        Levels l>0:
+        ```
+        Conv1d(in_channels=h_size[l-1], out_channels=h_size[l], kernel_size=1, stride=1)
+        Conv1d(in_channels=h_size[l],   out_channels=h_size[l], kernel_size=1, stride=1)
+        Conv1d(in_channels=h_size[l],   out_channels=h_size[l], kernel_size=1, stride=1)
+        ```
+
+        Args:
+            h_size (Union[int, List[int]]): List of hidden sizes for the levels or a single size for all levels.
+            time_factors (List[int]): Time factors for each level.
+            proj_size (Union[int, List[int]], optional): Optional projection size for output per level
+                                                         (different from hidden_size[l]). Defaults to None.
+            num_level_layers (int, optional): Number of dense transforms within each layer. Defaults to 3.
+            activation (nn.Module, optional): The activation function. Defaults to nn.ReLU.
+        """
         super().__init__()
 
         self.time_factors = time_factors
@@ -76,17 +109,18 @@ class MultiLevelEncoderAudioDense(nn.Module):
         self.h_size = h_size
         self.project_out = project_out
         self.out_size = proj_size if project_out else h_size
+        self.receptive_field = time_factors[-1]
 
     @staticmethod
     def get_level(in_dim, h_dim, num_level_layers, activation, o_dim: int = None):
         o_dim = h_dim if o_dim is None else o_dim
+        dims = [in_dim] + [h_dim] * (num_level_layers - 1) + [o_dim]
+        layers = []
+        for l in range(num_level_layers):
+            layers.extend([nn.Linear(dims[l], dims[l+1]), activation()])
 
-        level = [nn.Linear(in_dim, h_dim), activation()]
-        for _ in range(1, num_level_layers - 1):
-            level.extend([nn.Linear(h_dim, h_dim), activation()])
-
-        level.extend([nn.Linear(h_dim, o_dim), activation()])
-        return nn.Sequential(*level)
+        level = nn.Sequential(*layers)
+        return level
 
     def compute_encoding(self, level: int, pre_enc: TensorType["B", "T", "D"]) -> TensorType["B", "T//factor", "D"]:
         B, T, D = pre_enc.shape
@@ -119,6 +153,43 @@ class MultiLevelEncoderAudioDense(nn.Module):
         return encodings
 
 
+class DecoderAudioDense(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        h_dim: int,
+        o_dim: int,
+        time_factor: int,
+        num_level_layers: int = 3,
+        activation: nn.Module = nn.ReLU,
+    ):
+        """This decoder matches the MultiLevelEncoderAudioDense by doing the corresponding time_factor[0] upsampling.
+
+        Args:
+            in_dim (int): Input size
+            h_dim (int): Hidden size
+            o_dim (int): Output size
+            time_factor (List[int]): Time factors for the first level.
+            num_level_layers (int, optional): Number of dense layers per level. Defaults to 3.
+            activation (nn.Module, optional): Activation function. Defaults to nn.ReLU.
+        """
+        super().__init__()
+        self.in_dim = in_dim
+        self.h_dim = h_dim
+        self.o_dim = o_dim
+        self.time_factor = time_factor
+        self.num_level_layers = num_level_layers
+        self.activation = activation
+        self.decoder = MultiLevelEncoderAudioDense.get_level(
+            in_dim, h_dim, num_level_layers, activation, o_dim=o_dim * time_factor
+        )
+
+    def forward(self, x):
+        hidden = self.decoder(x)
+        hidden = hidden.view(hidden.size(0), -1, self.o_dim)
+        return hidden
+
+
 class MultiLevelEncoderConv1d(nn.Module):
     def __init__(
         self,
@@ -146,7 +217,9 @@ class MultiLevelEncoderConv1d(nn.Module):
 
         # six 1D-convolutions with filters set to (64, 128, 192, 256, 512, 512), kernel sizes (10, 8, 4, 4, 4, 1), and strides (5, 4, 2, 2, 2, 1).
 
-        import IPython; IPython.embed(using=False)
+        import IPython
+
+        IPython.embed(using=False)
         channels = 64
         level_1 = nn.Sequential(
             nn.Conv1d(channels, 1 * channels, kernel_size=10, stride=5),
@@ -167,7 +240,9 @@ class MultiLevelEncoderConv1d(nn.Module):
             nn.Conv1d(8 * channels, 8 * channels, kernel_size=1, stride=1),  # dense
         )  # (B, C, T) -> (B, 8xC, T/160)
 
-        strides = [self.time_factors[0]] + [self.time_factors[l + 1] // self.time_factors[l] for l in range(num_levels - 1)]
+        strides = [self.time_factors[0]] + [
+            self.time_factors[l + 1] // self.time_factors[l] for l in range(num_levels - 1)
+        ]
         kernel_sizes = [2 * stride for stride in strides]
 
         self.levels = nn.ModuleList()
@@ -225,33 +300,6 @@ class MultiLevelEncoderConv1d(nn.Module):
             encoding = self.compute_encoding(l, pre_enc) if self.time_factors[l] != 1 else pre_enc
             encodings.append(encoding)
         return encodings
-
-
-class DecoderAudioDense(nn.Module):
-    def __init__(
-        self,
-        in_dim: int,
-        h_dim: int,
-        o_dim: int,
-        time_factors: List[int],
-        num_level_layers: int = 3,
-        activation: nn.Module = nn.ReLU,
-    ):
-        super().__init__()
-        self.in_dim = in_dim
-        self.h_dim = h_dim
-        self.o_dim = o_dim
-        self.time_factors = time_factors
-        self.num_level_layers = num_level_layers
-        self.activation = activation
-        self.decoder = MultiLevelEncoderAudioDense.get_level(
-            in_dim, h_dim, num_level_layers, activation, o_dim=o_dim * time_factors[0]
-        )
-
-    def forward(self, x):
-        hidden = self.decoder(x)
-        hidden = hidden.view(hidden.size(0), -1, self.o_dim)
-        return hidden
 
 
 class DecoderAudioConv1d(nn.Module):

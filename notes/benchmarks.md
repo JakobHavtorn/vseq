@@ -49,11 +49,12 @@ Observations:
 | CWVAE     | 0.87 (e1000)                               |     | 3L k=6 DLM 10 mix (no kl cost, autoencoding)             |
 | CWVAE     | 1.03 (e250)                                |     | 3L k=2 DLM 10 mix                                        |
 | CWVAE     | 1.035 (e250)                               |     | 3L k=2 DLM 10 mix (8 free nats)                          |
-| CWVAE     | **running** (e1000) (overfit)              |     | 3L k=6 DLM 10 mix (1 free nats)                          |
+| CWVAE     | 1.125 (e400) (overfit slightly)            |     | 3L k=6 DLM 10 mix (1 free nats)                          |
 | CWVAE     | **NaNs with clip? running**                |     | 3L k=2 DLM 10 mix (1 free nats, grad clip)               |
-| CWVAE     | **running**                                |     | 1L DLM 1 mix (1 free nats) (VRNN with no x->h inf+gen)   | Sweetums 8 |
-| CWVAE     | **running** 0.695 (e300)                   |     | 1L DLM 1 mix (no kl cost, autoencoding)                  | Sweetums 2 |
-| CWVAE     | **running**                                |     | 3L DLM 10 mix (NoTmpAbs (200))                           | Scooter 8
+| CWVAE     | 1.14 e(750)                                |     | 1L DLM 1 mix (1 free nats) (VRNN with no x->h inf+gen)   | Similar to VRNN model as expected |
+| CWVAE     | 0.43 (e750)                                |     | 1L DLM 1 mix (no kl cost, autoencoding)                  |
+| CWVAE     | **running** 1.09 (e500)                    |     | 3L DLM 10 mix (NoTmpAbs (200))                           |
+| CWVAE     | **running**                                |     | 3L DLM 10 mix (MuLaw encoded)                            |
 |           |                                            |     |                                                          |
 |           |                                            |     |                                                          |
 |           |                                            |     |                                                          |
