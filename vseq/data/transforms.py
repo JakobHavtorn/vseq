@@ -37,7 +37,7 @@ class Compose:
         for t in self.transforms:
             format_string += "\n"
             format_string += "    {0}".format(t)
-        format_string += "\n)"
+        format_string += "\n)" if len(self.transforms) > 0 else ")"
         return format_string
 
 
