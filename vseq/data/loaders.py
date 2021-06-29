@@ -120,6 +120,12 @@ class Loader():
     def load(self, example_id):
         raise NotImplementedError
 
+    def __repr__(self):
+        name = self.__class__.__name__
+        extension = self.extension
+        cache = self.cache
+        return f"{name}({extension=}, {cache=}, id={self.id})"
+
 
 class AudioLoader(Loader):
 
