@@ -1,10 +1,11 @@
+import collections
 import re
 import psutil
 
 from datetime import datetime
 from blessed import Terminal
 from collections import defaultdict
-from typing import Dict, Iterator, Union, Any, List, Optional
+from typing import Dict, Iterable, Union, Any, List, Optional
 from time import time
 
 import rich
@@ -67,6 +68,7 @@ class Tracker:
         # continously updated
         self.printed_last = 0
         self.last_log_line_len = 0
+        self.cpu_utils = collections.deque(maxlen=10)
         self.source = None
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
@@ -118,22 +120,28 @@ class Tracker:
             for source in best_metrics.keys()
         }
 
-    def steps(self, loader: Union[str, DataLoader]):
-        self.set(loader)
-        iterator = iter(loader)
-        # ps = [psutil.Process(w.pid) for w in iterator._workers]
+    def steps(self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None):
+        if source is None and not isinstance(steppable, DataLoader):
+            raise ValueError("Must call steps() on a DataLoader if source is None")
+
+        source = source if source is not None else steppable
+
+        self.set(source)
+        iterator = iter(steppable)
+
+        if self.rank == 0 and hasattr(iterator, "_workers"):
+            workers = [psutil.Process(w.pid) for w in iterator._workers]
+        else:
+            workers = None
+
         for batch in iterator:
             yield batch
             if self.do_print():
-                self.print()
-            # TODO Report dataloader worker utilization
-            # import IPython; IPython.embed()
-            # cpu_util = [p.cpu_percent(interval=0.0) for p in ps]
-            # print(cpu_util)
+                self.print(workers=workers)
 
         self.unset()
 
-    def epochs(self, N) -> Iterator[int]:
+    def epochs(self, N) -> Iterable[int]:
         """Yields the epoch index while printing epoch number and epoch delimiter."""
         for epoch in range(1, N + 1):
             self.epoch = epoch
@@ -193,6 +201,7 @@ class Tracker:
         self.source = None
         self.printed_last = 0
         self.accumulated_output = defaultdict(list)
+        self.cpu_utils = collections.deque(maxlen=10)
 
     def reset(self):
         """Reset all per-source attributes"""
@@ -215,7 +224,7 @@ class Tracker:
 
         return do_print
 
-    def print(self, end="\r", source: Optional[str] = None):
+    def print(self, end="\r", source: Optional[str] = None, workers: list = None):
         """Print the current progress and metric values."""
         source = self.source if source is None else source
 
@@ -225,18 +234,28 @@ class Tracker:
         else:
             steps_frac = f"{self.step[source]}/-"
 
+        ps = f"{steps_frac}"
         if self.start_time[source] is None:
             duration = "-"
-            steps_per_s = "-"
+            s_per_step = "-"
         else:
             duration = time() - self.start_time[source]
-            steps_per_s = self.step[source] / duration
-            steps_per_s = f"{round(steps_per_s, 3):.2f}Hz"
+            s_per_step = duration / self.step[source] * 1000
+            s_per_step = f"{int(s_per_step):d}ms"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
 
-        ps = f"{steps_frac} [bright_white not bold]({duration}, {steps_per_s})[/]"  # +26 format
+        if workers is not None:
+            cpu = int(round(sum([p.cpu_percent(interval=0.0) for p in workers]), 0))
+            self.cpu_utils.append(cpu)
+        if len(self.cpu_utils):
+            cpu = sum(self.cpu_utils) / len(self.cpu_utils)
+            cpu = f"{cpu:.0f}%"
+        else:
+            cpu = "-"
+
+        ps = f"{steps_frac} [bright_white not bold]({duration}, {s_per_step}, {cpu})[/]"  # +26 format
 
         # source string
         ss = source_string(source)
@@ -299,7 +318,11 @@ class Tracker:
         assert len(names) == len(set(names)), "Metrics must have unique names"
         source = self.source if source is None else source
 
+        if self.start_time[source] is None:
+            self.start_time[source] = time()
+
         self.step[self.source] += 1
+
         for metric in metrics:
             if metric.name in self.metrics[source]:
                 self.metrics[source][metric.name].update(metric)
