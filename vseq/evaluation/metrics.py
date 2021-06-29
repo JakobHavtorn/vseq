@@ -191,6 +191,27 @@ class BitsPerDimMetric(RunningMeanMetric):
         super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
+class ScaledBitsPerDimMetric(BitsPerDimMetric):
+    """ScaledBitsPerDimMetric computed as $\frac{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}{K}$ 
+    with K as the scaling factor"""
+
+    base_tags = set()
+    get_best = min_value
+    _str_value_fmt = "<5.3"  # 5.321
+
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        num : int = 1,
+        name: str = "sbpd",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+    ):
+        values = -values / (num * math.log(2))
+        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+
+
 class PerplexityMetric(BitsPerDimMetric):
     """Perplexity computed as $2^{-\frac{1}{N} \sum_{i=1}^N \log p_\theta(x_i)}$"""
 

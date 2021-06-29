@@ -38,6 +38,7 @@ class WaveNet(BaseModel):
         n_layers: int = 10,
         n_stacks: int = 5,
         res_channels: int = 512,
+        stack_waveform : bool = False, 
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
@@ -77,6 +78,8 @@ class WaveNet(BaseModel):
         self.out_classes = out_classes
 
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
+
+        self.stack_waveform = stack_waveform
 
         if num_embeddings is not None:
             self.embedding = nn.Embedding(
@@ -195,6 +198,11 @@ class WaveNet(BaseModel):
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl),
         ]
+        if self.stack_waveform:
+            metrics.append(
+                BitsPerDimMetric(log_prob, name="sbpd", reduce_by=x_sl * float(self.in_channels))
+            )
+
         output = SimpleNamespace(
             loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat
         )

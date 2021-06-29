@@ -2,6 +2,8 @@
 import os
 import argparse
 import logging
+from types import SimpleNamespace
+
 
 import torch
 import torchaudio
@@ -23,6 +25,7 @@ from vseq.data.transforms import (
     Scale,
     MuLawEncode,
     StackWaveform,
+    MuLawDecode,
 )
 from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
@@ -61,69 +64,94 @@ set_seed(args.seed)
 
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
+
+### COPY ARGS TO MODEL ARGS
+wavenet_args = SimpleNamespace(    
+    in_channels=1,
+    n_layers=args.n_layers,
+    n_stacks=args.n_stacks,
+    res_channels=args.res_channels,
+    out_classes=256,
+    )
+
+
 # If the input embedding is frames or a spectrogram, don't use embeddings.
 # If we use a quantized input we instantiate an embedding of res_channels
-# if args.input_embedding == "frames":
-#     args.num_embeddings = None
-if args.input_embedding == "quantized":
-    args.num_embeddings = 2 ** args.num_bits
-else:  # stacked/spectrogram/frames
-    args.num_embeddings = None
-    # args.num_embeddings=args.stack_frames
-    # raise ValueError()
-
-
-if args.input_embedding == "quantized":
-    embedding_str = args.input_embedding
-elif args.input_embedding == "stacked":
-    embedding_str = args.input_embedding + "_" + str(args.stack_frames)
-elif args.input_embedding == "spectrogram":
-    embedding_str = args.input_embedding + "_" + str(args.spectrogram_size)
-model_name_str = f"wavenet-{embedding_str}-{args.n_layers}-{args.n_stacks}-{args.res_channels}"
-print(f"Initializing model with name: {model_name_str}")
-wandb.init(
-    entity="vseq",
-    project="wavenet",
-    group=args.wandb_group,
-)
-wandb.config.update(args)
-rich.print(vars(args))
 
 _transforms = [RandomSegment(args.input_length)]
-
 transform_decode = None
-
 if args.input_encoding == "mu_law":
     _transforms.append(MuLawEncode(args.num_bits))
     transform_decode = MuLawDecode(args.num_bits)
 
 
-wavenet_in_channels = 1
 if args.input_embedding == "quantized":
+    embedding_str = args.input_embedding
+    wavenet_args.num_embeddings = 2 ** args.num_bits
     _transforms.append(Quantize(bits=args.num_bits))
     _Batcher = AudioBatcher
     dataset_sort = True
 
 elif args.input_embedding == "stacked":
+    embedding_str = args.input_embedding + "_" + str(args.stack_frames)
+    wavenet_args.stack_waveform = True
+
     _transforms.append(StackWaveform(n_frames=args.stack_frames))
     dataset_sort = False
     _Batcher = SpectrogramBatcher
-    wavenet_in_channels = args.stack_frames
+    wavenet_args.in_channels = args.stack_frames
+
 elif args.input_embedding == "spectrogram":
+    embedding_str = args.input_embedding + "_" + str(args.spectrogram_size)
     raise NotImplementedError
     _Batcher = SpectrogramBatcher
     dataset_sort = False
-    wavenet_in_channels = args.spectrogram_size
+    wavenet_args.in_channels = args.spectrogram_size
 else:  # frames
     _Batcher = AudioBatcher
     dataset_sort = True
 
-
+# Defining transforms
 wavenet_transform = Compose(*_transforms)
 rich.print(wavenet_transform)
 
+#######################
+### MODEL INSTANTIATION
+#######################
+
+model = vseq.models.WaveNet(**vars(wavenet_args))
+rich.print(model)
+
+
+model_name_str = (
+    f"wavenet-{embedding_str}-{wavenet_args.n_layers}layers-{wavenet_args.n_stacks}stacks-{wavenet_args.res_channels}res-{model.receptive_field}RF"
+)
+print(f"Initialized model with name: {model_name_str}")
+wandb.init(
+    entity="vseq", project="wavenet", group=args.wandb_group, name=model_name_str
+)
+wandb.config.update(args)
+rich.print(vars(args))
+
+
+
+
+
+
+if args.input_embedding == "stacked":
+    rich.print(
+        f"RECEPTIVE FIELD: {model.receptive_field} * {args.stack_frames} = {model.receptive_field * args.stack_frames}"
+    )
+else:
+    rich.print(f"RECEPTIVE FIELD: {model.receptive_field}")
+
+
 modalities = [
-    (AudioLoader("wav"), wavenet_transform, _Batcher()),
+    (
+        AudioLoader("wav"),
+        wavenet_transform,
+        _Batcher(min_length=model.receptive_field + 1),
+    ),
 ]
 
 train_dataset = BaseDataset(
@@ -148,22 +176,12 @@ val_loader = DataLoader(
     pin_memory=True,
 )
 
-model = vseq.models.WaveNet(
-    in_channels=wavenet_in_channels,
-    n_layers=args.n_layers,
-    n_stacks=args.n_stacks,
-    num_embeddings=args.num_embeddings,
-    res_channels=args.res_channels,
-    out_classes=256,
-)
-(x, x_sl), metadata = next(iter(train_loader))
-print(x.shape)
-print(x_sl)
+
 # exit()
-rich.print(model)
+(x, x_sl), metadata = next(iter(train_loader))
 model.summary(input_example=x, x_sl=x_sl)
 model = model.to(device)
-rich.print(model.receptive_field)
+
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 
