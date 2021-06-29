@@ -16,7 +16,12 @@ import vseq.models
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
-from vseq.data.datapaths import TIMIT_TRAIN, TIMIT_TEST
+from vseq.data.datapaths import (
+    TIMIT_TRAIN,
+    TIMIT_TEST,
+    LIBRISPEECH_DEV_CLEAN,
+    LIBRISPEECH_TRAIN,
+)
 from vseq.data.loaders import AudioLoader
 from vseq.data.transforms import (
     Compose,
@@ -55,6 +60,7 @@ parser.add_argument("--seed", default=None, type=int, help="seed for random numb
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 parser.add_argument("--save_freq", default=10, type=int, help="number of epochs to go between saves")
 parser.add_argument("--delete_last_model", default=False, type=str2bool, help="if True, delete the last model saved")
+parser.add_argument("--dataset", default="timit", choices=['librispeech','timit'], help="which dataset to use", type=str)
 
 args = parser.parse_args()
 # fmt: on
@@ -66,13 +72,13 @@ device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
 ### COPY ARGS TO MODEL ARGS
-wavenet_args = SimpleNamespace(    
+wavenet_args = SimpleNamespace(
     in_channels=1,
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
     res_channels=args.res_channels,
     out_classes=256,
-    )
+)
 
 
 # If the input embedding is frames or a spectrogram, don't use embeddings.
@@ -123,19 +129,13 @@ model = vseq.models.WaveNet(**vars(wavenet_args))
 rich.print(model)
 
 
-model_name_str = (
-    f"wavenet-{embedding_str}-{wavenet_args.n_layers}layers-{wavenet_args.n_stacks}stacks-{wavenet_args.res_channels}res-{model.receptive_field}RF"
-)
+model_name_str = f"wavenet-{embedding_str}-{wavenet_args.n_layers}layers-{wavenet_args.n_stacks}stacks-{wavenet_args.res_channels}res-{model.receptive_field}RF"
 print(f"Initialized model with name: {model_name_str}")
 wandb.init(
     entity="vseq", project="wavenet", group=args.wandb_group, name=model_name_str
 )
 wandb.config.update(args)
 rich.print(vars(args))
-
-
-
-
 
 
 if args.input_embedding == "stacked":
@@ -153,11 +153,15 @@ modalities = [
         _Batcher(min_length=model.receptive_field + 1),
     ),
 ]
+if args.dataset == "timit":
+    TRAIN_SET = TIMIT_TRAIN
+    VAL_SET = TIMIT_TEST
+elif args.dataset == "librispeech":
+    TRAIN_SET = LIBRISPEECH_TRAIN
+    VAL_SET = LIBRISPEECH_DEV_CLEAN
 
-train_dataset = BaseDataset(
-    source=TIMIT_TRAIN, modalities=modalities, sort=dataset_sort
-)
-val_dataset = BaseDataset(source=TIMIT_TEST, modalities=modalities, sort=dataset_sort)
+train_dataset = BaseDataset(source=TRAIN_SET, modalities=modalities, sort=dataset_sort)
+val_dataset = BaseDataset(source=VAL_SET, modalities=modalities, sort=dataset_sort)
 
 train_loader = DataLoader(
     dataset=train_dataset,
