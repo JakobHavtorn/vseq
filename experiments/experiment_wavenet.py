@@ -48,9 +48,9 @@ device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
 if args.input_coding == "frames":
-    args.num_embeddings = None
+    args.in_channels = None
 elif args.input_coding == "mu_law":
-    args.num_embeddings = 2 ** args.num_bits
+    args.in_channels = 2 ** args.num_bits
 else:
     raise ValueError()
 
@@ -105,7 +105,7 @@ val_loader = DataLoader(
 model = vseq.models.WaveNet(
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    num_embeddings=args.num_embeddings,
+    in_channels=args.in_channels,
     res_channels=args.res_channels,
     out_classes=256,
 )
@@ -117,7 +117,6 @@ rich.print(model.receptive_field)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 
 tracker = Tracker()
 

@@ -64,7 +64,7 @@ class WaveNet(BaseModel):
 
         self.n_layers = n_layers
         self.n_stacks = n_stacks
-        self.num_embeddings = num_embeddings
+        self.in_channels = in_channels
         self.res_channels = res_channels
         self.out_classes = out_classes
 
