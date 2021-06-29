@@ -1,5 +1,8 @@
+from typing import Tuple
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class Permute(nn.Module):
@@ -27,7 +30,21 @@ class View(nn.Module):
         return x.view(*x.shape[0:self.n_batch_dims], *self.shape)
 
     def extra_repr(self):
-        return f"n_batch_dims={self.n_batch_dims}, shape={self.shape}"
+        return f"{self.shape}, n_batch_dims={self.n_batch_dims}"
+
+
+class Pad(nn.Module):
+    def __init__(self, padding: Tuple[int], mode: str = "constant", value: float = 0.0):
+        super().__init__()
+        self.padding = padding
+        self.mode = mode
+        self.value = value
+
+    def forward(self, x: torch.Tensor):
+        return F.pad(x, self.padding, mode=self.mode, value=self.value)
+
+    def extra_repr(self):
+        return f"{self.padding}, mode={self.mode}, value={self.value}"
 
 
 class Clamp(nn.Module):
