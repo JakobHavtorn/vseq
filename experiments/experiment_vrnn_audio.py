@@ -32,6 +32,7 @@ parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality
 parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in VRNN")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
 parser.add_argument("--num_bins", default=256, type=int, help="number of quantization bins (256, 8 bits by default)")
+parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
 parser.add_argument("--condition_h_on_x", default=True, type=str2bool, help="whether to condition h on x")
 parser.add_argument("--condition_x_on_h", default=True, type=str2bool, help="whether to condition x on h")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
@@ -105,6 +106,7 @@ model = vseq.models.VRNNAudioDML(
     num_bins=args.num_bins,
     condition_h_on_x=args.condition_h_on_x,
     condition_x_on_h=args.condition_x_on_h,
+    residual_posterior=args.residual_posterior
 )
 
 print(model)
