@@ -50,7 +50,7 @@ class TokenMap:
         if add_unknown:
             tokens.append(UNKNOWN_TOKEN)
         if add_blank:
-            tokens.insert(BLANK_TOKEN, 0)  # Blank token always at index 0
+            tokens.insert(0, BLANK_TOKEN)  # Blank token always at index 0
 
         self.tokens = tokens
 

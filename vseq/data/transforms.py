@@ -1,9 +1,12 @@
 import math
+import random
 
 from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
+import numpy as np
+from torchaudio.transforms import AmplitudeToDB, MelSpectrogram
 
 
 class Transform(nn.Module):
@@ -106,6 +109,114 @@ class MuLawEncode(Transform):
     def forward(self, x: torch.Tensor):
         return x.sign() * torch.log(1 + self.mu * x.abs()) / self._divisor
 
+class LogMelSpectrogram(Transform):
+
+    def __init__(
+        self,
+        sample_rate: int = 16000,
+        n_fft: int = 400,
+        win_length: Optional[int] = None,
+        hop_length: Optional[int] = None,
+        n_mels: int = 80,
+        normalize_frq_bins: bool = True
+    ) -> None:
+        super().__init__()
+        
+        self.sample_rate = sample_rate
+        self.n_fft = n_fft
+        self.win_length = win_length
+        self.hop_length = hop_length
+        self.n_mels = n_mels
+        self.normalize_frq_bins = normalize_frq_bins
+
+        self.MelSpectrogram = MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=n_fft,
+            win_length=win_length,
+            hop_length=hop_length,
+            n_mels=n_mels
+        )
+
+    def forward(self, waveform: torch.Tensor) -> torch.Tensor:
+        r"""
+        Args:
+            waveform (Tensor): Tensor of audio of dimension (..., time).
+
+        Returns:
+            Tensor: specgram_mel_db of size (..., ``n_mels``, time).
+        """
+        mel_specgram = self.MelSpectrogram(waveform)
+        logmel_specgram = 10 * torch.log10(torch.clamp_min(mel_specgram, 1e-10))
+        
+        if self.normalize_frq_bins:
+            logmel_specgram -= torch.mean(logmel_specgram, -1, keepdim=True)
+            logmel_specgram /= torch.std(logmel_specgram, -1, keepdim=True) + 1e-10
+
+        return logmel_specgram
+
+
+class AstroSpeech(Transform):
+    def __init__(
+        self,
+        num_tokens,
+        whitespace_idx,
+        sample_rate=8000,
+        duration=500,
+        fade=150,
+        min_mel=400,
+        mel_delta=60,
+        speaker_shift=0,
+        token_shift=0,
+        volume_range=None
+    ):
+        super().__init__()
+
+        self.num_tokens = num_tokens
+        self.whitespace_idx = whitespace_idx
+        self.sample_rate = sample_rate
+        self.duration = duration
+        self.fade = fade
+        self.min_mel = min_mel
+        self.mel_delta = mel_delta
+        self.speaker_shift = speaker_shift
+        self.token_shift = token_shift
+        self.volume_range = volume_range
+
+        # base char frequencies (in numpy because torch can be altered in-place)
+        self.mels = (np.arange(num_tokens - 1.0).astype(np.float32) * mel_delta) + min_mel
+
+        # cosine filter
+        end = 1/2 * (1 + torch.cos(torch.arange(fade) / (fade - 1) * math.pi))
+        start = torch.flip(end, dims=[0])
+        middle = torch.ones(duration - (2 * fade))
+        self.cosine_filter = torch.cat([start, middle, end])
+    
+    def mel_to_frq(self, m):
+        return (np.exp(m / 1127) - 1) * 700
+
+    def forward(self, x: list):
+        
+        w = torch.zeros(self.duration)
+        signal = []
+        for i in x:
+            if i == self.whitespace_idx:
+                signal.append(w)
+            else:
+                j = i if i < self.whitespace_idx else i - 1
+                m = self.mels[j]
+                if self.token_shift > 0:
+                    m = m + random.uniform(-self.token_shift, self.token_shift)
+                f = self.mel_to_frq(m)
+                # TODO: Add frq shifts and volume pertubation to f if specified 
+                r = torch.arange(0, self.duration) * (2 * math.pi) / self.sample_rate * f
+                c = torch.sin(r) * self.cosine_filter
+                signal.append(c)
+        
+        return torch.cat(signal)
+
+
+
+        
 
 class MuLawDecode(Transform):
     def __init__(self, bits: int = 8):
@@ -113,6 +224,7 @@ class MuLawDecode(Transform):
         super().__init__()
         self.bits = bits
         self.mu = 2 ** bits - 1
+        self._divisor = math.log(self.mu + 1)
 
     def forward(self, x: torch.Tensor):
         return x.sign() * (torch.exp(x.abs() * self._divisor) - 1) / self.mu
@@ -148,7 +260,7 @@ class Quantize(Transform):
         self.high = high
         self.bits = bins // 8 if bits is None else bits
         self.bins = 2 ** bits if bins is None else bins
-        self.boundaries = torch.linspace(start=-1, end=1, steps=bins)
+        self.boundaries = torch.linspace(start=-1, end=1, steps=self.bins)
         self.out_int32 = (self.bits <= 32) and (not force_out_int64)
 
     def forward(self, x: torch.Tensor):

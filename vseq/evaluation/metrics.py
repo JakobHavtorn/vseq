@@ -4,6 +4,8 @@ from copy import deepcopy
 from typing import List, Optional, Set, Union
 
 import torch
+import editdistance
+import numpy as np
 
 from vseq.utils.operations import detach
 
@@ -46,6 +48,42 @@ def min_value(metrics: List[Metric]):
 @staticmethod
 def max_value(metrics: List[Metric]):
     return max(metrics, key=lambda m: m.value)
+
+
+class WindowMeanMetric(Metric):
+    _str_value_fmt = "<10.3"
+
+    def __init__(self, values, window_size=10, name="window"):
+        super().__init__(name=name, tags=None)
+        self._values = [values.sum().tolist()]
+        self.window_size = window_size
+    
+    @property
+    def value(self):
+        return sum(self._values) / len(self._values)
+
+    def update(self, metric: Metric):
+
+        self._values = (metric._values + self._values)[:self.window_size]
+
+class ErrorRateMetric(Metric):
+    _str_value_fmt = "<10.3"
+
+    def __init__(self, refs, hyps, tokenizer, name="ER", tags=None):
+        super().__init__(name=name, tags=tags)
+        
+        rtoks = map(tokenizer, refs)
+        htoks = map(tokenizer, hyps)
+        self._edits, self._len = np.sum([(editdistance.eval(r, h), len(r)) for r, h in zip(rtoks, htoks)], axis=0)
+    
+    @property
+    def value(self):
+        return self._edits / self._len
+
+    def update(self, metric: Metric):
+
+        self._edits += metric._edits
+        self._len += metric._len
 
 
 class RunningMeanMetric(Metric):

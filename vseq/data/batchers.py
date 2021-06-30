@@ -76,6 +76,14 @@ class SpectrogramBatcher(Batcher):
             padded_batch[i, :, :seq_len] = batch[i]
 
         return padded_batch, torch.LongTensor(sequence_lengths)
+    
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
+        if sort_modality_idx is not None:
+            sort_key = lambda x: x[0][sort_modality_idx].shape[1]
+        else:
+            sort_key = lambda x: x[0].shape[1]
+
+        return sorted(batch, key=sort_key, reverse=True)
 
 
 class TextBatcher(Batcher):

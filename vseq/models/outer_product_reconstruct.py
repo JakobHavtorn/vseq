@@ -54,10 +54,13 @@ class OPReconstruct(BaseModel):
         aw: torch.Tensor,
         aw_sl: torch.Tensor,
         x: torch.Tensor,
-        x_sl: torch.Tensor
+        x_sl: torch.Tensor,
+        tau: float = 1.0,
+        hard: bool = True
     ):
         
-        samples = F.gumbel_softmax(decoder_logits, tau=2.0, hard=True)
+        # samples = F.gumbel_softmax(decoder_logits, tau=tau, hard=hard)
+        samples = (decoder_logits / tau).softmax(dim=2)
 
         if self.embed_before_outer_product:
             e = self.embedding(samples).unsqueeze(dim=2) # (B, T_z, 1, D_e)
@@ -82,7 +85,10 @@ class OPReconstruct(BaseModel):
         weight = x_sl.sum()
         loss = - log_prob.sum() / weight
 
-        metrics = [LossMetric(loss, name="rec", weight_by=weight)]
+        acc = (x == p_logits.argmax(dim=2)).sum() / weight
+
+        metrics = [LossMetric(loss, name="rec", weight_by=weight),
+                   LossMetric(acc, name="acc", weight_by=weight)]
 
         return loss, metrics, p_x
 

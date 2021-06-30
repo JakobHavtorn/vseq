@@ -17,12 +17,13 @@ rich
 rootpath
 scikit-learn
 seaborn
-torch==1.8.1
-torchaudio
-torchtext
-torchvision
+#torch==1.8.1
+#torchaudio
+#torchtext
+#torchvision
 tqdm
 uniplot
 wandb
 # datasets
 # transformers
+editdistance

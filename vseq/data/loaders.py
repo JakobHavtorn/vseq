@@ -34,8 +34,8 @@ class AudioMetaData(MetaData):
     channels: int
     bits_per_sample: int
     encoding: str
-    example_id: str
     file_path: str
+    example_id: str = None
 
 
 @dataclass
@@ -73,7 +73,7 @@ def load_audio(file_path, sum_channels: bool = False):
         bits_per_sample=metadata.bits_per_sample,
         encoding=metadata.encoding,
         length=metadata.num_frames,
-        file_path=file_path,
+        file_path=file_path
     )
     return audio, metadata
 
@@ -127,7 +127,9 @@ class AudioLoader(Loader):
     def load(self, example_id):
         """Load a single audio file."""
         file_path = example_id + self.suffix
-        return load_audio(file_path, self.sum_channels)
+        audio, metadata = load_audio(file_path, self.sum_channels)
+        metadata.example_id = example_id
+        return audio, metadata
 
 
 class TextLoader(Loader):

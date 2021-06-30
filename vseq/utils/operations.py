@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from time import time
 from typing import Any, Union, List
 
 import torch
@@ -83,7 +84,8 @@ def log_sum_exp(tensor, axis=-1, dim=None, sum_op=torch.mean):
 
 def sequence_mask(
     seq_lens: Union[list, torch.Tensor],
-    max_len=None, dtype=torch.bool, 
+    max_len=None,
+    dtype=torch.bool, 
     device: torch.device = None,
     invert=False
 ):
