@@ -3,6 +3,25 @@ from typing import List, Tuple, Any, Optional
 import torch
 
 
+# TODO Add a class to do padding (any combination of minimum length, module and fixed length padding)
+
+
+class Padder1D():
+    def __init__(self, padding: int = None, padding_module: int = None, min_length: int = None) -> None:
+        self.padding = padding
+        self.padding_module = padding_module
+        self.min_length = min_length
+
+    def __call__(self, T: int):
+        if self.padding:
+            T = T + self.padding
+        if self.padding_module:
+            T = get_modulo_length(T, self.padding_module)
+        if self.min_length:
+            T = max(self.min_length, T)
+        return T
+
+
 class Batcher:
     """Base class for Batchers. These must define `collate` and optionally `sort` methods."""
 
@@ -72,10 +91,11 @@ def get_modulo_length(length: int, module: int):
 
 
 class AudioBatcher(Batcher):
-    def __init__(self, padding: int = None, padding_module: int = None) -> None:
+    def __init__(self, padding: int = None, padding_module: int = None, min_length: int = None) -> None:
         super().__init__()
         self.padding = padding
         self.padding_module = padding_module
+        self.min_length = min_length
 
     def collate(self, batch: List[torch.Tensor]):
         """Zero pad batch of audio waveforms (T,) to maximum temporal length and concatenate"""
@@ -88,6 +108,8 @@ class AudioBatcher(Batcher):
             T = T + self.padding
         if self.padding_module:
             T = get_modulo_length(T, self.padding_module)
+        if self.min_length:
+            T = max(self.min_length, T)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):

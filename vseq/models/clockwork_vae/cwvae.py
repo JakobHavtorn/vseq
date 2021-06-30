@@ -14,7 +14,7 @@ from vseq.modules.distributions import DiscretizedLogisticMixtureDense, Gaussian
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
-from .coders import MultiLevelEncoderAudioDense, DecoderAudioDense
+from .coders import DenseAudioEncoder, DenseAudioDecoder, PretrainedCPCDecoder, PretrainedCPCEncoder
 
 
 def get_exponential_time_factors(abs_factor, num_levels):
@@ -108,13 +108,15 @@ class RSSMCell(torch.jit.ScriptModule):
 class CWVAE(nn.Module):
     def __init__(
         self,
-        encoder: nn.Module,
-        decoder: nn.Module,
-        likelihood: nn.Module,
         z_size: Union[int, List[int]],
         h_size: Union[int, List[int]],
         time_factors: List[int],
+        encoder: nn.Module,
+        decoder: nn.Module,
+        likelihood: nn.Module,
+        context_decoder: Optional[nn.ModuleList] = None,
         residual_posterior: bool = False,
+        with_resets: bool = False
     ):
         super().__init__()
 
@@ -126,25 +128,29 @@ class CWVAE(nn.Module):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.context_decoder = context_decoder
         self.likelihood = likelihood
         self.num_levels = len(time_factors)
         self.time_factors = time_factors
         self.residual_posterior = residual_posterior
+        self.with_resets = with_resets
+
+        self.strides = [self.time_factors[0]]
+        self.strides += [self.time_factors[l] // self.time_factors[l-1] for l in range(1, self.num_levels)]
 
         self.z_size = [z_size] * self.num_levels if isinstance(z_size, int) else z_size
         self.h_size = [h_size] * self.num_levels if isinstance(h_size, int) else h_size
         self.c_size = [z_dim + h_dim for z_dim, h_dim in zip(self.z_size[1:], self.h_size[1:])] + [0]
 
         cells = []
-        for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.out_size):
+        for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.e_size):
             cells.append(
                 RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=e_dim, c_dim=c_dim, residual_posterior=residual_posterior)
             )
         self.cells = nn.ModuleList(cells)
 
-    @property
-    def receptive_field(self):
-        return self.encoder.receptive_field
+        self.receptive_field = self.encoder.receptive_field
+        self.overall_stride = self.encoder.overall_stride
 
     def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
         kld_metrics_nats = [
@@ -221,15 +227,15 @@ class CWVAE(nn.Module):
 
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
-
         kl_divs = [[] for _ in range(self.num_levels)]
-        t = 0
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
             T = len(encodings_t[l])
             for t in range(T):
                 # reset stochastic state whenever the layer above ticks (never reset top)
+                if self.with_resets and (l < self.num_levels - 1) and (t % factor == 0):
+                    states[l] = self.cells[l].get_initial_state(batch_size=x.size(0))
 
                 # cell forward
                 states[l], distributions = self.cells[l](encodings_t[l][t], states[l], context[t])
@@ -240,9 +246,15 @@ class CWVAE(nn.Module):
             # update context for below layer as cat(z_l, h_l)
             context = [torch.cat(all_states[t], dim=-1) for t in range(T)]
             if l >= 1:
-                # repeat to temporal resolution of below layer
-                factor = int(self.time_factors[l] / self.time_factors[l - 1])
-                context = [context[i // factor] for i in range(len(context) * factor)]
+                if self.context_decoder is None:
+                    # repeat to temporal resolution of below layer
+                    factor = int(self.time_factors[l] / self.time_factors[l - 1])
+                    context = [context[i // factor] for i in range(len(context) * factor)]
+                else:
+                    raise NotImplementedError("A context decoder could be used instead of repeating the context")
+                    import IPython; IPython.embed(using=False)
+                    context = torch.stack(context, dim=1)
+                    context = self.context_decoder[l](context)
 
             # compute kl divergence
             enc_mu = torch.stack([all_distributions[t].enc_mu for t in range(T)], dim=1)
@@ -287,9 +299,11 @@ class CWVAE(nn.Module):
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
-            T = max_timesteps // self.time_factors[l]  # The upscaling factor of the decoder
+            T = max_timesteps // self.time_factors[l]
             for t in range(T):
                 # reset stochastic state whenever the layer above ticks (never reset top)
+                if self.with_resets and (l < self.num_levels - 1) and (t % factor == 0):
+                    states[l] = self.cells[l].get_initial_state(batch_size=x.size(0))
 
                 # cell forward
                 states[l], distributions = self.cells[l].generate(states[l], context[t], use_mode=use_mode)
@@ -315,8 +329,191 @@ class CWVAE(nn.Module):
             x = self.likelihood.sample(parameters)
 
         x_sl = torch.ones(n_samples, dtype=torch.int) * max_timesteps
-        outputs = SimpleNamespace(context=context, all_distributions=all_distributions)
+        outputs = SimpleNamespace()  # SimpleNamespace(context=context, all_distributions=all_distributions)
         return (x, x_sl), outputs
+
+
+class CWVAEAudioDense(BaseModel):
+    def __init__(
+        self,
+        z_size: Union[int, List[int]] = 64,
+        h_size: Union[int, List[int]] = 128,
+        time_factors: Union[int, List[int]] = 6,
+        num_levels: int = 3,
+        residual_posterior: bool = False,
+        num_level_layers: int = 3,
+        num_mix: int = 10,
+        num_bins: int = 256,
+    ):
+        super().__init__()
+
+        self.z_size = z_size
+        self.h_size = h_size
+        self.num_levels = num_levels
+        self.residual_posterior = residual_posterior
+        self.num_level_layers = num_level_layers
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+
+        if isinstance(time_factors, int):
+            time_factors = get_exponential_time_factors(time_factors, self.num_levels)
+
+        self.time_factors = time_factors
+
+        bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
+        bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
+        bot_c_size = bot_z_size + bot_h_size
+
+        likelihood = DiscretizedLogisticMixtureDense(
+            x_dim=3 * num_mix,
+            y_dim=1,
+            num_mix=num_mix,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+
+        encoder = DenseAudioEncoder(
+            h_size=h_size,
+            time_factors=time_factors,
+            num_level_layers=num_level_layers,
+        )
+
+        decoder = DenseAudioDecoder(
+            in_dim=bot_c_size,
+            h_dim=bot_h_size,
+            o_dim=likelihood.out_features,
+            time_factor=time_factors[0],
+            num_level_layers=num_level_layers,
+        )
+
+        self.cwvae = CWVAE(
+            encoder=encoder,
+            decoder=decoder,
+            likelihood=likelihood,
+            z_size=z_size,
+            h_size=h_size,
+            time_factors=time_factors,
+            residual_posterior=residual_posterior,
+        )
+        self.receptive_field = self.cwvae.receptive_field
+        self.overall_stride = self.cwvae.overall_stride
+
+    def forward(
+        self,
+        x: TensorType["B", "T"],
+        x_sl: TensorType["B", int],
+        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
+        beta: float = 1,
+        free_nats: float = 0,
+    ):
+        y = x.detach().clone().unsqueeze(-1)  # Create target with channel dim for DML
+        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats, y)
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: Optional[TensorType["B", "T", "D"]] = None,
+        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
+    ):
+        return self.cwvae.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            use_mode=use_mode,
+            x=x,
+            state0=state0,
+        )
+
+
+class CWVAEAudioCPCPretrained(BaseModel):
+    def __init__(
+        self,
+        z_size: Union[int, List[int]] = 64,
+        h_size: Union[int, List[int]] = 256,
+        time_factors: List[int] = [5, 20, 40, 80, 160],
+        residual_posterior: bool = False,
+        num_level_layers: int = 3,
+        num_mix: int = 10,
+        num_bins: int = 256,
+        frozen_encoder: bool = False,
+    ):
+        super().__init__()
+
+        assert h_size == 256 or all([hs == 256 for hs in h_size]), "Pretrained model with these dimensions"
+        assert time_factors == [5, 20, 40, 80, 160][-len(time_factors):], "Pretrained model with these time factors"
+
+        self.z_size = z_size
+        self.h_size = h_size
+        self.residual_posterior = residual_posterior
+        self.num_level_layers = num_level_layers
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+        self.time_factors = time_factors
+        self.frozen_encoder = frozen_encoder
+
+        bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
+        bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
+        bot_c_size = bot_z_size + bot_h_size
+
+        likelihood = DiscretizedLogisticMixtureDense(
+            x_dim=3 * num_mix,
+            y_dim=1,
+            num_mix=num_mix,
+            num_bins=num_bins,
+            reduce_dim=-1,
+        )
+
+        encoder = PretrainedCPCEncoder(
+            num_levels=len(time_factors),
+            freeze_parameters=frozen_encoder,
+        )
+
+        decoder = PretrainedCPCDecoder(
+            in_dim=bot_c_size,
+            o_dim=likelihood.out_features,
+        )
+
+        self.cwvae = CWVAE(
+            encoder=encoder,
+            decoder=decoder,
+            likelihood=likelihood,
+            z_size=z_size,
+            h_size=h_size,
+            time_factors=time_factors,
+            residual_posterior=residual_posterior,
+        )
+        self.receptive_field = self.cwvae.receptive_field
+        self.overall_stride = self.cwvae.overall_stride
+
+    def forward(
+        self,
+        x: TensorType["B", "T"],
+        x_sl: TensorType["B", int],
+        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
+        beta: float = 1,
+        free_nats: float = 0,
+    ):
+        y = x.detach().clone().unsqueeze(-1)  # Create target with channel dim for DML
+        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats, y)
+        return loss, metrics, outputs
+
+    def generate(
+        self,
+        n_samples: int = 1,
+        max_timesteps: int = 100,
+        use_mode: bool = False,
+        x: Optional[TensorType["B", "T", "D"]] = None,
+        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
+    ):
+        return self.cwvae.generate(
+            n_samples=n_samples,
+            max_timesteps=max_timesteps,
+            use_mode=use_mode,
+            x=x,
+            state0=state0,
+        )
 
 
 class CWVAEAudioConv1D(BaseModel):
@@ -381,99 +578,6 @@ class CWVAEAudioConv1D(BaseModel):
             h_dim=bot_h_size,
             o_dim=likelihood.out_features,
             time_factors=time_factors,
-            num_level_layers=num_level_layers,
-        )
-
-        self.cwvae = CWVAE(
-            encoder=encoder,
-            decoder=decoder,
-            likelihood=likelihood,
-            z_size=z_size,
-            h_size=h_size,
-            time_factors=time_factors,
-            residual_posterior=residual_posterior,
-        )
-        self.receptive_field = self.cwvae.receptive_field
-
-    def forward(
-        self,
-        x: TensorType["B", "T"],
-        x_sl: TensorType["B", int],
-        state0: List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]] = None,
-        beta: float = 1,
-        free_nats: float = 0,
-    ):
-        y = x.detach().clone().unsqueeze(-1)  # Create target with channel dim for DML
-        loss, metrics, outputs = self.cwvae(x, x_sl, state0, beta, free_nats, y)
-        return loss, metrics, outputs
-
-    def generate(
-        self,
-        n_samples: int = 1,
-        max_timesteps: int = 100,
-        use_mode: bool = False,
-        x: Optional[TensorType["B", "T", "D"]] = None,
-        state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
-    ):
-        return self.cwvae.generate(
-            n_samples=n_samples,
-            max_timesteps=max_timesteps,
-            use_mode=use_mode,
-            x=x,
-            state0=state0,
-        )
-
-
-class CWVAEAudioDense(BaseModel):
-    def __init__(
-        self,
-        z_size: Union[int, List[int]] = 64,
-        h_size: Union[int, List[int]] = 128,
-        time_factors: Union[int, List[int]] = 6,
-        num_levels: int = 3,
-        residual_posterior: bool = False,
-        num_level_layers: int = 3,
-        num_mix: int = 10,
-        num_bins: int = 256,
-    ):
-        super().__init__()
-
-        self.z_size = z_size
-        self.h_size = h_size
-        self.num_levels = num_levels
-        self.residual_posterior = residual_posterior
-        self.num_level_layers = num_level_layers
-        self.num_mix = num_mix
-        self.num_bins = num_bins
-
-        if isinstance(time_factors, int):
-            time_factors = get_exponential_time_factors(time_factors, self.num_levels)
-
-        self.time_factors = time_factors
-
-        bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
-        bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
-        bot_c_size = bot_z_size + bot_h_size
-
-        likelihood = DiscretizedLogisticMixtureDense(
-            x_dim=3 * num_mix,
-            y_dim=1,
-            num_mix=num_mix,
-            num_bins=num_bins,
-            reduce_dim=-1,
-        )
-
-        encoder = MultiLevelEncoderAudioDense(
-            h_size=h_size,
-            time_factors=time_factors,
-            num_level_layers=num_level_layers,
-        )
-
-        decoder = DecoderAudioDense(
-            in_dim=bot_c_size,
-            h_dim=bot_h_size,
-            o_dim=likelihood.out_features,
-            time_factor=time_factors[0],
             num_level_layers=num_level_layers,
         )
 

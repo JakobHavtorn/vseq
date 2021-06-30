@@ -1,4 +1,5 @@
 import argparse
+from vseq.models.clockwork_vae.cwvae import CWVAEAudioCPCPretrained
 import numpy as np
 
 import torch
@@ -32,8 +33,9 @@ parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
 parser.add_argument("--num_level_layers", default=3, type=int, help="dense layers for embedding per level")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--num_bits", default=8, type=int, help="dense layers for embedding per level")
+parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
+parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
@@ -63,26 +65,40 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-model = vseq.models.CWVAEAudioDense(
-# model = vseq.models.CWVAEAudioConv1D(
+model = CWVAEAudioCPCPretrained(
     z_size=args.latent_size,
     h_size=args.hidden_size,
     time_factors=args.time_factors,
     num_level_layers=args.num_level_layers,
     num_mix=args.num_mix,
-    num_bins=2 ** args.num_bits
+    num_bins=2 ** args.num_bits,
+    residual_posterior=args.residual_posterior
 )
+# model = vseq.models.CWVAEAudioDense(
+# # model = vseq.models.CWVAEAudioConv1D(
+#     z_size=args.latent_size,
+#     h_size=args.hidden_size,
+#     time_factors=args.time_factors,
+#     num_level_layers=args.num_level_layers,
+#     num_mix=args.num_mix,
+#     num_bins=2 ** args.num_bits,
+#     residual_posterior=args.residual_posterior
+# )
 
 
 decode_transform = []
 encode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform.append(MuLawEncode(bits=args.num_bits))
-    decode_transform.append(MuLawDecode(bits=args.num_bits))
+    encode_transform.append(MuLawEncode(bits=8))
+    decode_transform.append(MuLawDecode(bits=8))
+
+# encode_transform.extend([Quantize(bits=8, rescale=True)])
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
-batcher = AudioBatcher(padding=model.receptive_field, padding_module=model.receptive_field)
+batcher = AudioBatcher(min_length=model.receptive_field, padding_module=model.overall_stride)
+# batcher = AudioBatcher(padding=model.receptive_field)
+# batcher = AudioBatcher(padding=model.receptive_field, padding_module=model.receptive_field)
 loader = AudioLoader("wav", cache=False)
 modalities = [(loader, encode_transform, batcher)]
 
@@ -116,8 +132,8 @@ test_loader = DataLoader(
 
 
 print(model)
-x, x_sl = next(iter(train_loader))[0]
-model.summary(input_data=x[:, :1], x_sl=torch.LongTensor([1] * x.size(0)), device='cpu')
+x, x_sl = next(iter(test_loader))[0]
+model.summary(input_data=x, x_sl=x_sl, device='cpu')
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 

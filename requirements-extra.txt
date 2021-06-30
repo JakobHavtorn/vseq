@@ -4,6 +4,7 @@ gpustat
 ipdb
 ipython
 jupyter
+jupyterlab
 jupyterlab-git
 nbstripout
 pandas

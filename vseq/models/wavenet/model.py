@@ -103,7 +103,7 @@ class WaveNet(BaseModel):
         target = x.squeeze(-1)  # (B, T, C) to (B, T)
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
         target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
-        target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
+        target = target.floor().to(torch.int64)  # To integer (floor because of noise from dequantization or more bits)
         return target
 
     def compute_loss(

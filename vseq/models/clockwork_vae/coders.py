@@ -201,7 +201,7 @@ class DenseAudioDecoder(nn.Module):
 
 class PretrainedCPCEncoder(MultiLevelEncoder):
     checkpoint_url = "https://dl.fbaipublicfiles.com/librilight/CPC_checkpoints/60k_epoch4-d0f474de.pt"
-    github_repository = 'facebookresearch/CPC_audio'
+    github_repository = "facebookresearch/CPC_audio"
 
     def __init__(self, num_levels: int = 3, freeze_parameters: bool = True):
         """Wrapper around the pretrained CPC encoder supplied at https://github.com/facebookresearch/CPC_audio.
@@ -277,13 +277,13 @@ class PretrainedCPCEncoder(MultiLevelEncoder):
         self.num_levels = num_levels
         self.freeze_parameters = freeze_parameters
 
-        self.receptive_fields = [10, 44, 90, 182, 366][-self.num_levels:]
+        self.receptive_fields = [10, 44, 90, 182, 366][-self.num_levels :]
         self.receptive_field = 366
-        self.time_factors = [5, 20, 40, 80, 160][-self.num_levels:]
+        self.time_factors = [5, 20, 40, 80, 160][-self.num_levels :]
         self.overall_stride = 160
-        self.strides = [5, 4, 2, 2, 2][-self.num_levels:]
-        self.h_size = [256, 256, 256, 256, 256][-self.num_levels:]
-        self.e_size = self.h_size[-self.num_levels:]
+        self.strides = [5, 4, 2, 2, 2][-self.num_levels :]
+        self.h_size = [256, 256, 256, 256, 256][-self.num_levels :]
+        self.e_size = self.h_size[-self.num_levels :]
 
         self.load_pretrained_checkpoint()
 
@@ -330,7 +330,7 @@ class PretrainedCPCEncoder(MultiLevelEncoder):
 
         ar_features = self.ar_net(hidden)
         encodings.append(ar_features)
-        return encodings[-self.num_levels:]
+        return encodings[-self.num_levels :]
 
     def summary(self):
         return torchinfo.summary(self, input_size=(32, 160))
@@ -352,40 +352,26 @@ class PretrainedCPCDecoder(nn.Module):
 
         self.h_dim = h_dim
 
-        kernels = [4, 4, 4, 8, 10]
+        kernels = [5, 5, 5, 9, 11]
         strides = [2, 2, 2, 4, 5]
         i_chan = [in_dim, h_dim, h_dim, h_dim, h_dim]
         o_chan = [h_dim, h_dim, h_dim, h_dim, o_dim]
 
-        # layers = []
-        # for k, s, i, o in zip(kernels, strides, i_chan, o_chan):
-        #     conv = nn.ConvTranspose1d(i, o, kernel_size=k, stride=s)
-        #     _, unsym_pad = get_same_padding(conv)
-        #     layers.extend(
-        #         [
-        #             nn.GroupNorm(num_channels=i, num_groups=i),
-        #             conv,
-        #             Pad(unsym_pad),
-        #             nn.ReLU()
-        #         ]
-        #     )
         layers = []
         for k, s, i, o in zip(kernels, strides, i_chan, o_chan):
             conv = nn.ConvTranspose1d(i, o, kernel_size=k, stride=s)
             nn.Upsample()
             _, unsym_pad = get_same_padding(conv)
-            layers.extend(
-                [
-                    nn.GroupNorm(num_channels=i, num_groups=i),
-                    conv,
-                    Pad(unsym_pad),
-                    nn.ReLU()
-                ]
-            )
+            layers.extend([nn.GroupNorm(num_channels=i, num_groups=i), conv, Pad(unsym_pad), nn.ReLU()])
+        # padding = [2, 2, 2, 4, 5]
+        # layers = []
+        # for k, s, i, o, p in zip(kernels, strides, i_chan, o_chan, padding):
+        #     upsample = nn.Upsample(scale_factor=s, mode="nearest")
+        #     conv = nn.Conv1d(i, o, kernel_size=k, padding=p)
+        #     layers.extend([nn.GroupNorm(num_channels=i, num_groups=i), upsample, conv, nn.ReLU()])
         self.decoder = nn.Sequential(*layers)
 
     def forward(self, x: TensorType["B", "T", "D"]):
-        # import IPython; IPython.embed(using=False)
         x = x.permute(0, 2, 1)
         x = self.decoder(x)
         x = x.permute(0, 2, 1)
@@ -420,19 +406,15 @@ class DecoderAudioConv1d(nn.Module):
             nn.GroupNorm(num_channels=in_dim, num_groups=num_groups),
             nn.ConvTranspose1d(in_dim, h_dim, kernel_size=1, stride=1),
             nn.ReLU(),
-
             nn.GroupNorm(num_channels=h_dim, num_groups=num_groups),
             nn.ConvTranspose1d(h_dim, h_dim // 2, kernel_size=4, stride=2),
             nn.ReLU(),
-            
             nn.GroupNorm(num_channels=h_dim // 2, num_groups=num_groups),
             nn.ConvTranspose1d(h_dim // 2, h_dim // 4, kernel_size=4, stride=2),
             nn.ReLU(),
-
             nn.GroupNorm(num_channels=h_dim // 4, num_groups=num_groups),
             nn.ConvTranspose1d(h_dim // 4, h_dim // 8, kernel_size=4, stride=2),
             nn.ReLU(),
-
             nn.GroupNorm(num_channels=h_dim // 8, num_groups=num_groups),
             nn.ConvTranspose1d(h_dim // 8, h_dim, kernel_size=4, stride=2),
             nn.ReLU(),
@@ -457,6 +439,7 @@ class DecoderAudioConv1d(nn.Module):
             nn.GroupNorm(num_grous=32, num_channels=8 * channels),
             nn.Conv1d(8 * channels, 8 * channels, kernel_size=1, stride=1),  # dense
         )  # (B, C, T) -> (B, 8xC, T/160)
+
     def forward(self, x):
         hidden = self.decoder(x)
         hidden = hidden.view(hidden.size(0), -1, self.o_dim)
@@ -490,7 +473,9 @@ class Conv1dAudioEncoder(nn.Module):
 
         # six 1D-convolutions with filters set to (64, 128, 192, 256, 512, 512), kernel sizes (10, 8, 4, 4, 4, 1), and strides (5, 4, 2, 2, 2, 1).
 
-        import IPython; IPython.embed(using=False)
+        import IPython
+
+        IPython.embed(using=False)
         channels = 64
         level_1 = nn.Sequential(
             nn.Conv1d(channels, 1 * channels, kernel_size=10, stride=5),

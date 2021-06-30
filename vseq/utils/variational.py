@@ -1,6 +1,6 @@
 import math
 
-from typing import Union, Tuple
+from typing import Optional, Union, Tuple
 
 import torch
 
@@ -22,10 +22,10 @@ def kl_divergence(q_distrib: torch.distributions.Distribution, p_distrib: torch.
     Consider two probability distributions P and Q.
     Usually, P represents the data, the observations, or a measured probability distribution.
     Distribution Q represents instead a theory, a model, a description or an approximation of P.
-    
+
     The Kullback–Leibler divergence is then interpreted as the average difference of the number of bits
     required for encoding samples of P using a code optimized for Q rather than one optimized for P.
-    
+
     In other words, the KL-divergence is the extra number of bits required for encoding samples of P using
     a code optimized for Q instead of one optimized for P.
 
@@ -123,6 +123,87 @@ def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor):
     return torch.randn_like(sd).mul(sd).add(mu)
 
 
+def rsample_gumbel(
+    mean: Optional[torch.Tensor] = None,
+    scale: Optional[torch.Tensor] = None,
+    size: Optional[tuple] = None,
+    fast: bool = True,
+    eps: float = 1e-10,
+):
+    """Sample from a Gumbel distribution.
+
+    Args:
+        mean (Optional[torch.Tensor], optional): Gumbel mean. Defaults to None.
+        scale (Optional[torch.Tensor], optional): Gumbel scale. Defaults to None.
+        size (Optional[torch.Size], optional): Size of the sample (if mean and scale are None). Defaults to None.
+        fast (bool, optional): If True, will sample using log(-log(u)) where u ~ Uniform(eps, 1-eps).
+                               Otherwise, samples via log(e) where e ~ Exponential(1).
+                               Defaults to True.
+        eps (float, optional): Small constant for numerical stability in fast sampling. Defaults to 1e-10.
+
+    Returns:
+        [type]: [description]
+    """
+    size = mean.size() if mean is not None else size
+    if fast:
+        gumbel = torch.log(-torch.log(torch.empty(size).uniform_(eps, 1.0 - eps)))
+    else:
+        gumbel = torch.empty(size).exponential_().log()
+
+    if mean is None:
+        return gumbel
+
+    return mean + scale * gumbel
+
+
+def rsample_gumbel_softmax(
+    logits: torch.Tensor, hard: bool = False, tau: float = 1.0, eps: float = 1e-10, dim: int = -1
+):
+    """Samples from the Gumbel-Softmax distribution and optionally discretizes [1, 2].
+
+    Args:
+        logits: `[..., num_features]` unnormalized log probabilities
+        tau: non-negative scalar temperature
+        hard: if ``True``, the returned samples will be discretized as one-hot vectors,
+              but will be differentiated as if it is the soft sample in autograd
+        dim (int): A dimension along which softmax will be computed. Default: -1.
+
+    Returns:
+        Sampled tensor of same shape as `logits` from the Gumbel-Softmax distribution.
+        If ``hard=True``, the returned samples will be one-hot, otherwise they will
+        be probability distributions that sum to 1 across `dim`.
+
+    Note:
+        The main trick for `hard` is to do  `y_hard - y_soft.detach() + y_soft`
+        This achieves two things:
+         1. makes the output value exactly one-hot (since we add then subtract y_soft value)
+         2. makes the gradient equal to y_soft gradient (since we strip all other gradients)
+
+    Examples:
+        >>> logits = torch.randn(20, 32)
+        >>> # Sample soft categorical using reparametrization trick:
+        >>> rsample_gumbel_softmax(logits, tau=1, hard=False)
+        >>> # Sample hard categorical using "Straight-through" trick:
+        >>> rsample_gumbel_softmax(logits, tau=1, hard=True)
+
+    [1] https://arxiv.org/abs/1611.00712
+    [2] https://arxiv.org/abs/1611.01144
+    """
+
+    gumbels = torch.log(-torch.log(torch.empty_like(logits).uniform_(eps, 1.0 - eps)))  # ~Gumbel(0,1)
+    gumbels = (logits + gumbels) / tau
+    y_soft = gumbels.softmax(dim)
+
+    if not hard:
+        # Reparametrization trick
+        return y_soft
+
+    # Straight through estimator
+    index = y_soft.max(dim, keepdim=True)[1]
+    y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
+    return y_hard - y_soft.detach() + y_soft
+
+
 @torch.jit.script
 def rsample_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
     """
@@ -132,16 +213,18 @@ def rsample_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-
     :param log_scale: a tensor containing the log scale.
     :return: a reparameterized sample with the same size as the input mean and log scale.
     """
-    u = torch.zeros_like(mu).uniform_(eps, 1 - eps)  # uniform sample in the interval (eps, 1 - eps)
+    u = torch.empty_like(mu).uniform_(eps, 1 - eps)  # uniform sample in the interval (eps, 1 - eps)
     sample = mu + torch.exp(log_scale) * (torch.log(u) - torch.log(1 - u))  # transform to logistic
     return sample
 
 
 def rsample_discretized_logistic(mu: torch.Tensor, log_scale: torch.Tensor, eps: float = 1e-8):
     """Return a sample from a discretized logistic with values standardized to be in [-1, 1]
-    
+
     This is done by sampling the corresponding continuous logistic and clamping values outside
     the interval to the endpoints.
+
+    We do not further quantize the samples here.
     """
     return rsample_logistic(mu, log_scale, eps).clamp(-1, 1)
 
@@ -180,8 +263,7 @@ def rsample_discretized_logistic_mixture(
     log_scales = torch.sum(log_scales * one_hot, dim=-1)
 
     # sample from logistic (we don't actually round to the nearest 8bit value)
-    u = torch.empty_like(means).uniform_(eps, 1.0 - eps)
-    x = means + torch.exp(log_scales) * (torch.log(u) - torch.log(1.0 - u))
+    x = rsample_logistic(means, log_scales)
 
     # Enforce standardization
     x = x.clamp(min=-1, max=1)

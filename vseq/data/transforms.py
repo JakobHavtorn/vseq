@@ -185,10 +185,12 @@ class Quantize(Transform):
         bits: int = 8,
         bins: Optional[int] = None,
         force_out_int64: bool = True,
+        rescale: bool = False,
     ):
         """Quantize a tensor of values between `low` and `high` using a number of `bits`.
 
-        The return value is an integer tensor with values in [0, 2**bits - 1].
+        The return value is an integer tensor with integer values in [0, 2**bits - 1], if rescale == False.
+        The return values is rescaled to floats in [low, high] if rescale == True.
 
         If `bits` is 32 or smaller, the integer tensor is of type `IntTensor` (32 bits).
         If `bits` is 33 or larger, the integer tensor is of type `LongTensor` (64 bits).
@@ -200,6 +202,8 @@ class Quantize(Transform):
             high (float, optional): [description]. Defaults to 1.0.
             bits (int, optional): [description]. Defaults to 8.
             bins (Optional[int], optional): [description]. Defaults to None.
+            force_out_int64 (bool): If False and bits <= 32, will output int32. Otherwise output is int64.
+            rescale (bool): If True, rescale quantized integer values back to floats in [low, high].
         """
         super().__init__()
         assert (bits is None) != (bins is None), "Must set one and only one of `bits` and `bins`"
@@ -209,9 +213,15 @@ class Quantize(Transform):
         self.bins = 2 ** bits if bins is None else bins
         self.boundaries = torch.linspace(start=-1, end=1, steps=self.bins)
         self.out_int32 = (self.bits <= 32) and (not force_out_int64)
+        if rescale:
+            self.rescale = Scale(low=low, high=high, min_val=0, max_val=self.bins -1)
+        else:
+            self.rescale = None
 
     def forward(self, x: torch.Tensor):
-        return torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
+        x_quantized = torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
+        x_quantized = self.rescale(x_quantized) if self.rescale is not None else x_quantized
+        return x_quantized
 
 
 class Dequantize(Transform):
