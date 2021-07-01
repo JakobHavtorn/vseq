@@ -360,7 +360,6 @@ class PretrainedCPCDecoder(nn.Module):
         layers = []
         for k, s, i, o in zip(kernels, strides, i_chan, o_chan):
             conv = nn.ConvTranspose1d(i, o, kernel_size=k, stride=s)
-            nn.Upsample()
             _, unsym_pad = get_same_padding(conv)
             layers.extend([nn.GroupNorm(num_channels=i, num_groups=i), conv, Pad(unsym_pad), nn.ReLU()])
         # padding = [2, 2, 2, 4, 5]
