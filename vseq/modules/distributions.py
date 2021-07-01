@@ -20,6 +20,7 @@ from .convenience import AddConstant
 
 
 # TODO Add reduce method that can reduce a log-likelihood along a single or multiple dimensions with a given operation (sum, mean etc.)
+# TODO Refactor such that whether to use a Dense or ConvNd layer for parameterization is an argument
 
 
 class ConditionalDistribution(nn.Module):
