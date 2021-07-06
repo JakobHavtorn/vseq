@@ -5,14 +5,7 @@ import torch
 import torch.nn.functional as F
 
 
-# TODO Discretized Laplace distribution
-# TODO Discretized Mixture of Laplacians
-# NOTE According to Unsupervised Blind Source Separation with Variational Auto-Encoders 
-#      https://www.music.mcgill.ca/~julian/wp-content/uploads/2021/06/2021_eusipco_vae_bss_neri.pdf
-#      this might make reconstructions and samples less blurry for VAEs.
-
-
-def gaussian_ll(x, mu, var, epsilon: float = 1e-6):
+def gaussian_ll(x, mu, var, epsilon: float = 1e-8):
     """Compute Gaussian log-likelihood
 
     Clamps the variance at `epsilon` for numerical stability. This does not affect the gradient.
@@ -69,23 +62,104 @@ def von_mises_ll(x: torch.Tensor, logits: torch.Tensor):
     raise NotImplementedError()
 
 
-# def discretized_laplace_ll(x: torch.Tensor, mean: torch.Tensor, log_scale: torch.Tensor, num_bins: int = 256):
-#     """
-#     Log of the probability mass of the values x under the Laplace distribution
-#     with parameters mean and scale.
-
-#     :param x: tensor with shape (*, D)
-#     :param mean: tensor with mean of distribution, shape (*, D)
-#     :param log_scale: tensor with log scale of distribution, shape has to be either scalar or broadcastable
-#     :param num_bins: bin size (default: 256)
-#     :param double: whether double precision should be used for computations
-#     :return:
-#     """
-#     pass
+@torch.jit.script
+def laplace_cdf(x: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor):
+    return 0.5 - 0.5 * (x - loc).sign() * torch.expm1(-(x - loc).abs() / scale)
 
 
-def discretized_logistic_ll(x: torch.Tensor, mean: torch.Tensor, log_scale: torch.Tensor, num_bins: int = 256):
-    """Log of the probability mass of the values x under the logistic distribution with parameters mean and scale.
+@torch.jit.script
+def laplace_centered_cdf(x: torch.Tensor, scale: torch.Tensor):
+    return 0.5 - 0.5 * x.sign() * torch.expm1(-x.abs() / scale)
+
+
+def discretized_laplace_ll(x: torch.Tensor, loc: torch.Tensor, log_scale: torch.Tensor, num_bins: int = 256):
+    """Log of the probability mass of the values x under the Laplace distribution with parameters loc and scale.
+
+    According to [1] a Laplace distribution might make reconstructions and samples less blurry for VAEs.
+
+    Args:
+        x (torch.Tensor): targets to evaluate with shape (*).
+        loc (torch.Tensor): loc of logistic distribution, shape (*) same as x.
+        log_scale (torch.Tensor): log scale of distribution, shape (*) same as x, or either scalar or broadcastable.
+        num_bins (int): number of bins, equivalent to specifying number of bits = log2(num_bins). Defaults to 256.
+
+    [1] Unsupervised Blind Source Separation with Variational Auto-Encoders.
+        https://www.music.mcgill.ca/~julian/wp-content/uploads/2021/06/2021_eusipco_vae_bss_neri.pdf
+    """
+    # check input
+    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
+
+    # compute x-µ and 1/s
+    centered_x = x - loc
+    scale = torch.exp(log_scale)
+
+    # print()
+    # print(scale.max().item(), (-x.abs() / scale).max().item(), torch.expm1(-x.abs() / scale).max().item())
+    # print(scale.min().item(), (-x.abs() / scale).min().item(), torch.expm1(-x.abs() / scale).min().item())
+
+    # compute CDF at left and right "bin edge" (floating) to compute total mass in between (cdf_delta)
+    # plus_in = scale * (x + 1.0 / (num_bins - 1))
+    plus_in = centered_x + 1.0 / (num_bins - 1)  # add half a bin width
+    cdf_plus = laplace_centered_cdf(plus_in, scale)
+    minus_in = centered_x - 1.0 / (num_bins - 1)  # subtract half a bin width
+    cdf_minus = laplace_centered_cdf(minus_in, scale)
+    cdf_delta = cdf_plus - cdf_minus
+
+    # print(f"{cdf_plus.min()=}, {cdf_plus.mean()=}")
+    # print(f"{cdf_minus.max()=}, {cdf_minus.mean()=}")
+
+    # log probability for edge case of 0 (mass from 0 to 0.5)
+    log_cdf_plus = torch.log(cdf_plus.clamp(min=1e-5))  # = log CDF(x+0.5)
+
+    # log probability for edge case of 255 (mass from 254.5 to 255)
+    log_one_minus_cdf_minus = torch.log(1 - cdf_minus.clamp(max=1-1e-5))  # = log 1 - CDF(x-0.5)
+
+    # log probability in the center of the bin, to be used in extreme cases where cdf_delta is extremely small
+    # TODO Is this causing non-normalization?
+    log_prob_mid = -math.log(2) - log_scale - centered_x.abs() / scale  # = log PDF(x)
+    # print(f"{log_prob_mid.max()=}, {log_prob_mid.min()=}")
+    # print(torch.sum(cdf_delta < 1e-10), torch.sum(cdf_delta > 1e-10))
+    log_prob_mid_safe = torch.where(
+        cdf_delta > 1e-10, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_prob_mid - math.log(num_bins / 2)
+    )
+
+    # handle edge cases
+    log_probs = torch.where(x < 2 / num_bins - 1, log_cdf_plus, log_prob_mid_safe)  # edge case 0, x < -254/256
+    log_probs = torch.where(x > 1 - 2 / num_bins, log_one_minus_cdf_minus, log_probs)  # edge case 255, x > 254/256
+
+    # We don't see any nans during forward pass
+    # print(log_cdf_plus.isnan().any().item(), log_one_minus_cdf_minus.isnan().any().item(), log_probs.isnan().any().item())
+
+    # import IPython; IPython.embed(using=False)
+
+    return log_probs
+
+
+def discretized_laplace_mixture_ll(x: torch.Tensor, logit_probs: torch.Tensor, loc: torch.Tensor, log_scale: torch.Tensor, num_bins: int = 256, num_mix: int = 10):
+    """Compute log-likelihood for a mixture of discretized Laplaces.
+
+    Args:
+        x (torch.Tensor): (*, D)
+        logit_probs (torch.Tensor): (*, D, num_mix)
+        means (torch.Tensor): (*, D, num_mix)
+        log_scales (torch.Tensor): (*, D, num_mix)
+        num_mix (int): Number of mixture components
+        num_bins (int): Quantization level
+    """
+    # repeat x for broadcasting to mixture dim
+    x = x.unsqueeze(-1).expand(*[-1] * x.ndim, num_mix)  # (*, D, 3 x num_mix)
+
+    # evaluate with discretized laplace (broadcasting to mixtures)
+    log_probs = discretized_laplace_ll(x, loc, log_scale, num_bins=num_bins)
+
+    # handle mixtures
+    log_probs = log_probs + torch.log_softmax(logit_probs, dim=-1)
+    log_probs = torch.logsumexp(log_probs, dim=-1)  # normalize over mixture components (in log-prob space)
+    return log_probs
+
+
+def discretized_logistic_ll(x: torch.Tensor, loc: torch.Tensor, log_scale: torch.Tensor, num_bins: int = 256):
+    """Log of the probability mass of the values x under the logistic distribution with parameters loc and scale.
 
     All dimensions are treated as independent.
 
@@ -117,16 +191,15 @@ def discretized_logistic_ll(x: torch.Tensor, mean: torch.Tensor, log_scale: torc
 
     Args:
         x (torch.Tensor): targets to evaluate with shape (*).
-        mean (torch.Tensor): mean of logistic distribution, shape (*) same as x.
+        loc (torch.Tensor): loc of logistic distribution, shape (*) same as x.
         log_scale (torch.Tensor): log scale of distribution, shape (*) same as x, or either scalar or broadcastable.
         num_bins (int): number of bins, equivalent to specifying number of bits = log2(num_bins). Defaults to 256.
-    :return:
     """
     # check input
     assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
 
     # compute x-µ and 1/s
-    centered_x = x - mean
+    centered_x = x - loc
     inv_stdv = torch.exp(-log_scale)
 
     # compute CDF at left and right "bin edge" (floating) to compute total mass in between (cdf_delta)
@@ -141,14 +214,14 @@ def discretized_logistic_ll(x: torch.Tensor, mean: torch.Tensor, log_scale: torc
 
     # log probability for edge case of 255 (mass from 254.5 to 255)
     log_one_minus_cdf_minus = -F.softplus(minus_in)  # = log 1 - CDF(x-0.5)
+    # log_one_minus_cdf_minus = -F.softplus(inv_stdv * (x + loc - 1.0 / (num_bins - 1)))
 
     # log probability in the center of the bin, to be used in extreme cases where cdf_delta is extremely small
-    # TODO Understand this part
     # TODO Is this causing non-normalization?
     mid_in = inv_stdv * centered_x
-    log_prob_mid = mid_in - log_scale - 2.0 * F.softplus(mid_in)
+    log_prob_mid = mid_in - log_scale - 2.0 * F.softplus(mid_in)  # = log PDF(x)
     log_prob_mid_safe = torch.where(
-        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_prob_mid - np.log(num_bins / 2)
+        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_prob_mid - math.log(num_bins / 2)
     )
 
     # handle edge cases
@@ -209,14 +282,14 @@ def discretized_logistic_mixture_ll(
     mid_in = inv_stdv * centered_x
     log_pdf_mid = mid_in - log_scales - 2.0 * F.softplus(mid_in)
     log_prob_mid_safe = torch.where(
-        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_pdf_mid - np.log(num_bins / 2)
+        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_pdf_mid - math.log(num_bins / 2)
     )
 
     # handle edge cases
     log_probs = torch.where(x < 2 / num_bins - 1, log_cdf_plus, log_prob_mid_safe)  # edge case 0, x < -254/256
     log_probs = torch.where(x > 1 - 2 / num_bins, log_one_minus_cdf_minus, log_probs)  # edge case 255, x > 254/256
 
-    log_probs = log_probs + torch.log_softmax(logit_probs, dim=-1)  # torch.Size([32, 383, 200, 10])
+    log_probs = log_probs + torch.log_softmax(logit_probs, dim=-1)
     log_probs = torch.logsumexp(log_probs, dim=-1)  # Normalize over mixture components (in log-prob space)
 
     return log_probs
@@ -248,7 +321,7 @@ def discretized_logistic_mixture_rgb_ll(x, parameters, num_bins: int = 256):
 
     num_mix = int(ps[-1] / 10)
     logit_probs = parameters[:, :, :, :num_mix]
-    parameters = parameters[:, :, :, num_mix:].contiguous().view(xs + [num_mix * 3])  # 3 for mean, scale, coef
+    parameters = parameters[:, :, :, num_mix:].contiguous().view(xs + [num_mix * 3])  # 3 for loc, scale, coef
     means = parameters[:, :, :, :, :num_mix]
     log_scales = torch.clamp(parameters[:, :, :, :, num_mix : 2 * num_mix], min=-7.0)
     coeffs = torch.tanh(parameters[:, :, :, :, 2 * num_mix : 3 * num_mix])
@@ -277,7 +350,7 @@ def discretized_logistic_mixture_rgb_ll(x, parameters, num_bins: int = 256):
     log_pdf_mid = mid_in - log_scales - 2.0 * F.softplus(mid_in)
 
     log_prob_mid_safe = torch.where(
-        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_pdf_mid - np.log(num_bins / 2)
+        cdf_delta > 1e-5, torch.log(torch.clamp(cdf_delta, min=1e-10)), log_pdf_mid - math.log(num_bins / 2)
     )
 
     # handle edge cases

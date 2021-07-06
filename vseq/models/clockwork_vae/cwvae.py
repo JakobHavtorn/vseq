@@ -2,6 +2,7 @@ import math
 
 from types import SimpleNamespace
 from typing import List, Optional, Tuple, Union
+from vseq.models.clockwork_vae.tasnet_coder import TasNetDecoder, TasNetEncoder
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,7 @@ from torchtyping import TensorType
 
 from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
 from vseq.models.base_model import BaseModel
-from vseq.modules.distributions import DiscretizedLogisticMixtureDense, GaussianDense
+from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, DiscretizedLogisticMixtureDense, GaussianDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
@@ -120,11 +121,7 @@ class CWVAE(nn.Module):
     ):
         super().__init__()
 
-        assert len(z_size) == len(h_size), "Must give equal number of levels for stochastic and deterministic state"
-        assert isinstance(time_factors, int) or len(time_factors) == len(
-            z_size
-        ), "Must give as many time factors as levels"
-        assert encoder.num_levels == len(z_size), "Number of levels in encoder and in latent dimensions must match"
+        assert isinstance(time_factors, list)
 
         self.encoder = encoder
         self.decoder = decoder
@@ -299,7 +296,7 @@ class CWVAE(nn.Module):
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
-            T = max_timesteps // self.time_factors[l]
+            T = max_timesteps // self.time_factors[l] if l == self.num_levels - 1 else len(context)
             for t in range(T):
                 # reset stochastic state whenever the layer above ticks (never reset top)
                 if self.with_resets and (l < self.num_levels - 1) and (t % factor == 0):
@@ -328,7 +325,7 @@ class CWVAE(nn.Module):
         else:
             x = self.likelihood.sample(parameters)
 
-        x_sl = torch.ones(n_samples, dtype=torch.int) * max_timesteps
+        x_sl = torch.ones(x.shape[1], dtype=torch.int) * max_timesteps
         outputs = SimpleNamespace()  # SimpleNamespace(context=context, all_distributions=all_distributions)
         return (x, x_sl), outputs
 
@@ -434,7 +431,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
         h_size: Union[int, List[int]] = 256,
         time_factors: List[int] = [5, 20, 40, 80, 160],
         residual_posterior: bool = False,
-        num_level_layers: int = 3,
+        num_level_layers: int = 1,
         num_mix: int = 10,
         num_bins: int = 256,
         frozen_encoder: bool = False,
@@ -464,6 +461,13 @@ class CWVAEAudioCPCPretrained(BaseModel):
             num_bins=num_bins,
             reduce_dim=-1,
         )
+        # likelihood = DiscretizedLaplaceMixtureDense(
+        #     x_dim=3 * num_mix,
+        #     y_dim=1,
+        #     num_mix=num_mix,
+        #     num_bins=num_bins,
+        #     reduce_dim=-1,
+        # )
 
         encoder = PretrainedCPCEncoder(
             num_levels=len(time_factors),
@@ -519,42 +523,28 @@ class CWVAEAudioCPCPretrained(BaseModel):
 class CWVAEAudioConv1D(BaseModel):
     def __init__(
         self,
-        num_embeddings: Optional[int] = None,
         z_size: Union[int, List[int]] = 64,
-        h_size: Union[int, List[int]] = 128,
+        h_size: int = 128,
         time_factors: Union[int, List[int]] = 6,
-        num_levels: int = 3,
         residual_posterior: bool = False,
-        num_level_layers: int = 3,
+        num_level_layers: int = 8,
         num_mix: int = 10,
         num_bins: int = 256,
     ):
         super().__init__()
 
-        self.num_embeddings = num_embeddings
         self.z_size = z_size
         self.h_size = h_size
-        self.num_levels = num_levels
         self.residual_posterior = residual_posterior
         self.num_level_layers = num_level_layers
         self.num_mix = num_mix
         self.num_bins = num_bins
-
-        if isinstance(time_factors, int):
-            time_factors = get_exponential_time_factors(time_factors, self.num_levels)
-
         self.time_factors = time_factors
+        self.num_levels = len(time_factors)
 
         bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
         bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
         bot_c_size = bot_z_size + bot_h_size
-
-        if num_embeddings is not None:
-            self.in_channels = num_embeddings
-            self.embedding = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=bot_h_size)
-        else:
-            self.in_channels = 1
-            self.embedding = None
 
         likelihood = DiscretizedLogisticMixtureDense(
             x_dim=3 * num_mix,
@@ -564,21 +554,25 @@ class CWVAEAudioConv1D(BaseModel):
             reduce_dim=-1,
         )
 
-        encoder = MultiLevelEncoderConv1d(
-            in_channels=self.in_channels,
-            h_size=h_size,
+        encoder = TasNetEncoder(
+            channels_bottleneck=h_size,
+            channels_block=4 * h_size,
             time_factors=time_factors,
-            proj_size=None,
-            num_level_layers=num_level_layers,
-            activation=nn.ReLU,
+            kernel_size=5,
+            num_blocks=num_level_layers,
+            num_levels=self.num_levels,
+            norm_type="GlobalLayerNorm" 
         )
 
-        decoder = DecoderAudioConv1d(
-            in_dim=bot_c_size,
-            h_dim=bot_h_size,
-            o_dim=likelihood.out_features,
-            time_factors=time_factors,
-            num_level_layers=num_level_layers,
+        decoder = TasNetDecoder(
+            time_factor=time_factors[0],
+            channels_in=bot_c_size,
+            channels_bottleneck=h_size,
+            channels_block=4 * h_size,
+            channels_out=likelihood.out_features,
+            kernel_size=5,
+            num_blocks=num_level_layers,
+            norm_type="GlobalLayerNorm",
         )
 
         self.cwvae = CWVAE(
@@ -591,6 +585,7 @@ class CWVAEAudioConv1D(BaseModel):
             residual_posterior=residual_posterior,
         )
         self.receptive_field = self.cwvae.receptive_field
+        self.overall_stride = self.cwvae.overall_stride
 
     def forward(
         self,

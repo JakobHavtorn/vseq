@@ -13,8 +13,16 @@ from vseq.utils.log_likelihoods import (
     bernoulli_ll,
     discretized_logistic_ll,
     discretized_logistic_mixture_ll,
+    discretized_laplace_ll,
+    discretized_laplace_mixture_ll,
 )
-from vseq.utils.variational import rsample_discretized_logistic, rsample_discretized_logistic_mixture, rsample_gaussian
+from vseq.utils.variational import (
+    rsample_gaussian,
+    rsample_discretized_logistic,
+    rsample_discretized_logistic_mixture,
+    rsample_discretized_laplace,
+    rsample_discretized_laplace_mixture,
+)
 
 from .convenience import AddConstant
 
@@ -319,11 +327,8 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
         This is different to the Discretized Mixture of Logistics used the PixelCNN++ paper which is tailored
         for RGB images and treats the channel dimension in a speciail way. There are no such special dimensions here.
 
-        Assumes input data to be originally uint8 (0, ..., num_bins) and then rescaled
-        by 1/num_bins: discrete values in {0, 1/num_bins, ..., num_bins/num_bins}.
-
-        When using the original discretized logistic mixture logprob implementation,
-        this data should be rescaled to be in the interval [-1, 1].
+        Assumes input data to be originally int (0, ..., num_bins) and then rescaled to num_bins
+        discrete values in [-1, 1].
 
         Mean and mode are not implemented for now.
 
@@ -379,8 +384,130 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
         return log_prob
 
     def forward(self, x):
-        parameters = self.params(x) # (*, D x 3 x self.num_mix)
+        parameters = self.params(x)  # (*, D x 3 x self.num_mix)
         parameters = parameters.view(parameters.shape[:-1] + (self.y_dim, self.num_mix * 3))  # (*, D, 3 x self.num_mix)
         logit_probs, means, log_scales = parameters.chunk(3, dim=-1)  # (*, D, self.num_mix)
         log_scales = log_scales.clamp(min=-7.0)
+        return logit_probs, means, log_scales
+
+
+class DiscretizedLaplaceDense(ConditionalDistribution):
+    def __init__(self, x_dim: int, y_dim: int, num_bins: int = 256, reduce_dim: Optional[int] = None):
+        super().__init__()
+
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        self.num_bins = num_bins
+        self.reduce_dim = reduce_dim
+
+        self.out_features = y_dim * 2
+
+        self.params = nn.Linear(x_dim, self.out_features)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        pass
+
+    @staticmethod
+    def rsample(params):
+        return rsample_discretized_laplace(params[0], params[1])
+
+    @staticmethod
+    @torch.no_grad()
+    def sample(params):
+        return rsample_discretized_laplace(params[0], params[1])
+
+    def mode(self, params):
+        return params[0]
+
+    def log_prob(self, y, params):
+        """Compute log-likelihood. Inputs are assumed to be [-1, 1]"""
+        log_prob = discretized_laplace_ll(y, params[0], params[1], num_bins=self.num_bins)
+        if self.reduce_dim is not None:
+            return log_prob.sum(self.reduce_dim)
+        return log_prob
+
+    def forward(self, x):
+        params = self.params(x)  # (*, D, 2)
+        mu, log_scale = params.chunk(2, dim=-1)
+        log_scale = log_scale.clamp(min=-7.0, max=2.0)
+        return mu, log_scale
+
+
+class DiscretizedLaplaceMixtureDense(ConditionalDistribution):
+    def __init__(
+        self, x_dim: int, y_dim: int, num_mix: int = 10, num_bins: int = 256, reduce_dim: Optional[int] = None
+    ):
+        """Discretized Laplace Mixture distribution.
+
+        The distribution has the following params:
+
+        - Mean value per mixture: `num_mix`.
+        - Log-scale per mixture: `num_mix`.
+        - Mixture coefficient per mixture: `num_mix`.
+
+        This yields a total of `3 * num_mix` params.
+
+        Assumes input data to be originally int (0, ..., num_bins) and then rescaled to num_bins
+        discrete values in [-1, 1].
+
+        Mean and mode are not implemented for now.
+
+        Args:
+            x_dim (int): Number of channels in the input
+            y_dim (int): Number of channels in the output
+            num_mix (int, optional): Number of components. Defaults to 10.
+            num_bins (int, optional): Number of quantization bins. Defaults to 256 (8 bit).
+        """
+        super().__init__()
+
+        self.x_dim = x_dim
+        self.y_dim = y_dim
+        self.num_mix = num_mix
+        self.num_bins = num_bins
+        self.reduce_dim = reduce_dim
+
+        self.out_features = (y_dim * 3) * num_mix
+
+        self.params = nn.Linear(x_dim, self.out_features)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        pass
+
+    @staticmethod
+    def get_distribution(params):
+        raise NotImplementedError("Discretized mixture of laplaces does not have a Distribution object (yet)")
+
+    def rsample(self, params):
+        return rsample_discretized_laplace_mixture(params[0], params[1], params[2], num_mix=self.num_mix)
+
+    @torch.no_grad()
+    def sample(self, params):
+        return rsample_discretized_laplace_mixture(params[0], params[1], params[2], num_mix=self.num_mix)
+
+    def mode(self, params):
+        raise NotImplementedError()
+
+    def log_prob(self, y, params):
+        """Compute log-likelihood. Inputs are assumed to be [-1, 1]"""
+        log_prob = discretized_laplace_mixture_ll(
+            y,
+            params[0],
+            params[1],
+            params[2],
+            num_mix=self.num_mix,
+            num_bins=self.num_bins,
+        )
+        if self.reduce_dim is not None:
+            return log_prob.sum(self.reduce_dim)
+        return log_prob
+
+    def forward(self, x):
+        parameters = self.params(x)  # (*, D x 3 x self.num_mix)
+        parameters = parameters.view(parameters.shape[:-1] + (self.y_dim, self.num_mix * 3))  # (*, D, 3 x self.num_mix)
+        logit_probs, means, log_scales = parameters.chunk(3, dim=-1)  # (*, D, self.num_mix)
+        log_scales = log_scales.clamp(min=-7.0, max=2.0)
         return logit_probs, means, log_scales

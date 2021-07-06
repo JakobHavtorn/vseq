@@ -263,10 +263,7 @@ def rsample_discretized_logistic_mixture(
     log_scales = torch.sum(log_scales * one_hot, dim=-1)
 
     # sample from logistic (we don't actually round to the nearest 8bit value)
-    x = rsample_logistic(means, log_scales)
-
-    # Enforce standardization
-    x = x.clamp(min=-1, max=1)
+    x = rsample_discretized_logistic(means, log_scales)
     return x
 
 
@@ -314,4 +311,76 @@ def rsample_discretized_logistic_mixture_rgb(parameters: torch.Tensor, num_mix: 
     x2 = torch.clamp(x[:, 2, :, :] + coeffs[:, 1, :, :] * x0 + coeffs[:, 2, :, :] * x1, -1, 1)  # B, H, W
 
     x = torch.stack([x0, x1, x2], dim=1)
+    return x
+
+
+@torch.jit.script
+def rsample_exponential(rate: torch.Tensor, eps: float = 1e-8):
+    """Returns samples from the Exponential distribution parameterized with λ=rate
+    
+    Args:
+        rate (torch.Tensor): The rate of the exponential distribution
+        eps (float): Small constant for numerical stability of log( uniform(0, 1) )
+    """
+    # return torch.empty_like(rate).exponential_() / rate
+    return - (-torch.empty_like(rate).uniform_(eps, 1-eps)).log1p() / rate  # faster and jit supported
+
+
+@torch.jit.script
+def rsample_laplace(loc: torch.Tensor, scale: torch.Tensor, eps: float = 1e-8):
+    """
+    Returns a sample from laplace with specified mean and log scale.
+
+    :param loc: a tensor containing the mean.
+    :param scale: a tensor containing the log scale.
+    :return: a reparameterized sample with the same size as the input mean and log scale.
+    """
+    e1 = rsample_exponential(scale, eps)
+    e2 = rsample_exponential(scale, eps)
+    return e1 - e2 + loc
+
+
+def rsample_discretized_laplace(loc: torch.Tensor, scale: torch.Tensor, eps: float = 1e-8):
+    """Return a sample from a discretized laplace with values standardized to be in [-1, 1]
+
+    This is done by sampling the corresponding continuous laplace and clamping values outside
+    the interval to the endpoints.
+
+    We do not further quantize the samples here.
+    """
+    return rsample_laplace(loc, scale, eps).clamp(-1, 1)
+
+
+def rsample_discretized_laplace_mixture(
+    logit_probs: torch.Tensor,
+    means: torch.Tensor,
+    log_scales: torch.Tensor,
+    num_mix: int,
+    eps: float = 1e-5,
+    t: float = 1.0,
+):
+    """Return a reparameterized sample from a given Discretized Laplace Mixture distribution.
+
+    Args:
+        logit_probs (torch.Tensor): (*, D, num_mix)
+        means (torch.Tensor): (*, D, num_mix)
+        log_scales (torch.Tensor): (*, D, num_mix)
+        num_mix (int): Number of mixture components
+        eps (float): Bounds [eps, 1-eps] on the uniform rv used to sample the mixture coefficients and the laplace.
+        t (float): Temperature for Gumbel sampling
+
+    Returns:
+        torch.Tensor: Sample from the discretized Laplace mixture `(*, D)`
+    """
+    # sample mixture indicator from softmax
+    gumbel = -torch.log(-torch.log(torch.empty_like(means).uniform_(eps, 1.0 - eps)))
+    argmax = torch.argmax(logit_probs / t + gumbel, dim=-1)
+    one_hot = torch.nn.functional.one_hot(argmax, num_mix)
+
+    # select laplace parameters
+    means = torch.sum(means * one_hot, dim=-1)
+    log_scales = torch.sum(log_scales * one_hot, dim=-1)
+
+    # sample from laplace (we don't actually round to the nearest 8bit value)
+    x = rsample_discretized_laplace(means, log_scales)
     return x

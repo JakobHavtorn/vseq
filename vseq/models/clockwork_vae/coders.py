@@ -342,7 +342,7 @@ class PretrainedCPCDecoder(nn.Module):
         in_dim: int,
         o_dim: int,
     ):
-        """A (not pretrained) decoder for the PretrainedCPCEncoder architecture.s"""
+        """A (not pretrained) decoder for the PretrainedCPCEncoder architecture."""
         super().__init__()
 
         h_dim = 256

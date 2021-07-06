@@ -21,6 +21,7 @@
 Observations:
 - Gradient clipping on VRNN caused faster initial training but also a worse minimum and then overfitting (ehtereal-oath-169 VS northern-glade-143)
 - Samples are poor for stack size 20 run, probably due to temporal inconsistency caused by non-overlapping input transform (more pronounced for smaller stacks)
+- Reconstructions are much less noisy for stack size 20 runs.
 - Effects of residual posterior (SRNN) are not completely clear (seems detrimental?)
 
 
@@ -39,7 +40,7 @@ Observations:
 | VRNN      | 1.17 (e600)                      |     | DLM 1 mix (1 free nats) (CW-VAE, no x->h, inf+gen)       |
 | VRNN      | 1.07                             |     | DL 1 mix (1 free nats)                                   |
 | VRNN      | 0.5394 (e176) posterior collapse |     | DLM 1 mix 20 frames (1 free nats, 2000)                  |
-| VRNN      | 0.514 (e140) **running**         |     | DLM 1 mix 20 frames (1 free nats, 20000)                 | fresh-energy                      |
+| VRNN      | 0.3896 (e189)                    |     | DLM 1 mix 20 frames (1 free nats, 20000)                 | fresh-energy                      |
 |           |                                  |     |                                                          |
 | SRNN      | 0.97 (e800)                      |     | DLM 10 mix (1 free nats. 30000)                          |
 | SRNN      | 0.935 (e800)                     |     | DLM 10 mix (8 free nats. 30000)                          |
@@ -66,13 +67,44 @@ Observations:
 
 
 **Convolutional encoder on raw PCM (or MuLaw PCM)**
+- Unfreezing pretrained encoder parameters improves likelihood
+- Using a convolutional decoder instead of dense improves likelihood
+- MuLaw encoding makes training more stable and sample quality higher
+- 16bit VS 8bit output: 
 
-| Dataset | TIMIT (waveform) |     | Notes                                                                                                 |
-| ------- | ---------------- | --- | ----------------------------------------------------------------------------------------------------- |
-| CWVAE   | 1.308 (e750)     |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen (160) (frames)                                             | zany-durian      |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen, conv decoder (160) (frames)                               | easy-meadow      |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames)                           | likely-firefly   |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw, 16bit in 8bit out)         | warm-breeze      |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)           | genial-snow      |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, nearest-upsample-conv decoder (160) (MuLaw 16bit in 8bit out) | genial-cosmos-39 |
+| Dataset | TIMIT (waveform) |     | Notes                                                                                                          | Name                            |
+| ------- | ---------------- | --- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| CWVAE   | 1.308 (e750)     |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen (160) (frames)                                                      | zany-durian                     |
+| CWVAE   | 1.144 (e450)     |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen, conv decoder (160) (frames)                                        | easy-meadow                     |
+| CWVAE   | 0.831 (589)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames)                                    | likely-firefly                  |
+| CWVAE   | 4.175 (531)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                    | warm-breeze                     |
+| CWVAE   | 4.131 (539)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-value 1  | rosy-deluge                     | ~same loss jumps                            |
+| CWVAE   | 4.16 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-norm 1   | restful-leaf-40                 |
+| CWVAE   | 4.16 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-norm 0.1 | glowing-disco-43                |
+| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, linear-upsample-conv decoder (160) (MuLaw 8bit in 8bit out)    | genial-cosmos-39 + lucky-dfg-49 |
+| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, nearest-upsample-conv decoder (160) (MuLaw 8bit in 8bit out)   | crimson-silence-50              |
+| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                    | genial-snow + dark-grass-48     |
+| CWVAE   | 8.56 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames 16bit in 16bit out)                 | clean-morning-45                |
+| CWVAE   | 12.2 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 16bit out)                   | wise-sunset-46                  | still converging.. very interesting samples |
+| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)                  | silver-smoke-59                 | ...                                         |
+| CWVAE   | **running**      |     | 1L DLaplaceM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)            | sage-deluge-58                  | ...                                         |
+|         |                  |     |                                                                                                                |                                 |
+| CWVAE   | 4.344 (e750)     |     | 1L DLM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                     | apricot-monkey-47               | more noisy than 10 mixtures                 |
 
+
+**TasNet Encoder**
+
+| Dataset | TIMIT (waveform) |     | Notes                                                                     | Name               |
+| ------- | ---------------- | --- | ------------------------------------------------------------------------- | ------------------ |
+| CWVAE   | **running**      |     | 1L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 32h 64z | generous-forest-54 |
+| CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 32h 64z | laced-planet-57    |
+
+
+
+
+
+ env WANDB_MODE=disabled WANDB_NOTES="1L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out)" CUDA_VISIBLE_DEVICES='6' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 --input_coding mu_law
+ 
+env WANDB_MODE=disabled WANDB_NOTES="2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out)" CUDA_VISIBLE_DEVICES='5' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 4096 --input_coding mu_law
+
+  env WANDB_MODE=disabled WANDB_NOTES="1L DLM 10 mix PretrainedCPCEncoder, not frozen, upsample-conv decoder (160) (MuLaw 16bit in 8bit out)" CUDA_VISIBLE_DEVICES='6' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 4096 65536 --input_coding mu_law

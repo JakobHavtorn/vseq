@@ -1,6 +1,4 @@
 import argparse
-from vseq.models.clockwork_vae.cwvae import CWVAEAudioCPCPretrained
-import numpy as np
 
 import torch
 import wandb
@@ -28,12 +26,12 @@ from vseq.training.annealers import CosineAnnealer
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--hidden_size", default=[512, 512, 512], type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
-parser.add_argument("--latent_size", default=[128, 128, 128], type=int, nargs="+", help="dimensionality of latent state in CWVAE")
+parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in CWVAE")
+parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
-parser.add_argument("--num_level_layers", default=3, type=int, help="dense layers for embedding per level")
+parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML")
+parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
 parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
@@ -65,15 +63,15 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-model = CWVAEAudioCPCPretrained(
-    z_size=args.latent_size,
-    h_size=args.hidden_size,
-    time_factors=args.time_factors,
-    num_level_layers=args.num_level_layers,
-    num_mix=args.num_mix,
-    num_bins=2 ** args.num_bits,
-    residual_posterior=args.residual_posterior
-)
+# model = vseq.models.CWVAEAudioConv1D(
+#     z_size=args.latent_size,
+#     h_size=args.hidden_size,
+#     time_factors=args.time_factors,
+#     num_level_layers=args.num_level_layers,
+#     num_mix=args.num_mix,
+#     num_bins=2 ** args.num_bits,
+#     residual_posterior=args.residual_posterior
+# )
 # model = vseq.models.CWVAEAudioDense(
 # # model = vseq.models.CWVAEAudioConv1D(
 #     z_size=args.latent_size,
@@ -84,21 +82,29 @@ model = CWVAEAudioCPCPretrained(
 #     num_bins=2 ** args.num_bits,
 #     residual_posterior=args.residual_posterior
 # )
+model = vseq.models.CWVAEAudioCPCPretrained(
+    z_size=args.latent_size,
+    h_size=args.hidden_size,
+    time_factors=args.time_factors,
+    num_level_layers=args.num_level_layers,
+    num_mix=args.num_mix,
+    num_bins=2 ** args.num_bits,
+    residual_posterior=args.residual_posterior
+)
 
 
 decode_transform = []
 encode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform.append(MuLawEncode(bits=8))
-    decode_transform.append(MuLawDecode(bits=8))
+    encode_transform.append(MuLawEncode(bits=args.num_bits))
+    decode_transform.append(MuLawDecode(bits=args.num_bits))
 
 # encode_transform.extend([Quantize(bits=8, rescale=True)])
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
-batcher = AudioBatcher(min_length=model.receptive_field, padding_module=model.overall_stride)
-# batcher = AudioBatcher(padding=model.receptive_field)
-# batcher = AudioBatcher(padding=model.receptive_field, padding_module=model.receptive_field)
+# batcher = AudioBatcher(min_length=model.receptive_field, padding_module=model.overall_stride)
+batcher = AudioBatcher(padding_module=model.overall_stride)
 loader = AudioLoader("wav", cache=False)
 modalities = [(loader, encode_transform, batcher)]
 
