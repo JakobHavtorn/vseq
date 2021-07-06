@@ -3,23 +3,24 @@ from typing import List, Tuple, Any, Optional
 import torch
 
 
-# TODO Add a class to do padding (any combination of minimum length, module and fixed length padding)
+def get_modulo_padding(length: int, module: int):
+    """Return the size of padding to add to `length` to make it evenly divisible by `modulo`"""
+    return (module - length % module) % module
 
 
-class Padder1D():
-    def __init__(self, padding: int = None, padding_module: int = None, min_length: int = None) -> None:
-        self.padding = padding
-        self.padding_module = padding_module
-        self.min_length = min_length
+def get_modulo_length(length: int, module: int):
+    """Return the smallest number larger than `length` evenly divisible by `modulo`"""
+    return length + get_modulo_padding(length, module)
 
-    def __call__(self, T: int):
-        if self.padding:
-            T = T + self.padding
-        if self.padding_module:
-            T = get_modulo_length(T, self.padding_module)
-        if self.min_length:
-            T = max(self.min_length, T)
-        return T
+
+def get_padded_length_1d(length: int, padding: int = None, padding_module: int = None, min_length: int = None):
+    if padding:
+        length = length + padding
+    if padding_module:
+        length = get_modulo_length(length, padding_module)
+    if min_length:
+        length = max(min_length, length)
+    return length
 
 
 class Batcher:
@@ -80,16 +81,6 @@ class TensorBatcher(Batcher):
         return collated_batch, torch.LongTensor(sequence_lengths)
 
 
-def get_modulo_padding(length: int, module: int):
-    """Return the size of padding to add to `length` to make it evenly divisible by `modulo`"""
-    return (module - length % module) % module
-
-
-def get_modulo_length(length: int, module: int):
-    """Return the smallest number larger than `length` evenly divisible by `modulo`"""
-    return length + get_modulo_padding(length, module)
-
-
 class AudioBatcher(Batcher):
     def __init__(self, padding: int = None, padding_module: int = None, min_length: int = None) -> None:
         super().__init__()
@@ -103,13 +94,7 @@ class AudioBatcher(Batcher):
 
         N = len(batch)
         T = max(sequence_lengths)
-
-        if self.padding:
-            T = T + self.padding
-        if self.padding_module:
-            T = get_modulo_length(T, self.padding_module)
-        if self.min_length:
-            T = max(self.min_length, T)
+        T = get_padded_length_1d(T, self.padding, self.padding_module, self.min_length)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
