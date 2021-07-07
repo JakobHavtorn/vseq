@@ -96,8 +96,8 @@ model = vseq.models.CWVAEAudioCPCPretrained(
 decode_transform = []
 encode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform.append(MuLawEncode(bits=args.num_bits))
-    decode_transform.append(MuLawDecode(bits=args.num_bits))
+    encode_transform.append(MuLawEncode(bits=8))  #args.num_bits))
+    decode_transform.append(MuLawDecode(bits=8))  #args.num_bits))
 
 # encode_transform.extend([Quantize(bits=8, rescale=True)])
 encode_transform = Compose(*encode_transform)
@@ -187,4 +187,8 @@ for epoch in tracker.epochs(args.epochs):
         x = decode_transform(x)
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-    tracker.log(samples=samples, reconstructions=reconstructions)
+        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, use_mode_observations=True)
+        x = decode_transform(x)
+        samples_mode = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+
+    tracker.log(samples=samples, samples_mode=samples_mode, reconstructions=reconstructions)

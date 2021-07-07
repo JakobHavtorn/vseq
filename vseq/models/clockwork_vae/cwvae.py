@@ -279,6 +279,8 @@ class CWVAE(nn.Module):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
+        use_mode_latents: bool = False,
+        use_mode_observations: bool = False,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -303,7 +305,7 @@ class CWVAE(nn.Module):
                     states[l] = self.cells[l].get_initial_state(batch_size=x.size(0))
 
                 # cell forward
-                states[l], distributions = self.cells[l].generate(states[l], context[t], use_mode=use_mode)
+                states[l], distributions = self.cells[l].generate(states[l], context[t], use_mode=use_mode or use_mode_latents)
 
                 all_states.append(states[l])
                 all_distributions.append(distributions)
@@ -320,7 +322,7 @@ class CWVAE(nn.Module):
 
         parameters = self.likelihood(dec)
 
-        if use_mode:
+        if use_mode or use_mode_observations:
             x = self.likelihood.mode(parameters)
         else:
             x = self.likelihood.sample(parameters)
@@ -412,6 +414,8 @@ class CWVAEAudioDense(BaseModel):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
+        use_mode_latents: bool = False,
+        use_mode_observations: bool = False,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -419,6 +423,8 @@ class CWVAEAudioDense(BaseModel):
             n_samples=n_samples,
             max_timesteps=max_timesteps,
             use_mode=use_mode,
+            use_mode_latents=use_mode_latents,
+            use_mode_observations=use_mode_observations,
             x=x,
             state0=state0,
         )
@@ -435,7 +441,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
         num_mix: int = 10,
         num_bins: int = 256,
         frozen_encoder: bool = False,
-        pretrained_encoder: bool = True,
+        pretrained_encoder: bool = False    ,
     ):
         super().__init__()
 
@@ -450,6 +456,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
         self.num_bins = num_bins
         self.time_factors = time_factors
         self.frozen_encoder = frozen_encoder
+        self.pretrained_encoder = pretrained_encoder
 
         bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
         bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
@@ -510,6 +517,8 @@ class CWVAEAudioCPCPretrained(BaseModel):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
+        use_mode_latents: bool = False,
+        use_mode_observations: bool = False,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -517,6 +526,8 @@ class CWVAEAudioCPCPretrained(BaseModel):
             n_samples=n_samples,
             max_timesteps=max_timesteps,
             use_mode=use_mode,
+            use_mode_latents=use_mode_latents,
+            use_mode_observations=use_mode_observations,
             x=x,
             state0=state0,
         )
@@ -606,6 +617,8 @@ class CWVAEAudioConv1D(BaseModel):
         n_samples: int = 1,
         max_timesteps: int = 100,
         use_mode: bool = False,
+        use_mode_latents: bool = False,
+        use_mode_observations: bool = False,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -613,6 +626,8 @@ class CWVAEAudioConv1D(BaseModel):
             n_samples=n_samples,
             max_timesteps=max_timesteps,
             use_mode=use_mode,
+            use_mode_latents=use_mode_latents,
+            use_mode_observations=use_mode_observations,
             x=x,
             state0=state0,
         )
