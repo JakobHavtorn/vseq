@@ -15,7 +15,7 @@ from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, Discretiz
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
-from .coders import DenseAudioEncoder, DenseAudioDecoder, PretrainedCPCDecoder, PretrainedCPCEncoder
+from .coders import DenseAudioEncoder, DenseAudioDecoder, CPCDecoder, CPCEncoder
 
 
 def get_exponential_time_factors(abs_factor, num_levels):
@@ -435,6 +435,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
         num_mix: int = 10,
         num_bins: int = 256,
         frozen_encoder: bool = False,
+        pretrained_encoder: bool = True,
     ):
         super().__init__()
 
@@ -469,12 +470,13 @@ class CWVAEAudioCPCPretrained(BaseModel):
         #     reduce_dim=-1,
         # )
 
-        encoder = PretrainedCPCEncoder(
+        encoder = CPCEncoder(
             num_levels=len(time_factors),
             freeze_parameters=frozen_encoder,
+            pretrained=pretrained_encoder,
         )
 
-        decoder = PretrainedCPCDecoder(
+        decoder = CPCDecoder(
             in_dim=bot_c_size,
             o_dim=likelihood.out_features,
         )
