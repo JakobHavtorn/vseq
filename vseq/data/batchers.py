@@ -52,6 +52,9 @@ class Batcher:
         """
         raise NotImplementedError()
 
+    def __repr__(self):
+        return self.__class__.__name__ + "()"
+
 
 class ListBatcher(Batcher):
     def __init__(self) -> None:
@@ -109,6 +112,12 @@ class AudioBatcher(Batcher):
             sort_key = lambda x: len(x[0])
 
         return sorted(batch, key=sort_key, reverse=True)
+
+    def __repr__(self):
+        padding = self.padding
+        padding_module = self.padding_module
+        min_length = self.min_length
+        return f"AudioBatcher({padding=}, {padding_module=}, {min_length=})"
 
 
 class SpectrogramBatcher(Batcher):

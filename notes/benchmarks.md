@@ -66,7 +66,7 @@ Observations:
 
 
 
-**Convolutional encoder on raw PCM (or MuLaw PCM)**
+**CPC conv encoder on raw PCM (or MuLaw PCM)**
 - Unfreezing pretrained encoder parameters improves likelihood
 - Using a convolutional decoder instead of dense improves likelihood
 - MuLaw encoding makes training more stable and sample quality higher
@@ -86,8 +86,10 @@ Observations:
 | CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                    | genial-snow + dark-grass-48     |
 | CWVAE   | 8.56 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames 16bit in 16bit out)                 | clean-morning-45                |
 | CWVAE   | 12.2 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 16bit out)                   | wise-sunset-46                  | still converging.. very interesting samples |
+| CWVAE   |                  |     | 1L DLM 10 mix PretrainedCPCEncoder, not pretrained, conv decoder (160) (MuLaw 8bit in 16bit out)               |                                 |
 | CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)                  | silver-smoke-59                 | ...                                         |
 | CWVAE   | **running**      |     | 1L DLaplaceM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)            | sage-deluge-58                  | ...                                         |
+| CWVAE   | **running**      |     | 1L DLaplaceM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)             | legendary-cloud-62              | ...                                         |
 |         |                  |     |                                                                                                                |                                 |
 | CWVAE   | 4.344 (e750)     |     | 1L DLM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                     | apricot-monkey-47               | more noisy than 10 mixtures                 |
 
@@ -100,6 +102,23 @@ Observations:
 | CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 32h 64z | laced-planet-57    |
 
 
+**Convolution encoder/decoder**
+
+| Dataset | TIMIT (waveform) |     | Notes                                                              | Name |
+| ------- | ---------------- | --- | ------------------------------------------------------------------ | ---- |
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (zero kernel overlap) |      |
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)                       |      |
+| CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit)                  |      |
+| CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit)            |      |
+
+
+env WANDB_MODE=disabled WANDB_NOTES="1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (zero kernel overlap)" CUDA_VISIBLE_DEVICES='8' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 16 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 64 --latent_size 64 --time_factors 64 --input_coding mu_law --num_bits 16
+
+env WANDB_MODE=disabled WANDB_NOTES="1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)" CUDA_VISIBLE_DEVICES='8' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 16 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 64 --latent_size 64 --time_factors 64 --input_coding mu_law --num_bits 16
+
+env WANDB_MODE=disabled WANDB_NOTES="2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit)" CUDA_VISIBLE_DEVICES='9' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 16 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 64 192 --latent_size 64 128 --time_factors 64 512 --input_coding mu_law --num_bits 16
+
+env WANDB_MODE=disabled WANDB_NOTES="3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit)" CUDA_VISIBLE_DEVICES='1' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 16 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 64 192 448 --latent_size 64 128 192 --time_factors 64 512 4096 --input_coding mu_law --num_bits 16
 
 
 
@@ -107,4 +126,4 @@ Observations:
  
 env WANDB_MODE=disabled WANDB_NOTES="2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out)" CUDA_VISIBLE_DEVICES='5' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 4096 --input_coding mu_law
 
-  env WANDB_MODE=disabled WANDB_NOTES="1L DLM 10 mix PretrainedCPCEncoder, not frozen, upsample-conv decoder (160) (MuLaw 16bit in 8bit out)" CUDA_VISIBLE_DEVICES='6' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 4096 65536 --input_coding mu_law
+env WANDB_MODE=disabled WANDB_NOTES="1L DLM 10 mix PretrainedCPCEncoder, not frozen, upsample-conv decoder (160) (MuLaw 16bit in 8bit out)" CUDA_VISIBLE_DEVICES='6' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 4096 65536 --input_coding mu_law

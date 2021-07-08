@@ -33,12 +33,19 @@ class Compose:
         return x
 
     def __repr__(self):
-        format_string = self.__class__.__name__ + "("
+        format_strings = []
         for t in self.transforms:
-            format_string += "\n"
-            format_string += "    {0}".format(t)
-        format_string += "\n)" if len(self.transforms) > 0 else ")"
-        return format_string
+            format_strings.append(str(t))
+
+        if len(", ".join(format_strings)) < 110:
+            s = ", ".join(format_strings)
+            end = ")"
+        else:
+            s = "\n    " + ",\n    ".join(format_strings)
+            end = "\n)"
+
+        s = self.__class__.__name__ + "(" + s + end
+        return s
 
 
 class Reshape(Transform):

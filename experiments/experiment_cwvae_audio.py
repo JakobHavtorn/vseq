@@ -26,8 +26,8 @@ from vseq.training.annealers import CosineAnnealer
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", default=32, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
-parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality of hidden state in CWVAE")
-parser.add_argument("--latent_size", default=128, type=int, help="dimensionality of latent state in CWVAE")
+parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
+parser.add_argument("--latent_size", default=128, type=int, nargs="+", help="dimensionality of latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
 parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
@@ -63,7 +63,16 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-# model = vseq.models.CWVAEAudioConv1D(
+model = vseq.models.CWVAEAudioConv1d(
+    z_size=args.latent_size,
+    h_size=args.hidden_size,
+    time_factors=args.time_factors,
+    num_level_layers=args.num_level_layers,
+    num_mix=args.num_mix,
+    num_bins=2 ** args.num_bits,
+    residual_posterior=args.residual_posterior
+)
+# model = vseq.models.CWVAEAudioTasNet(
 #     z_size=args.latent_size,
 #     h_size=args.hidden_size,
 #     time_factors=args.time_factors,
@@ -82,15 +91,15 @@ rich.print(vars(args))
 #     num_bins=2 ** args.num_bits,
 #     residual_posterior=args.residual_posterior
 # )
-model = vseq.models.CWVAEAudioCPCPretrained(
-    z_size=args.latent_size,
-    h_size=args.hidden_size,
-    time_factors=args.time_factors,
-    num_level_layers=args.num_level_layers,
-    num_mix=args.num_mix,
-    num_bins=2 ** args.num_bits,
-    residual_posterior=args.residual_posterior
-)
+# model = vseq.models.CWVAEAudioCPCPretrained(
+#     z_size=args.latent_size,
+#     h_size=args.hidden_size,
+#     time_factors=args.time_factors,
+#     num_level_layers=args.num_level_layers,
+#     num_mix=args.num_mix,
+#     num_bins=2 ** args.num_bits,
+#     residual_posterior=args.residual_posterior
+# )
 
 
 decode_transform = []
@@ -180,15 +189,18 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-        outputs.x_hat = decode_transform(outputs.x_hat)
-        reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+        if epoch % 10 == 0:
+            outputs.x_hat = decode_transform(outputs.x_hat)
+            reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000)
-        x = decode_transform(x)
-        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+            (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000)
+            x = decode_transform(x)
+            samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-        (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, use_mode_observations=True)
-        x = decode_transform(x)
-        samples_mode = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+            (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, use_mode_observations=True)
+            x = decode_transform(x)
+            samples_mode = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-    tracker.log(samples=samples, samples_mode=samples_mode, reconstructions=reconstructions)
+            tracker.log(samples=samples, samples_mode=samples_mode, reconstructions=reconstructions)
+        else:
+            tracker.log()
