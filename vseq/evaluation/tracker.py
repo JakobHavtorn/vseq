@@ -16,7 +16,6 @@ from torch.utils.data import DataLoader
 
 from .metrics import Metric
 
-
 FORMATTING_PATTERN = r"\[([^\]]+)\]"
 FORMATTING_REGEX = re.compile(FORMATTING_PATTERN)
 
@@ -44,6 +43,7 @@ class Tracker:
         print_every: Union[int, float] = 1.0,
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
+        cpu_util_window: int = 10
     ) -> None:
         """Tracks metrics, prints to console and logs to wandb.
 
@@ -68,7 +68,7 @@ class Tracker:
         # continously updated
         self.printed_last = 0
         self.last_log_line_len = 0
-        self.cpu_utils = collections.deque(maxlen=10)
+        self.cpu_utils = defaultdict(lambda: collections.deque(maxlen=cpu_util_window))
         self.source = None
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
@@ -129,7 +129,7 @@ class Tracker:
         self.set(source)
         iterator = iter(steppable)
 
-        if self.rank == 0 and hasattr(iterator, "_workers"):
+        if hasattr(iterator, "_workers"):
             workers = [psutil.Process(w.pid) for w in iterator._workers]
         else:
             workers = None
@@ -201,7 +201,7 @@ class Tracker:
         self.source = None
         self.printed_last = 0
         self.accumulated_output = defaultdict(list)
-        self.cpu_utils = collections.deque(maxlen=10)
+        self.cpu_utils[self.rank] = collections.deque(maxlen=10)
 
     def reset(self):
         """Reset all per-source attributes"""
@@ -248,9 +248,9 @@ class Tracker:
 
         if workers is not None:
             cpu = int(round(sum([p.cpu_percent(interval=0.0) for p in workers]), 0))
-            self.cpu_utils.append(cpu)
-        if len(self.cpu_utils):
-            cpu = sum(self.cpu_utils) / len(self.cpu_utils)
+            self.cpu_utils[self.rank].append(cpu)
+        if len(self.cpu_utils[self.rank]):
+            cpu = sum(self.cpu_utils[self.rank]) / len(self.cpu_utils[self.rank])
             cpu = f"{cpu:.0f}%"
         else:
             cpu = "-"
@@ -358,3 +358,5 @@ class Tracker:
             for source in self.best_values.keys():
                 self.print(source=source)
                 print(flush=True)
+
+        distributed.barrier()
