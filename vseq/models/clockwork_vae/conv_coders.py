@@ -41,7 +41,7 @@ def get_level(
             layers.append(nn.ConvTranspose1d(c_i, c_o, kernel_size=kernel_size, stride=stride))
             layers.append(Pad(get_same_padding(layers[-1])[1]))
         else:
-            padding = kernel_size // 2  # same padding
+            padding = 0 if kernel_overlap_factor == 0 else kernel_size // 2  # same padding
             layers.append(nn.Conv1d(c_i, c_o, kernel_size=kernel_size, stride=stride, padding=padding))
 
         layers.append(activation())
@@ -96,35 +96,59 @@ class AudioEncoderConv1d(nn.Module):
         return encodings
 
 
+class ContextDecoderConv1d(nn.Module):
+    def __init__(
+        self,
+        # h_size: int,
+        # time_factors: List[int],
+        # # proj_size: Union[int, List[int]] = None,
+        # activation: nn.Module = nn.ReLU,
+    ):
+        super().__init__()
+
+        level_1 = nn.Sequential(
+            Permute(0, 2, 1),
+            *get_level(896, -(448+64), [1], kernel_overlap_factor=2, transpose=True),  # (B, 896, T) -> (B, 384, T)
+            *get_level(384, -64, [2, 2, 2], kernel_overlap_factor=2, transpose=True),  # (B, 384, T) -> (B, 192, 8*T)
+            Permute(0, 2, 1),
+        )
+
+        level_2 = nn.Sequential(
+            Permute(0, 2, 1),
+            *get_level(384, -(192+32), [1], kernel_overlap_factor=2, transpose=True),  # (B, 384, T*8) -> (B, 160, T*8)
+            *get_level(160, -32, [2, 2, 2], kernel_overlap_factor=2, transpose=True),  # (B, 160, T*8) -> (B, 64, T*64)
+            Permute(0, 2, 1),
+        )
+
+        self.levels = nn.ModuleList([level_1, level_2])
+
+    def forward(self, x: TensorType["B", "T", "D"]) -> List[TensorType["B", "T", "D"]]:
+        # import IPython; IPython.embed(using=False)
+        hidden = self.levels(x)
+        return hidden
+
+
 class AudioDecoderConv1d(nn.Module):
     def __init__(
         self,
         # h_size: int,
         # time_factors: List[int],
         # # proj_size: Union[int, List[int]] = None,
-        # num_level_layers: int = 3,
+        num_levels: int = 3,
         # activation: nn.Module = nn.ReLU,
     ):
         super().__init__()
 
-        # level_1 = nn.Sequential(
-        #     get_level(1, 15, [8], 2, transpose=True),  # (B, 1, T) -> (B, 16, T/8)
-        #     get_level(16, 16, [4, 2, 1], 2, transpose=True),  # (B, 16, T) -> (B, 64, T/64)
-        # )
-        # level_2 = get_level(64, 32, [2, 2, 2, 1], 2, transpose=True)  # (B, 64, T) -> (B, 192, T/512)
-        # level_3 = get_level(192, 64, [2, 2, 2, 1], 2, transpose=True)  # (B, 192, T) -> (B, 448, T/4096)
-
-        self.level = nn.Sequential(
-            *get_level(128, -64, [1], kernel_overlap_factor=2, transpose=True),  # (B, 1, T) -> (B, 16, T/8)
-            *get_level(64, -16, [2, 4, 8], kernel_overlap_factor=2, transpose=True),  # (B, 16, T) -> (B, 64, T/64)
+        level_3 = nn.Sequential(
+            Permute(0, 2, 1),
+            *get_level(128, -64, [1], kernel_overlap_factor=2, transpose=True),  # (B, 128, T*64) -> (B, 64, T*64)
+            *get_level(64, -16, [2, 4, 8], kernel_overlap_factor=2, transpose=True),  # (B, 16, T*64) -> (B, 64, T*4096)
+            Permute(0, 2, 1),
         )
 
-        # self.levels = nn.ModuleList([level_1, level_2, level_3])
+        self.level = nn.Sequential(*level_3)
 
     def forward(self, x: TensorType["B", "T", "D"]) -> List[TensorType["B", "T", "D"]]:
         # import IPython; IPython.embed(using=False)
-        hidden = self.level(x.permute(0, 2, 1))
-        # hidden = self.levels[0](hidden)
-        # hidden = self.levels[1](hidden)
-        # hidden = self.levels[2](hidden)
-        return hidden.permute(0, 2, 1)
+        hidden = self.level(x)
+        return hidden
