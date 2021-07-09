@@ -17,7 +17,7 @@ from vseq.utils.operations import sequence_mask
 from .coders import DenseAudioEncoder, DenseAudioDecoder
 from .tasnet_coder import TasNetDecoder, TasNetEncoder
 from .cpc_coders import CPCDecoder, CPCEncoder
-from .conv_coders import AudioEncoderConv1d, AudioDecoderConv1d
+from .conv_coders import AudioEncoderConv1d, AudioDecoderConv1d, ContextDecoderConv1d
 
 
 def get_exponential_time_factors(abs_factor, num_levels):
@@ -255,9 +255,7 @@ class CWVAE(nn.Module):
                     context = [context[i // factor] for i in range(len(context) * factor)]
                 else:
                     raise NotImplementedError("A context decoder could be used instead of repeating the context")
-                    import IPython
-
-                    IPython.embed(using=False)
+                    import IPython; IPython.embed(using=False)
                     context = torch.stack(context, dim=1)
                     context = self.context_decoder[l](context)
 
@@ -579,11 +577,12 @@ class CWVAEAudioConv1d(BaseModel):
 
         encoder = AudioEncoderConv1d(num_levels=self.num_levels)
 
-        decoder = AudioDecoderConv1d()
+        decoder = AudioDecoderConv1d(num_levels=self.num_levels)
 
         self.cwvae = CWVAE(
             encoder=encoder,
             decoder=decoder,
+            context_decoder=ContextDecoderConv1d(),
             likelihood=likelihood,
             z_size=z_size,
             h_size=h_size,
