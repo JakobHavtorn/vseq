@@ -99,9 +99,16 @@ test_dataset = BaseDataset(
 train_sampler = LengthTrainSampler(
     source=LIBRISPEECH_TRAIN,
     field="length.txt.chars",
-    max_len=float(args.sample_rate * args.seconds_pr_batch),
-    max_pool_difference=float(args.sample_rate * args.max_second_diff)
+    max_len=float(args.max_len),
+    max_pool_difference=float(args.max_pool_difference),
+    num_batches=2000
 )
+
+# val_sampler = LengthEvalSampler(
+#     source=LIBRISPEECH_DEV_CLEAN,
+#     field="length.txt.chars",
+#     max_len=float(args.max_len),
+# )
 
 train_loader = DataLoader(
     dataset=train_dataset,
