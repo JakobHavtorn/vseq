@@ -2,7 +2,6 @@
 
 from types import SimpleNamespace
 from typing import List, Optional
-from torch.tensor import Tensor
 
 import tqdm
 import numpy as np
