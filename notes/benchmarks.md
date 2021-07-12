@@ -73,36 +73,41 @@ Observations:
 - Using a convolutional decoder instead of dense improves likelihood
 - MuLaw encoding makes training more stable and sample quality higher
 - 16bit VS 8bit output: 
+- 16bit VS 8bit input:
+  - 8bit quantized input (instead of 16bit) makes no difference when output is 8bit
 
-| Dataset | TIMIT (waveform) |     | Notes                                                                                                          | Name                            |
-| ------- | ---------------- | --- | -------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| CWVAE   | 1.308 (e750)     |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen (160) (frames)                                                      | zany-durian                     |
-| CWVAE   | 1.144 (e450)     |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen, conv decoder (160) (frames)                                        | easy-meadow                     |
-| CWVAE   | 0.831 (589)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames)                                    | likely-firefly                  |
-| CWVAE   | 4.175 (531)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                    | warm-breeze                     |
-| CWVAE   | 4.131 (539)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-value 1  | rosy-deluge                     | ~same loss jumps                            |
-| CWVAE   | 4.16 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-norm 1   | restful-leaf-40                 |
-| CWVAE   | 4.16 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out) clip-grad-norm 0.1 | glowing-disco-43                |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, linear-upsample-conv decoder (160) (MuLaw 8bit in 8bit out)    | genial-cosmos-39 + lucky-dfg-49 |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, nearest-upsample-conv decoder (160) (MuLaw 8bit in 8bit out)   | crimson-silence-50              |
-| CWVAE   | **running**      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                    | genial-snow + dark-grass-48     |
-| CWVAE   | 8.56 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames 16bit in 16bit out)                 | clean-morning-45                |
-| CWVAE   | 12.2 (e750)      |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 16bit out)                   | wise-sunset-46                  | still converging.. very interesting samples |
-| CWVAE   | 13.02 (e750)     |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw truly 16bit in 16bit out)            | silver-smoke-59                 | MuLaw with 16bit divisor                    |
-| CWVAE   | 12.08 (e750)     |     | 1L DLaplaceM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)            | sage-deluge-58                  | ...                                         |
-| CWVAE   | **running**      |     | 1L DLaplaceM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)             | legendary-cloud-62              | ...                                         |
-| CWVAE   | 4.344 (e750)     |     | 1L DLM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                     | apricot-monkey-47               | more noisy than 10 mixture components       |
+| Dataset | TIMIT (waveform)          |     | Notes                                                                                                           | Name                            |
+| ------- | ------------------------- | --- | --------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| CWVAE   | 1.308 (e750)              |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen (160) (frames)                                                       | zany-durian                     |
+| CWVAE   | 1.144 (e450)              |     | 1L DLM 10 mix PretrainedCPCEncoder, frozen, conv decoder (160) (frames)                                         | easy-meadow                     |
+| CWVAE   | 0.831 (589)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames)                                     | likely-firefly                  |
+| CWVAE   | 4.175 (531)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 8bit out)                    | warm-breeze                     |
+| CWVAE   | 4.131 (539)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 8bit out) clip-grad-value 1  | rosy-deluge                     | ~same loss jumps                            |
+| CWVAE   | 4.16 (e750)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 8bit out) clip-grad-norm 1   | restful-leaf-40                 |
+| CWVAE   | 4.16 (e750)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 8bit out) clip-grad-norm 0.1 | glowing-disco-43                |
+| CWVAE   | 4.365 (e750)              |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, linear-upsample-conv decoder (160) (MuLaw 16bit in 8bit out)    | genial-cosmos-39 + lucky-fog-49 |
+| CWVAE   |                           |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, nearest-upsample-conv decoder (160) (MuLaw 16bit in 8bit out)   | crimson-silence-50              |
+| CWVAE   | 8.56 (e750)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (frames 16bit in 16bit out)                  | clean-morning-45                |
+| CWVAE   | 12.2 (e750)               |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)                   | wise-sunset-46                  | still converging.. very interesting samples |
+| CWVAE   | 13.02 (e750)              |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit divisor in 16bit out)           | silver-smoke-59                 | MuLaw with 16bit divisor                    |
+| CWVAE   | 12.08 (e750)              |     | 1L DLaplaceM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)             | sage-deluge-58                  | ...                                         |
+| CWVAE   | 12.278 (e480) **running** |     | 1L DLaplaceM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 16bit in 16bit out)              | legendary-cloud-62              | ...                                         |
+| CWVAE   | 4.172 (e750)              |     | 1L DLM 10 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                     | genial-snow + dark-grass-48     | 8bit quantized input (instead of 16bit)     |
+| CWVAE   | 4.328 (e750)              |     | 1L DLM 1 mix PretrainedCPCEncoder, not frozen, conv decoder (160) (MuLaw 8bit in 8bit out)                      | apricot-monkey-47               | more noisy than 10 mixture components       |
 
 
 
 **Convolution encoder/decoder**
 
-| Dataset | TIMIT (waveform) |     | Notes                                                              | Name                    |
-| ------- | ---------------- | --- | ------------------------------------------------------------------ | ----------------------- |
-| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (zero kernel overlap) | royal-fog-73            |
-| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)                       | misunderstood-breeze-70 |
-| CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit)                  | wise-blaze-71           |
-| CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit)            | volcanic-microwave-72   |
+| Dataset | TIMIT (waveform) |     | Notes                                                                    | Name                    |
+| ------- | ---------------- | --- | ------------------------------------------------------------------------ | ----------------------- |
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (zero kernel overlap)       | royal-fog-73            |
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)                             | misunderstood-breeze-70 |
+| CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit)                        | wise-blaze-71           |
+| CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit)                  | volcanic-microwave-72   |
+| CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit) (ContextDecoder)       | major-violet-7          |
+| CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit) (ContextDecoder) | exalted-night-7         |
+
 
 
 ```

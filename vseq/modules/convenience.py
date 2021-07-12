@@ -6,8 +6,8 @@ import torch.nn.functional as F
 
 
 class Permute(nn.Module):
-    def __init__(self, *dims, n_batch_dims: int = 1):
-        """nn.Module wrapper of Tensor.permute. Does not require specifying batch dimension(s)"""
+    def __init__(self, *dims, n_batch_dims: int = 0):
+        """nn.Module wrapper of Tensor.permute. Optionally, does not require specifying batch dimension(s)"""
         super().__init__()
         self.dims = dims
         self.n_batch_dims = n_batch_dims

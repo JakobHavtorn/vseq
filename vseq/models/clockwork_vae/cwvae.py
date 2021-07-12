@@ -14,7 +14,7 @@ from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, Discretiz
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
-from .coders import DenseAudioEncoder, DenseAudioDecoder
+from .dense_coders import DenseAudioEncoder, DenseAudioDecoder
 from .tasnet_coder import TasNetDecoder, TasNetEncoder
 from .cpc_coders import CPCDecoder, CPCEncoder
 from .conv_coders import AudioEncoderConv1d, AudioDecoderConv1d, ContextDecoderConv1d
@@ -139,7 +139,11 @@ class CWVAE(nn.Module):
 
         self.z_size = [z_size] * self.num_levels if isinstance(z_size, int) else z_size
         self.h_size = [h_size] * self.num_levels if isinstance(h_size, int) else h_size
-        self.c_size = [z_dim + h_dim for z_dim, h_dim in zip(self.z_size[1:], self.h_size[1:])] + [0]
+        if context_decoder is None:
+            self.c_size = [z_dim + h_dim for z_dim, h_dim in zip(self.z_size[1:], self.h_size[1:])] + [0]
+        else:
+            # When using context decoder that changes num_channels to that of layer below
+            self.c_size = [h_dim for z_dim, h_dim in zip(self.z_size[:-1], self.h_size[:-1])] + [0]
 
         assert (
             len(self.z_size) == len(self.h_size) == len(self.c_size)
@@ -148,7 +152,13 @@ class CWVAE(nn.Module):
         cells = []
         for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.e_size):
             cells.append(
-                RSSMCell(h_dim=h_dim, z_dim=z_dim, e_dim=e_dim, c_dim=c_dim, residual_posterior=residual_posterior)
+                RSSMCell(
+                    h_dim=h_dim,
+                    z_dim=z_dim,
+                    e_dim=e_dim,
+                    c_dim=c_dim,
+                    residual_posterior=residual_posterior,
+                )
             )
         self.cells = nn.ModuleList(cells)
 
@@ -223,10 +233,10 @@ class CWVAE(nn.Module):
 
         # compute encodings
         encodings = self.encoder(x)
-        encodings_t = [enc.unbind(1) for enc in encodings]
+        encodings = [enc.unbind(1) for enc in encodings]
 
         # initial context for top layer
-        context = [self.cells[0].get_empty_context(batch_size=x.size(0))] * len(encodings_t[-1])
+        context_l = [self.cells[0].get_empty_context(batch_size=x.size(0))] * len(encodings[-1])
 
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
@@ -234,42 +244,42 @@ class CWVAE(nn.Module):
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
-            T = len(encodings_t[l])
-            for t in range(T):
+            T_l = len(encodings[l])
+            for t in range(T_l):
                 # reset stochastic state whenever the layer above ticks (never reset top)
-                if self.with_resets and (l < self.num_levels - 1) and (t % factor == 0):
+                if self.with_resets and (l < self.num_levels - 1) and (t % self.strides[l + 1] == 0):
                     states[l] = self.cells[l].get_initial_state(batch_size=x.size(0))
 
                 # cell forward
-                states[l], distributions = self.cells[l](encodings_t[l][t], states[l], context[t])
+                states[l], distributions = self.cells[l](encodings[l][t], states[l], context_l[t])
 
                 all_states.append(states[l])
                 all_distributions.append(distributions)
 
-            # update context for below layer as cat(z_l, h_l)
-            context = [torch.cat(all_states[t], dim=-1) for t in range(T)]
+            # update context_l for below layer as cat(z_l, h_l)
+            context_l = [torch.cat(all_states[t], dim=-1) for t in range(T_l)]
             if l >= 1:
                 if self.context_decoder is None:
-                    # repeat to temporal resolution of below layer
-                    factor = int(self.time_factors[l] / self.time_factors[l - 1])
-                    context = [context[i // factor] for i in range(len(context) * factor)]
+                    # repeat context to temporal resolution of below layer
+                    context_l = [context_l[i // self.strides[l]] for i in range(T_l * self.strides[l])]
                 else:
-                    raise NotImplementedError("A context decoder could be used instead of repeating the context")
-                    import IPython; IPython.embed(using=False)
-                    context = torch.stack(context, dim=1)
-                    context = self.context_decoder[l](context)
+                    # use context decoder to increase temporal resolution
+                    # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
+                    context_l = torch.stack(context_l, dim=1)
+                    context_l = self.context_decoder.levels[l-1](context_l)
+                    context_l = context_l.unbind(1)
 
             # compute kl divergence
-            enc_mu = torch.stack([all_distributions[t].enc_mu for t in range(T)], dim=1)
-            enc_sd = torch.stack([all_distributions[t].enc_sd for t in range(T)], dim=1)
-            prior_mu = torch.stack([all_distributions[t].prior_mu for t in range(T)], dim=1)
-            prior_sd = torch.stack([all_distributions[t].prior_sd for t in range(T)], dim=1)
+            enc_mu = torch.stack([all_distributions[t].enc_mu for t in range(T_l)], dim=1)
+            enc_sd = torch.stack([all_distributions[t].enc_sd for t in range(T_l)], dim=1)
+            prior_mu = torch.stack([all_distributions[t].prior_mu for t in range(T_l)], dim=1)
+            prior_sd = torch.stack([all_distributions[t].prior_sd for t in range(T_l)], dim=1)
 
             kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
             kl_divs[l] = kld
 
-        context = torch.stack(context, dim=1)
-        dec = self.decoder(context)
+        context_l = torch.stack(context_l, dim=1)
+        dec = self.decoder(context_l)
 
         parameters = self.likelihood(dec)
 
@@ -290,43 +300,51 @@ class CWVAE(nn.Module):
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
+        # initial RSSM state (z, h)
+        states = [cell.get_initial_state(batch_size=n_samples) for cell in self.cells] if state0 is None else state0
+
         if x is not None:
             raise NotImplementedError("Conditional generation is not implemented")
             # TODO Run a forward pass over x to get conditional initial state0 (assert state0 is None)
-            #      Construct context as concatenation of state0 of layer above (empty for top layer)
+            #      Construct context_l as concatenation of state0 of layer above (empty for top layer)
         else:
-            # initial context for top layer
-            context = [self.cells[0].get_empty_context(batch_size=n_samples)] * (max_timesteps // self.time_factors[-1])
-
-            # initial RSSM state (z, h)
-            states = [cell.get_initial_state(batch_size=n_samples) for cell in self.cells] if state0 is None else state0
+            # initial context_l for top layer
+            context_l = [self.cells[0].get_empty_context(batch_size=n_samples)] * (
+                max_timesteps // self.time_factors[-1]
+            )
 
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
-            T = max_timesteps // self.time_factors[l] if l == self.num_levels - 1 else len(context)
-            for t in range(T):
+            T_l = max_timesteps // self.time_factors[l] if l == self.num_levels - 1 else len(context_l)
+            for t in range(T_l):
                 # reset stochastic state whenever the layer above ticks (never reset top)
-                if self.with_resets and (l < self.num_levels - 1) and (t % factor == 0):
+                if self.with_resets and (l < self.num_levels - 1) and (t % self.strides[l + 1] == 0):
                     states[l] = self.cells[l].get_initial_state(batch_size=x.size(0))
 
                 # cell forward
                 states[l], distributions = self.cells[l].generate(
-                    states[l], context[t], use_mode=use_mode or use_mode_latents
+                    states[l], context_l[t], use_mode=use_mode or use_mode_latents
                 )
 
                 all_states.append(states[l])
                 all_distributions.append(distributions)
 
-            # update context for below layer as cat(z_l, h_l)
-            context = [torch.cat(all_states[t], dim=-1) for t in range(T)]
+            # update context_l for below layer as cat(z_l, h_l)
+            context_l = [torch.cat(all_states[t], dim=-1) for t in range(T_l)]
             if l >= 1:
-                # repeat to temporal resolution of below layer
-                factor = int(self.time_factors[l] / self.time_factors[l - 1])
-                context = [context[i // factor] for i in range(len(context) * factor)]
+                if self.context_decoder is None:
+                    # repeat context to temporal resolution of below layer
+                    context_l = [context_l[i // self.strides[l]] for i in range(T_l * self.strides[l])]
+                else:
+                    # use context decoder to increase temporal resolution
+                    # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
+                    context_l = torch.stack(context_l, dim=1)
+                    context_l = self.context_decoder.levels[l-1](context_l)
+                    context_l = context_l.unbind(1)
 
-        context = torch.stack(context, dim=1)
-        dec = self.decoder(context)
+        context_l = torch.stack(context_l, dim=1)
+        dec = self.decoder(context_l)
 
         parameters = self.likelihood(dec)
 
@@ -336,7 +354,7 @@ class CWVAE(nn.Module):
             x = self.likelihood.sample(parameters)
 
         x_sl = torch.ones(x.shape[1], dtype=torch.int) * max_timesteps
-        outputs = SimpleNamespace()  # SimpleNamespace(context=context, all_distributions=all_distributions)
+        outputs = SimpleNamespace()  # SimpleNamespace(context_l=context_l, all_distributions=all_distributions)
         return (x, x_sl), outputs
 
 
@@ -577,7 +595,7 @@ class CWVAEAudioConv1d(BaseModel):
 
         encoder = AudioEncoderConv1d(num_levels=self.num_levels)
 
-        decoder = AudioDecoderConv1d(num_levels=self.num_levels)
+        decoder = AudioDecoderConv1d(num_levels=self.num_levels - 1)
 
         self.cwvae = CWVAE(
             encoder=encoder,
