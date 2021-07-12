@@ -190,11 +190,12 @@ class Model(nn.Module):
         self.enc_act = nn.ReLU6()
         self.enc_conv_2 = nn.Conv1d(
             in_channels=256,
-            out_channels=len(token_map),
+            out_channels=256,
             kernel_size=5,
             stride=5
         )
-
+        self.enc_act_2 = nn.ReLU6()
+        
         # decoder
         self.dec_conv = nn.ConvTranspose1d(
             in_channels=len(token_map),
@@ -237,7 +238,6 @@ class Model(nn.Module):
         logits = logits.permute(0, 2, 1)
         
         z_btd = F.gumbel_softmax(logits=logits, tau=tau, hard=hard)
-        # z_btd = logits.softmax(dim=-1)
         z_sl = x_sl // 50
         tm_z = sequence_mask(z_sl, dtype=torch.float32, device=x.device) # (B, T)
         z_btd = z_btd * tm_z.unsqueeze(2)
@@ -275,10 +275,10 @@ class Model(nn.Module):
 
         # alternative div loss # 3 (uniform KL)
         conj_post = z_btd.sum(dim=(0, 1)) / z_sl.sum() # or softmax normalization
-        kl = (conj_post * torch.log(conj_post / (self.prior + 1e-10) + 1e-10)).sum()
+        D = - (conj_post * torch.log(conj_post / (self.prior + 1e-10) + 1e-10)).sum()
 
         # add diversity loss:
-        loss = rec_loss + kl + (hard * H)
+        loss = (hard * rec_loss) - (D * alpha)
         #loss = rec_loss
 
         
@@ -291,7 +291,7 @@ class Model(nn.Module):
             LossMetric(rec_loss, weight_by=x_sl.sum(), name="rec"),
             WindowMeanMetric(rec_loss),
             WindowMeanMetric(H, name="H"),
-            WindowMeanMetric(kl, name="kl"),
+            WindowMeanMetric(D, name="D"),
             WindowMeanMetric(torch.Tensor([alpha]), name="alpha"),
             WindowMeanMetric(torch.Tensor([tau]), name="tau")
         ]
@@ -318,12 +318,14 @@ optimizer = optimizer(model.parameters(), lr=args.lr_max, **args.optimizer_kwarg
 lr_scheduler = CosineAnnealingLR(optimizer, T_max=(args.epochs - args.warm_up), eta_min=args.lr_min)
 
 tracker = Tracker()
+p = list(model.parameters())
 
 for epoch in tracker.epochs(args.epochs):
 
     # update hyperparams (post)
     p = (epoch - 1) / (args.epochs - 1)
     tau = 3.0 - 2.9 * p
+    hard = p
     #tau = 0.1 + 4.0 * max(0, (6 - epoch) / 5) #4.0 - ((epoch - 1)/(args.epochs - 1)) * 3.9
     alpha = 1.0 # 1 - max(min(1, epoch - 3), 0)
 
@@ -334,7 +336,7 @@ for epoch in tracker.epochs(args.epochs):
         x = x.to(device)
         y = y.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=p)
+        loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=hard)
 
         optimizer.zero_grad()
         loss.backward()
@@ -353,7 +355,7 @@ for epoch in tracker.epochs(args.epochs):
             x = x.to(device)
             y = y.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=True)
+            loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=1.0)
             refs.append(y.cpu())
             hyps.append(outputs.logits.argmax(-1).cpu())
             lens.append(y_sl)

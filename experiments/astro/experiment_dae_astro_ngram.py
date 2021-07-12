@@ -165,14 +165,66 @@ val_loader = DataLoader(
     batch_sampler=val_sampler
 )
 
-# model = AstroDAE(
-#     token_map=token_map,
-#     in_channels=1,
-#     kernels=args.conv_kernels,
-#     hidden_size=args.hidden_size,
-#     lstm_layers=args.lstm_layers,
-#     bits=8
-# )
+# build trigram prior
+start_idx = len(token_map)
+N = len(token_map) + 1
+counts = torch.zeros([N, N, N])
+c = 0
+for ((x, x_sl), (y, y_sl)), metadata in train_loader:
+    p = torch.full([y.size(0), 2], start_idx)
+    y = torch.cat([p, y], dim=1)
+    m = sequence_mask(y_sl + 2)
+    y = y[m]
+    for i in range(len(y) - 2):
+        counts[y[i]][y[i+1]][y[i+2]] += 1
+    print(c)
+    c += 1
+counts += 1e-3
+counts = counts[..., :-1] # 
+ngrams = counts / counts.sum(dim=2, keepdim=True)
+ngrams = ngrams.to(device)
+
+# # test trigram prior
+# c = 0
+# probs = []
+# for ((x, x_sl), (y, y_sl)), metadata in train_loader:
+#     p = torch.full([y.size(0), 2], start_idx)
+#     y = torch.cat([p, y], dim=1)
+#     m = sequence_mask(y_sl + 2)
+#     y = y[m]
+#     for i in range(len(y) - 2):
+#         if not y[i+2].item() == 28:
+#             probs.append(ngrams[y[i]][y[i+1]][y[i+2]])
+#     print(c)
+#     c += 1
+# import IPython; IPython.embed()
+
+# # test generate samples
+# import random
+# samples = []
+# for i in range(10):
+#     s = [start_idx, start_idx]
+#     for j in range(40):
+#         c1 = s[-2]
+#         c2 = s[-1]
+#         p = ngrams[c1, c2]
+#         c = (random.random() > p.cumsum(0)).sum().item()
+#         s.append(c)
+#     samples.append(s)
+
+# import IPython; IPython.embed()
+
+
+def compute_prior(ngrams, logits):
+
+    preds = logits.argmax(-1)
+    p = torch.full([logits.size(0), 2], start_idx).to(device)
+    preds = torch.cat([p, preds], dim=1)
+    prior = torch.zeros_like(logits).to(torch.float32).to(logits.device)
+    for i in range(logits.size(0)):
+        for j in range(logits.size(1)):
+            prior[i, j] += ngrams[preds[i, j]][preds[i, j + 1]]
+    return prior
 
 class Model(nn.Module):
 
@@ -236,8 +288,12 @@ class Model(nn.Module):
         logits = self.enc_conv_2(logits)
         logits = logits.permute(0, 2, 1)
         
-        z_btd = F.gumbel_softmax(logits=logits, tau=tau, hard=hard)
-        # z_btd = logits.softmax(dim=-1)
+        z_btd = F.gumbel_softmax(logits=logits, tau=tau, hard=False)
+        oh = F.one_hot(z_btd.argmax(-1), num_classes=28).to(torch.float32).detach()
+        z_btd = z_btd + (oh - z_btd.detach()) * hard
+
+        prior = compute_prior(ngrams, z_btd)
+
         z_sl = x_sl // 50
         tm_z = sequence_mask(z_sl, dtype=torch.float32, device=x.device) # (B, T)
         z_btd = z_btd * tm_z.unsqueeze(2)
@@ -260,28 +316,12 @@ class Model(nn.Module):
         H_pd =  - (softmax * torch.log(softmax + 1e-10)).sum(-1) * tm_z
         H = H_pd.sum() / z_sl.sum()
 
-        # compute div loss # 0 (not great)
-        # softmax = (logits * tm_z.unsqueeze(2)).mean(dim=(0, 1)).softmax(0)
-        # D =  - (softmax * torch.log(softmax)).sum()
-        
-        # alternative div loss # 1 (better)
-        # softmax = (logits.softmax(dim=-1) * tm_z.unsqueeze(2)).sum(dim=(0, 1)) / z_sl.sum()
-        # D =  - (softmax * torch.log(softmax)).sum()
-
-        # import IPython; IPython.embed()
-        # alternative div loss # 2 (best observed with 0.04 rec)
-        # softmax = z_btd.sum(dim=(0, 1)) / z_sl.sum() # or softmax normalization
-        # D =  - (softmax * torch.log(softmax + 1e-10)).sum()
-
         # alternative div loss # 3 (uniform KL)
-        conj_post = z_btd.sum(dim=(0, 1)) / z_sl.sum() # or softmax normalization
-        kl = (conj_post * torch.log(conj_post / (self.prior + 1e-10) + 1e-10)).sum()
+        kl = (z_btd * torch.log(z_btd / (prior + 1e-10) + 1e-10)).sum() / z_sl.sum()
 
         # add diversity loss:
-        loss = rec_loss + kl + (hard * H)
-        #loss = rec_loss
+        loss = rec_loss + kl
 
-        
         outputs = SimpleNamespace(
             logits=logits,
             z=z_btd
@@ -298,16 +338,12 @@ class Model(nn.Module):
 
         return loss, metrics, outputs
 
-# build unigram prior
-chars = []
-for ((x, x_sl), (y, y_sl)), metadata in train_loader:
-    m = sequence_mask(y_sl)
-    chars.append(y[m])
-chars = torch.cat(chars, dim=0)
-counts = torch.bincount(chars, minlength=len(token_map))
-prior = counts / counts.sum()
+
+
+
 #prior = None
-model = Model(prior=prior)
+model = Model()
+
 
 
 model.to(device)
@@ -353,7 +389,7 @@ for epoch in tracker.epochs(args.epochs):
             x = x.to(device)
             y = y.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=True)
+            loss, metrics, outputs = model(x, x_sl, y, y_sl, tau=tau, alpha=alpha, hard=1.0)
             refs.append(y.cpu())
             hyps.append(outputs.logits.argmax(-1).cpu())
             lens.append(y_sl)

@@ -3,7 +3,6 @@ from vseq.models.bowman import Bowman
 from vseq.models.lstmlm import LSTMLM
 from vseq.models.wavenet.model import WaveNet
 from vseq.models.base_model import BaseModel
-from vseq.models.lstm_encoder import LSTMEncoder
 from vseq.models.bahdanau_attention_decoder import BahdanauAttentionDecoder
 from vseq.models.bahdanau_attention_onepass_decoder import BahdanauAttentionOnepassDecoder
 from vseq.models.multihead_attention_decoder import MultiheadAttentionDecoder
@@ -12,5 +11,4 @@ from vseq.models.deep_lstm_asr import DeepLSTMASR
 from vseq.models.astro_ctc_asr import AstroCTCASR
 from vseq.models.astro_ce_asr import AstroCEASR
 from vseq.models.astro_dae import AstroDAE
-from vseq.models.deep_lstm_asr_revchar import DeepLSTMASR_REVCHAR
 

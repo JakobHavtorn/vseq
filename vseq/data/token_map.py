@@ -1,4 +1,5 @@
 from functools import partial
+from copy import deepcopy
 
 from typing import Iterable, List, Optional
 
@@ -28,6 +29,8 @@ class TokenMap:
     ) -> None:
 
         assert not (add_delimit and (add_end or add_start)), "Cannot use start or end token with delimiter token."
+
+        tokens = deepcopy(tokens)
 
         self.add_start = add_start
         self.add_end = add_end
