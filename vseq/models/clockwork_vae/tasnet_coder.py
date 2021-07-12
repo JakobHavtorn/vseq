@@ -41,18 +41,30 @@ class TasNetDecoder(nn.Module):
             # padding = (kernel_size - 1) * dilation if causal else (kernel_size - 1) * dilation // 2
             dilation = 1
             stride = 2 if remaining_stride >= 2 else 1
-            temporal_block = TemporalTransposeBlock(
-                channels_bottleneck,
-                channels_block,
-                kernel_size,
-                stride=stride,
-                padding=0,
-                dilation=dilation,
-                norm_type=norm_type,
-            )
-            _, unsym_pad = get_same_padding(temporal_block.dsconv.depthwise_conv)
-            blocks += [temporal_block, Pad(unsym_pad)]
-            # blocks += [temporal_block]
+            if stride > 1:
+                temporal_block = TemporalTransposeBlock(
+                    channels_bottleneck,
+                    channels_block,
+                    kernel_size,
+                    stride=stride,
+                    padding=0,
+                    dilation=dilation,
+                    norm_type=norm_type,
+                )
+                _, unsym_pad = get_same_padding(temporal_block.dsconv.depthwise_conv)
+                blocks += [temporal_block, Pad(unsym_pad)]
+            else:
+                temporal_block = TemporalBlock(
+                    channels_bottleneck,
+                    channels_block,
+                    kernel_size,
+                    stride=stride,
+                    padding=kernel_size // 2,
+                    dilation=dilation,
+                    norm_type=norm_type,
+                )
+                blocks += [temporal_block]
+
             remaining_stride = remaining_stride // 2 if remaining_stride >= 2 else remaining_stride
 
         assert remaining_stride == 1

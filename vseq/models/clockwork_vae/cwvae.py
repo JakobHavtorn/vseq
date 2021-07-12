@@ -647,27 +647,35 @@ class CWVAEAudioTasNet(BaseModel):
     def __init__(
         self,
         z_size: Union[int, List[int]] = 64,
-        h_size: int = 128,
-        time_factors: Union[int, List[int]] = 6,
+        h_size: Union[int, List[int]] = 128,
+        time_factors: Union[int, List[int]] = [64, 512, 4096],
         residual_posterior: bool = False,
         num_level_layers: int = 8,
         num_mix: int = 10,
         num_bins: int = 256,
+        norm_type: str = "ChannelwiseLayerNorm",
     ):
         super().__init__()
 
+        # TODO Kernel size given as overlap factor
+
         self.z_size = z_size
         self.h_size = h_size
+        self.time_factors = time_factors
         self.residual_posterior = residual_posterior
         self.num_level_layers = num_level_layers
         self.num_mix = num_mix
         self.num_bins = num_bins
-        self.time_factors = time_factors
+        self.norm_type = norm_type
+
         self.num_levels = len(time_factors)
 
         bot_z_size = z_size if isinstance(z_size, int) else z_size[0]
         bot_h_size = h_size if isinstance(h_size, int) else h_size[0]
         bot_c_size = bot_z_size + bot_h_size
+
+        assert all(h_size[0] == hs for hs in h_size)
+        h_size = h_size[0]
 
         likelihood = DiscretizedLogisticMixtureDense(
             x_dim=3 * num_mix,
@@ -684,7 +692,7 @@ class CWVAEAudioTasNet(BaseModel):
             kernel_size=5,
             num_blocks=num_level_layers,
             num_levels=self.num_levels,
-            norm_type="GlobalLayerNorm",
+            norm_type=norm_type,
         )
 
         decoder = TasNetDecoder(
@@ -695,7 +703,7 @@ class CWVAEAudioTasNet(BaseModel):
             channels_out=likelihood.out_features,
             kernel_size=5,
             num_blocks=num_level_layers,
-            norm_type="GlobalLayerNorm",
+            norm_type=norm_type,
         )
 
         self.cwvae = CWVAE(
