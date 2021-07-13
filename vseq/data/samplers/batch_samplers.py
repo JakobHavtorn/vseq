@@ -88,10 +88,23 @@ class LengthTrainSampler(Sampler):
                 return batches
 
         ordered_idxs = np.concatenate([random.sample(p, k=len(p)) for p in self.pools])  # shuffle each pool internally
-        batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_len).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(ordered_idxs, split_points)
-        batches = list(map(lambda x: x.tolist(), batches))
+        
+        batch, batches, batch_len = [], [], 0
+        for idx in ordered_idxs:
+            l = self.lengths[idx]
+            if batch_len + l <= self.max_len:
+                batch_len += l
+                batch.append(idx)
+            else:
+                batches.append(batch)
+                batch = [idx]
+                batch_len = l
+        
+        # batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_len).astype(int)
+        # split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
+        # batches = np.array_split(ordered_idxs, split_points)
+        # batches = list(map(lambda x: x.tolist(), batches))
+        
         random.shuffle(batches)  # shuffle the order of batches
 
         if self.num_batches is not None:
