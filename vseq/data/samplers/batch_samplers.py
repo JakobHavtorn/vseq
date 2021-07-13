@@ -160,10 +160,16 @@ class LengthEvalSampler(Sampler):
     def sample_batches(self):
         """Sample batches from the pools."""
         sorted_idxs = np.argsort(self.lengths)
-        batch_idxs = (self.lengths[sorted_idxs].cumsum() // self.max_len).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(sorted_idxs, split_points)
-        batches = list(map(lambda x: x.tolist(), batches))
+        batch, batches, batch_len = [], [], 0
+        for idx in sorted_idxs:
+            l = self.lengths[idx]
+            if batch_len + l <= self.max_len:
+                batch_len += l
+                batch.append(idx)
+            else:
+                batches.append(batch)
+                batch = [idx]
+                batch_len = l
         return batches
     
     def __iter__(self) -> Iterator[List[int]]:
