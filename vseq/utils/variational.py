@@ -174,7 +174,7 @@ def rsample_gumbel_softmax(
         be probability distributions that sum to 1 across `dim`.
 
     Note:
-        The main trick for `hard` is to do  `y_hard - y_soft.detach() + y_soft`
+        The main trick for `hard` is to do  `y_hard + (y_soft - y_soft.detach())`
         This achieves two things:
          1. makes the output value exactly one-hot (since we add then subtract y_soft value)
          2. makes the gradient equal to y_soft gradient (since we strip all other gradients)
@@ -201,7 +201,7 @@ def rsample_gumbel_softmax(
     # Straight through estimator
     index = y_soft.max(dim, keepdim=True)[1]
     y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
-    return y_hard - y_soft.detach() + y_soft
+    return y_hard + (y_soft - y_soft.detach())
 
 
 @torch.jit.script
