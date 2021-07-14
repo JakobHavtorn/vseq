@@ -73,6 +73,7 @@ class RSSMCell(torch.jit.ScriptModule):
         enc_inputs: torch.Tensor,
         state: Tuple[torch.Tensor, torch.Tensor],
         context: torch.Tensor,
+        temperature: float = 1.0,
         use_mode: bool = False,
     ):
         z, h = state
@@ -87,21 +88,27 @@ class RSSMCell(torch.jit.ScriptModule):
         if self.residual_posterior:
             enc_mu = enc_mu + prior_mu
 
-        z_new = self.posterior[-1].rsample((enc_mu, enc_sd)) if not use_mode else prior_mu
+        z_new = self.posterior[-1].rsample((enc_mu, temperature * enc_sd)) if not use_mode else prior_mu
 
         distributions = SimpleNamespace(enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
 
         return (z_new, h_new), distributions
 
     @torch.jit.export
-    def generate(self, state: Tuple[torch.Tensor, torch.Tensor], context: torch.Tensor, use_mode: bool = False):
+    def generate(
+        self,
+        state: Tuple[torch.Tensor, torch.Tensor],
+        context: torch.Tensor,
+        temperature: float = 1.0,
+        use_mode: bool = False,
+    ):
         z, h = state
 
         gru_in = self.gru_in(torch.cat([z, context], dim=-1))
         h_new = self.gru_cell(gru_in, h)
 
         prior_mu, prior_sd = self.prior(h_new)
-        z_new = self.prior[-1].rsample((prior_mu, prior_sd)) if not use_mode else prior_mu
+        z_new = self.prior[-1].rsample((prior_mu, temperature * prior_sd)) if not use_mode else prior_mu
 
         distributions = SimpleNamespace(prior_mu=prior_mu, prior_sd=prior_sd)
 
@@ -266,7 +273,7 @@ class CWVAE(nn.Module):
                     # use context decoder to increase temporal resolution
                     # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
                     context_l = torch.stack(context_l, dim=1)
-                    context_l = self.context_decoder.levels[l-1](context_l)
+                    context_l = self.context_decoder.levels[l - 1](context_l)
                     context_l = context_l.unbind(1)
 
             # compute kl divergence
@@ -297,6 +304,7 @@ class CWVAE(nn.Module):
         use_mode: bool = False,
         use_mode_latents: bool = False,
         use_mode_observations: bool = False,
+        temperature: float = 1,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -324,7 +332,7 @@ class CWVAE(nn.Module):
 
                 # cell forward
                 states[l], distributions = self.cells[l].generate(
-                    states[l], context_l[t], use_mode=use_mode or use_mode_latents
+                    states[l], context_l[t], temperature=temperature, use_mode=use_mode or use_mode_latents
                 )
 
                 all_states.append(states[l])
@@ -340,7 +348,7 @@ class CWVAE(nn.Module):
                     # use context decoder to increase temporal resolution
                     # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
                     context_l = torch.stack(context_l, dim=1)
-                    context_l = self.context_decoder.levels[l-1](context_l)
+                    context_l = self.context_decoder.levels[l - 1](context_l)
                     context_l = context_l.unbind(1)
 
         context_l = torch.stack(context_l, dim=1)
@@ -442,6 +450,7 @@ class CWVAEAudioDense(BaseModel):
         use_mode: bool = False,
         use_mode_latents: bool = False,
         use_mode_observations: bool = False,
+        temperature: float = 1,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -451,6 +460,7 @@ class CWVAEAudioDense(BaseModel):
             use_mode=use_mode,
             use_mode_latents=use_mode_latents,
             use_mode_observations=use_mode_observations,
+            temperature=temperature,
             x=x,
             state0=state0,
         )
@@ -545,6 +555,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
         use_mode: bool = False,
         use_mode_latents: bool = False,
         use_mode_observations: bool = False,
+        temperature: float = 1,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -554,6 +565,7 @@ class CWVAEAudioCPCPretrained(BaseModel):
             use_mode=use_mode,
             use_mode_latents=use_mode_latents,
             use_mode_observations=use_mode_observations,
+            temperature=temperature,
             x=x,
             state0=state0,
         )
@@ -629,6 +641,7 @@ class CWVAEAudioConv1d(BaseModel):
         use_mode: bool = False,
         use_mode_latents: bool = False,
         use_mode_observations: bool = False,
+        temperature: float = 1,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -638,6 +651,7 @@ class CWVAEAudioConv1d(BaseModel):
             use_mode=use_mode,
             use_mode_latents=use_mode_latents,
             use_mode_observations=use_mode_observations,
+            temperature=temperature,
             x=x,
             state0=state0,
         )
@@ -737,6 +751,7 @@ class CWVAEAudioTasNet(BaseModel):
         use_mode: bool = False,
         use_mode_latents: bool = False,
         use_mode_observations: bool = False,
+        temperature: float = 1,
         x: Optional[TensorType["B", "T", "D"]] = None,
         state0: Optional[List[Tuple[TensorType["B", "h_size"], TensorType["B", "z_size"]]]] = None,
     ):
@@ -746,6 +761,7 @@ class CWVAEAudioTasNet(BaseModel):
             use_mode=use_mode,
             use_mode_latents=use_mode_latents,
             use_mode_observations=use_mode_observations,
+            temperature=temperature,
             x=x,
             state0=state0,
         )

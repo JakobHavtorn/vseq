@@ -61,7 +61,7 @@ def get_vseq_envvar(envvar, default: Any = None, reflect: bool = False):
 
 # logging
 LOG_FORMAT = "%(asctime)-15s - %(module)-20s - %(levelname)-7s | %(message)s"
-LOG_LEVEL = get_vseq_envvar("VSEQ_LOG_LEVEL", "INFO")
+LOG_LEVEL = get_vseq_envvar("VSEQ_LOG_LEVEL", "WARNING")
 logging.basicConfig(format=LOG_FORMAT, level=logging.getLevelName(LOG_LEVEL))
 
 # data directories

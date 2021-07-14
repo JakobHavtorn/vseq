@@ -3,7 +3,7 @@
 ## Install 
 
 
-Install primary environment relying on pre-innstalled system CUDA.
+### Install primary environment relying on pre-innstalled system CUDA.
 
 ```bash
 conda deactivate
@@ -13,7 +13,7 @@ conda activate vseq
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
 ```
 
-Install primary environment using Conda to get CUDA.
+### Install primary environment using Conda to get CUDA.
 
 ```
 conda deactivate
@@ -24,7 +24,7 @@ conda install -y pytorch torchvision torchaudio torchtext cudatoolkit=11.1 -c py
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
 ```
 
-Install extra requirements
+### Install extra requirements
 
 ```bash
 pip install -r requirements-extra.txt
@@ -34,7 +34,7 @@ nbstripout --install
 
 ## Test
 
-To run testsm, execute
+To run tests, execute
 
 ```bash
 pytest -sv --cov --cov-report=term tests
@@ -93,6 +93,7 @@ See `experiments/sweep_test.yaml`
 
 ## Implementation suggestions
 - [ ] Method or class to define and build `Dataloader`s with proper defaults e.g. `pin_memory == True`.
+- [ ] A class to save and keep track of e.g. the top `k` best models and update based on some metric/score.
 
 
 ## Resources
@@ -100,4 +101,4 @@ See `experiments/sweep_test.yaml`
 Examples of how to write fairly fast custom recurrent cells with `TorchScript` can be found here: 
 https://github.com/pytorch/pytorch/blob/master/benchmarks/fastrnns/custom_lstms.py
 
-Libnear Gaussian State Space Model (https://github.com/rasmusbergpalm/pytorch-lgssm)
+Linear Gaussian State Space Model (https://github.com/rasmusbergpalm/pytorch-lgssm)

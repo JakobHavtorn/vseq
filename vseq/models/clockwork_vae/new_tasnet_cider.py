@@ -1,6 +1,6 @@
 import math
 
-from typing import List
+from typing import List, Union
 from vseq.modules.convenience import Pad
 
 import torch
@@ -9,15 +9,14 @@ import torch.nn.functional as F
 
 from torchtyping import TensorType
 
-from vseq.utils.convolutions import compute_conv_attributes, get_same_padding
+from vseq.utils.convolutions import compute_conv_attributes, get_same_padding, _single
 
 
 # TODO Share more code between encoder and decoders. Do this via `transposed` argument to some of the modules.
 #      Which module "level" to do this at? TemporalBlock or Conv(Transpose)DepthwiseSeparable1d?
 # TODO Implement a context decoder.
 # TODO Make the decoder be layered as the encoder
-# TODO Sample with a temperature lower than 1
-# TODO Add a small autoregressive model to the output space
+
 
 class TasNetDecoder(nn.Module):
     def __init__(
@@ -48,29 +47,17 @@ class TasNetDecoder(nn.Module):
             # padding = (kernel_size - 1) * dilation if causal else (kernel_size - 1) * dilation // 2
             dilation = 1
             stride = 2 if remaining_stride >= 2 else 1
-            if stride > 1:
-                temporal_block = TemporalTransposeBlock(
-                    channels_bottleneck,
-                    channels_block,
-                    kernel_size,
-                    stride=stride,
-                    padding=0,
-                    dilation=dilation,
-                    norm_type=norm_type,
-                )
-                _, unsym_pad = get_same_padding(temporal_block.dsconv.depthwise_conv)
-                blocks += [temporal_block, Pad(unsym_pad)]
-            else:
-                temporal_block = TemporalBlock(
-                    channels_bottleneck,
-                    channels_block,
-                    kernel_size,
-                    stride=stride,
-                    padding=kernel_size // 2,
-                    dilation=dilation,
-                    norm_type=norm_type,
-                )
-                blocks += [temporal_block]
+            temporal_block = TemporalBlock(
+                channels_bottleneck,
+                channels_block,
+                kernel_size,
+                stride=stride,
+                padding="same",
+                dilation=dilation,
+                norm_type=norm_type,
+                transposed=True,
+            )
+            blocks += [temporal_block]
 
             remaining_stride = remaining_stride // 2 if remaining_stride >= 2 else remaining_stride
 
@@ -103,9 +90,60 @@ class TasNetDecoder(nn.Module):
         return h
 
 
+# class TasNetEncoder(TasNetCoder):
+#     def __init__(
+#         self,
+#         time_factors: List[int],
+#         channels_in: int = 1,
+#         channels_bottleneck: int = 128,
+#         channels_block: int = 512,
+#         kernel_size: int = 5,
+#         num_blocks: int = 8,
+#         num_levels: int = 3,
+#         norm_type: str = "GlobalLayerNorm",
+#     ):
+#         super().__init__(
+#             time_factors=time_factors,
+#             channels_in=channels_in,
+#             channels_bottleneck=channels_bottleneck,
+#             channels_block=channels_block,
+#             kernel_size=kernel_size,
+#             num_blocks=num_blocks,
+#             num_levels=num_levels,
+#             norm_type=norm_type,
+#             transpose=False,
+#         )
+
+
+# class TasNetDecoder(TasNetCoder):
+#     def __init__(
+#         self,
+#         time_factors: List[int],
+#         channels_in: int = 1,
+#         channels_bottleneck: int = 128,
+#         channels_block: int = 512,
+#         kernel_size: int = 5,
+#         num_blocks: int = 8,
+#         num_levels: int = 3,
+#         norm_type: str = "GlobalLayerNorm",
+#     ):
+#         super().__init__(
+#             time_factors=time_factors,
+#             channels_in=channels_in,
+#             channels_bottleneck=channels_bottleneck,
+#             channels_block=channels_block,
+#             kernel_size=kernel_size,
+#             num_blocks=num_blocks,
+#             num_levels=num_levels,
+#             norm_type=norm_type,
+#             transpose=False,
+#         )
+
+
 class TasNetEncoder(nn.Module):
     def __init__(
         self,
+        # transposed: bool,
         time_factors: List[int],
         channels_in: int = 1,
         channels_bottleneck: int = 128,
@@ -130,6 +168,7 @@ class TasNetEncoder(nn.Module):
         """
         super().__init__()
 
+        # self.transposed = transposed
         self.time_factors = time_factors
         self.channels_bottleneck = channels_bottleneck
         self.kernel_size = kernel_size
@@ -166,7 +205,6 @@ class TasNetEncoder(nn.Module):
             nn.Conv1d(channels_block, channels_bottleneck, 1, bias=False),
         )
 
-        # import IPython; IPython.embed()
         # Blocks
         self.receptive_fields = []
         self.levels = nn.ModuleList()
@@ -241,9 +279,10 @@ class TemporalBlock(nn.Module):
         hidden_channels: int,
         kernel_size: int,
         stride: int,
-        padding: int,
+        padding: Union[int, str],
         dilation: int,
         norm_type: str,
+        transposed: bool = False,
     ):
         """Temporal Convolutional Network block.
 
@@ -252,7 +291,7 @@ class TemporalBlock(nn.Module):
             hidden_channels (int): Number of channels in intermediary hidden representations. Usually > in_out_channels.
             kernel_size (int): Kernel size for depth-wise separable convolution
             stride (int): Stride for depth-wise separable convolution
-            padding (int): Padding for depth-wise separable convolution
+            padding (str or int): Integer padding for depth-wise separable convolution or str "same" for same padding.
             dilation (int): Dilation for depth-wise separable convolution
             norm_type (str, optional): Name of the normalization to use. Defaults to "GlobalLayerNorm".
 
@@ -261,25 +300,38 @@ class TemporalBlock(nn.Module):
         """
         super().__init__()
 
-        self.stride = stride
+        self.in_out_channels = in_out_channels
+        self.hidden_channels = hidden_channels
         self.kernel_size = kernel_size
-        self.dilation = dilation
+        self.stride = stride
         self.padding = padding
+        self.dilation = dilation
+        self.norm_type = norm_type
+        self.transposed = transposed
 
         # [B, channels_bottleneck, T] -> [B, channels_block, T]
         self.conv1x1 = nn.Conv1d(in_out_channels, hidden_channels, 1, bias=False)
         self.prelu = nn.PReLU()
         self.norm = get_normalization(norm_type, num_channels=hidden_channels)
         # [B, channels_block, T] -> [B, channels_bottleneck, T]
-        self.dsconv = ConvDepthwiseSeparable1d(
-            hidden_channels,
-            in_out_channels,
+
+        if padding == "same":
+            sym_pad, unsym_pad = get_same_padding(kernel_size=kernel_size, stride=stride, dilation=dilation)
+            padding = unsym_pad if transposed else sym_pad
+
+        kwargs = dict(
+            in_channels=hidden_channels,
+            out_channels=in_out_channels,
             kernel_size=kernel_size,
             stride=stride,
-            padding=padding,
             dilation=dilation,
             norm_type=norm_type,
         )
+        if transposed and stride > 1:
+            dsconv = ConvTransposeDepthwiseSeparable1d(**kwargs, padding=0)
+            self.dsconv = nn.Sequential(dsconv, Pad(padding))
+        else:
+            self.dsconv = ConvDepthwiseSeparable1d(**kwargs, padding=padding)
 
     def forward(self, x):
         """
@@ -300,82 +352,87 @@ class TemporalBlock(nn.Module):
         # return F.relu(out + residual)
 
 
-class TemporalTransposeBlock(nn.Module):
-    def __init__(
-        self,
-        in_out_channels: int,
-        hidden_channels: int,
-        kernel_size: int,
-        stride: int,
-        padding: int,
-        dilation: int,
-        norm_type: str,
-    ):
-        """Temporal Convolutional Network block.
+# class TemporalTransposeBlock(nn.Module):
+#     def __init__(
+#         self,
+#         in_out_channels: int,
+#         hidden_channels: int,
+#         kernel_size: int,
+#         stride: int,
+#         padding: int,
+#         dilation: int,
+#         norm_type: str,
+#     ):
+#         """Temporal Convolutional Network block.
 
-        Args:
-            in_out_channels (int): Number of channels in input and output
-            hidden_channels (int): Number of channels in intermediary hidden representations. Usually > in_out_channels.
-            kernel_size (int): Kernel size for depth-wise separable convolution
-            stride (int): Stride for depth-wise separable convolution
-            padding (int): Padding for depth-wise separable convolution
-            dilation (int): Dilation for depth-wise separable convolution
-            norm_type (str, optional): Name of the normalization to use. Defaults to "GlobalLayerNorm".
+#         Args:
+#             in_out_channels (int): Number of channels in input and output
+#             hidden_channels (int): Number of channels in intermediary hidden representations. Usually > in_out_channels.
+#             kernel_size (int): Kernel size for depth-wise separable convolution
+#             stride (int): Stride for depth-wise separable convolution
+#             padding (int): Padding for depth-wise separable convolution
+#             dilation (int): Dilation for depth-wise separable convolution
+#             norm_type (str, optional): Name of the normalization to use. Defaults to "GlobalLayerNorm".
 
-        Raises:
-            NotImplementedError: [description]
-        """
-        super().__init__()
+#         Raises:
+#             NotImplementedError: [description]
+#         """
+#         super().__init__()
 
-        self.stride = stride
-        self.kernel_size = kernel_size
-        self.dilation = dilation
-        self.padding = padding
+#         self.stride = stride
+#         self.kernel_size = kernel_size
+#         self.dilation = dilation
+#         self.padding = padding
 
-        # [B, channels_bottleneck, T] -> [B, channels_block, T]
-        self.conv1x1 = nn.Conv1d(in_out_channels, hidden_channels, 1, bias=False)
-        self.prelu = nn.PReLU()
-        self.norm = get_normalization(norm_type, num_channels=hidden_channels)
-        # [B, channels_block, T] -> [B, channels_bottleneck, T]
-        self.dsconv = ConvTransposeDepthwiseSeparable1d(
-            hidden_channels,
-            in_out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            norm_type=norm_type,
-        )
+#         # [B, channels_bottleneck, T] -> [B, channels_block, T]
+#         self.conv1x1 = nn.Conv1d(in_out_channels, hidden_channels, 1, bias=False)
+#         self.prelu = nn.PReLU()
+#         self.norm = get_normalization(norm_type, num_channels=hidden_channels)
+#         # [B, channels_block, T] -> [B, channels_bottleneck, T]
+#         self.dsconv = ConvTransposeDepthwiseSeparable1d(
+#             hidden_channels,
+#             in_out_channels,
+#             kernel_size=kernel_size,
+#             stride=stride,
+#             padding=padding,
+#             dilation=dilation,
+#             norm_type=norm_type,
+#         )
 
-    def forward(self, x: TensorType["B", "D", "T"]):
-        """
-        Args:
-            x: [B, channels_bottleneck, T]
-        Returns:
-            [B, channels_bottleneck, T]
-        """
-        residual = x
+#     def forward(self, x: TensorType["B", "D", "T"]):
+#         """
+#         Args:
+#             x: [B, channels_bottleneck, T]
+#         Returns:
+#             [B, channels_bottleneck, T]
+#         """
+#         residual = x
 
-        x = self.conv1x1(x)
-        x = self.prelu(x)
-        x = self.norm(x) if self.norm is not None else x
-        x = self.dsconv(x)
+#         x = self.conv1x1(x)
+#         x = self.prelu(x)
+#         x = self.norm(x) if self.norm is not None else x
+#         x = self.dsconv(x)
 
-        # handle strides for residual connection
-        if self.stride > 1:
-            out_length = residual.shape[2] * self.stride
-            c_start = math.floor((x.shape[2] - out_length) / 2)
-            c_final = math.ceil((x.shape[2] - out_length) / 2) + out_length - 1
-            x[:, :, c_start:c_final] = x[:, :, c_start:c_final] + residual.repeat(1, 1, self.stride)
-        else:
-            x = x + residual
-        return x
+#         # handle strides for residual connection
+#         if self.stride > 1:
+#             out_length = residual.shape[2] * self.stride
+#             c_start = math.floor((x.shape[2] - out_length) / 2)
+#             c_final = math.ceil((x.shape[2] - out_length) / 2) + out_length - 1
+#             x[:, :, c_start:c_final] = x[:, :, c_start:c_final] + residual.repeat(1, 1, self.stride)
+#         else:
+#             x = x + residual
+#         return x
 
 
 class ConvDepthwiseSeparable1d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, norm_type):
         super().__init__()
-        # Use `groups` option to implement depthwise convolution
+
+        self.stride = _single(stride)
+        self.kernel_size = _single(kernel_size)
+        self.padding = _single(padding)
+        self.dilation = _single(dilation)
+
         # [B, channels_block, T] -> [B, channels_block, T]
         self.depthwise_conv = nn.Conv1d(
             in_channels,
@@ -409,10 +466,11 @@ class ConvDepthwiseSeparable1d(nn.Module):
 class ConvTransposeDepthwiseSeparable1d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, norm_type):
         super().__init__()
-        self.stride = stride
-        self.kernel_size = kernel_size
-        self.padding = padding
-        self.dilation = dilation
+
+        self.stride = _single(stride)
+        self.kernel_size = _single(kernel_size)
+        self.padding = _single(padding)
+        self.dilation = _single(dilation)
 
         # [B, channels_block, T] -> [B, channels_block, T]
         self.depthwise_conv = nn.ConvTranspose1d(

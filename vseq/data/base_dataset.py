@@ -170,4 +170,7 @@ class BaseDataset(Dataset):
         return len(self.examples)
 
     def __repr__(self) -> str:
-        return f"BaseDataset(\n\tsource={self.source},\n\tloaders={self.loaders},\n\ttransforms={self.transforms},\n\tbatchers={self.batchers},\n\tsort={self.sort})"
+        attrs = ["source", "loaders", "transforms", "batchers", "sort"]
+        attrs = [f"\n\t{attr}={getattr(self, attr)}," for attr in attrs]
+        s = "".join(attrs)
+        return f"BaseDataset({s}\n)"

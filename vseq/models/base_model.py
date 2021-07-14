@@ -71,6 +71,15 @@ class BaseModel(nn.Module):
         """Heuristically return the device which this model is on"""
         return next(self.parameters()).device
 
+    def get_checkpoint(self):
+        """Return a checkpoint dict of the module class name, init_arguments and state_dict"""
+        checkpoint = dict(
+            model_class_name=self.__class__.__name__,
+            model_init_kwargs=self.init_arguments(),
+            model_state_dict=self.state_dict()
+        )
+        return checkpoint
+
     def save(self, path):
         """Save the module class name, init_arguments and state_dict to different files in the directory given by path"""
         os.makedirs(path, exist_ok=True)

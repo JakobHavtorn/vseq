@@ -102,7 +102,7 @@ Observations:
 | Dataset | TIMIT (waveform) |     | Notes                                                                    | Name                    |
 | ------- | ---------------- | --- | ------------------------------------------------------------------------ | ----------------------- |
 | CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (zero kernel overlap)       | royal-fog-73            |
-| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)                             | misunderstood-breeze-70 |
+| CWVAE   | 11.973 (e750)      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit)                             | misunderstood-breeze-70 |
 | CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit)                        | wise-blaze-71           |
 | CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit)                  | volcanic-microwave-72   |
 | CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit) (ContextDecoder)       | major-violet-7          |

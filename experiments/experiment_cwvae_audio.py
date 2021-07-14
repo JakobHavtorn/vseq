@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import torch
 import wandb
@@ -39,6 +40,7 @@ parser.add_argument("--beta_start_value", default=0, type=float, help="initial b
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
 parser.add_argument("--free_nats_start_value", default=4, type=float, help="free bits per timestep")
 parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
+parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -63,7 +65,16 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-model = vseq.models.CWVAEAudioConv1d(
+# model = vseq.models.CWVAEAudioConv1d(
+#     z_size=args.latent_size,
+#     h_size=args.hidden_size,
+#     time_factors=args.time_factors,
+#     num_level_layers=args.num_level_layers,
+#     num_mix=args.num_mix,
+#     num_bins=2 ** args.num_bits,
+#     residual_posterior=args.residual_posterior
+# )
+model = vseq.models.CWVAEAudioTasNet(
     z_size=args.latent_size,
     h_size=args.hidden_size,
     time_factors=args.time_factors,
@@ -72,26 +83,8 @@ model = vseq.models.CWVAEAudioConv1d(
     num_bins=2 ** args.num_bits,
     residual_posterior=args.residual_posterior
 )
-# model = vseq.models.CWVAEAudioTasNet(
-#     z_size=args.latent_size,
-#     h_size=args.hidden_size,
-#     time_factors=args.time_factors,
-#     num_level_layers=args.num_level_layers,
-#     num_mix=args.num_mix,
-#     num_bins=2 ** args.num_bits,
-#     residual_posterior=args.residual_posterior
-# )
 # model = vseq.models.CWVAEAudioDense(
 # # model = vseq.models.CWVAEAudioConv1D(
-#     z_size=args.latent_size,
-#     h_size=args.hidden_size,
-#     time_factors=args.time_factors,
-#     num_level_layers=args.num_level_layers,
-#     num_mix=args.num_mix,
-#     num_bins=2 ** args.num_bits,
-#     residual_posterior=args.residual_posterior
-# )
-# model = vseq.models.CWVAEAudioCPCPretrained(
 #     z_size=args.latent_size,
 #     h_size=args.hidden_size,
 #     time_factors=args.time_factors,
@@ -112,7 +105,6 @@ if args.input_coding == "mu_law":
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
-# batcher = AudioBatcher(min_length=model.receptive_field, padding_module=model.overall_stride)
 batcher = AudioBatcher(padding_module=model.overall_stride)
 loader = AudioLoader("wav", cache=False)
 modalities = [(loader, encode_transform, batcher)]
@@ -189,7 +181,8 @@ for epoch in tracker.epochs(args.epochs):
 
             tracker.update(metrics)
 
-        if epoch % 10 == 0:
+        extra = dict()
+        if epoch % 2 == 0:
             outputs.x_hat = decode_transform(outputs.x_hat)
             reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
@@ -202,6 +195,21 @@ for epoch in tracker.epochs(args.epochs):
             # samples_mode = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
             # tracker.log(samples=samples, samples_mode=samples_mode, reconstructions=reconstructions)
-            tracker.log(samples=samples, reconstructions=reconstructions)
-        else:
-            tracker.log()
+            extra = dict(samples=samples, reconstructions=reconstructions)
+
+        if (
+            args.save_checkpoints
+            and wandb.run.dir != "/"
+            and epoch > 1
+            and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
+            > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
+        ):
+            model.save(wandb.run.dir)
+            checkpoint = dict(
+                epoch=epoch,
+                best_loss=tracker.accumulated_values[TIMIT_TEST]["loss"][-1],
+                optimizer_state_dict=optimizer.state_dict(),
+            )
+            torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
+ 
+        tracker.log(**extra)

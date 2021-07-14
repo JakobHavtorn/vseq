@@ -16,10 +16,10 @@ def get_modulo_length(length: int, module: int):
 def get_padded_length_1d(length: int, padding: int = None, padding_module: int = None, min_length: int = None):
     if padding:
         length = length + padding
-    if padding_module:
-        length = get_modulo_length(length, padding_module)
     if min_length:
         length = max(min_length, length)
+    if padding_module:
+        length = get_modulo_length(length, padding_module)
     return length
 
 
