@@ -223,11 +223,11 @@ for epoch in tracker.epochs(args.epochs):
             x = decode_transform(x)
             samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
-            (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000, temperature=0.75)
+            (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, temperature=0.75)
             x = decode_transform(x)
             samples_t75 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.75)", sample_rate=16000) for i in range(2)]
 
-            (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000, temperature=0.1)
+            (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, temperature=0.1)
             x = decode_transform(x)
             samples_t10 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.10)", sample_rate=16000) for i in range(2)]
 
