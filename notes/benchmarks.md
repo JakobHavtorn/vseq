@@ -110,7 +110,8 @@ Observations:
 | CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit) (e5000, LengthSampler)                                                   | lucky-leaf-96           |
 | CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit) (ContextDecoder) (e5000, LengthSampler)                             | grateful-serenity-95    |
 | CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit) (ContextDecoder) (e5000, length LengthSampler exalted-night-7 | rich-elevator-97        |
-
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit divisor) (e5000, LengthSampler)                                           | pious-snow-103          |
+ 
 
 
 ```
@@ -127,11 +128,12 @@ env WANDB_MODE=disabled WANDB_NOTES="3L DLM 10 mix Conv1dCoder (64, 512, 4096) (
 
 **TasNet Encoder**
 
-| Dataset | TIMIT (waveform) |     | Notes                                                                       | Name               |
-| ------- | ---------------- | --- | --------------------------------------------------------------------------- | ------------------ |
-| CWVAE   | **running**      |     | 1L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 32h 64z   | generous-forest-54 |
-| CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 32h 64z   | laced-planet-57    |
-| CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out) 128h 128z | ancient-grass-90   |
+| Dataset | TIMIT (waveform) |     | Notes                                                               | Name               |
+| ------- | ---------------- | --- | ------------------------------------------------------------------- | ------------------ |
+| CWVAE   | **running**      |     | 1L DML 10 mix TasNet (64) (MuLaw 16bit in 16bit out) 32h 64z        | generous-forest-54 |
+| CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 4096) (MuLaw 16bit in 16bit out) 32h 64z  | laced-planet-57    |
+| CWVAE   | **running**      |     | 1L DML 10 mix TasNet (64) (MuLaw 16bit in 16bit out) 128h 128z      | trim-glade-102     | DDP |
+| CWVAE   | **running**      |     | 2L DML 10 mix TasNet (64, 512) (MuLaw 16bit in 16bit out) 128h 128z | solar-paper-101    | DDP |
 
 ```
  env WANDB_MODE=disabled WANDB_NOTES="1L DML 10 mix TasNet (64, 4096, 65535) (MuLaw 16bit in 16bit out)" CUDA_VISIBLE_DEVICES='6' python experiments/experiment_cwvae_audio.py --num_workers 4 --batch_size 2 --epochs 750 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 32 --latent_size 64 --time_factors 64 --input_coding mu_law
