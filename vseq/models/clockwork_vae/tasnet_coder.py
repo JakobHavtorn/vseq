@@ -1,7 +1,7 @@
 import math
 
-from typing import List
-from vseq.modules.convenience import Pad
+from typing import List, Union
+from vseq.modules.convenience import Pad, Permute
 
 import torch
 import torch.nn as nn
@@ -16,8 +16,9 @@ from vseq.utils.convolutions import compute_conv_attributes, get_same_padding
 #      Which module "level" to do this at? TemporalBlock or Conv(Transpose)DepthwiseSeparable1d?
 # TODO Implement a context decoder.
 # TODO Make the decoder be layered as the encoder
-# TODO Sample with a temperature lower than 1
+# TODO Create a single TasNetCoder module that can act as decoder and encoder (e.g. share blocks but have in and out transforms be unique to encoder and decoder)
 # TODO Add a small autoregressive model to the output space
+
 
 class TasNetDecoder(nn.Module):
     def __init__(
@@ -101,6 +102,150 @@ class TasNetDecoder(nn.Module):
         h = h.permute(0, 2, 1)
         # import IPython; IPython.embed(using=False)
         return h
+
+
+# TODO Make me into a general TasNetCoder
+class TasNetContextDecoder(nn.Module):
+    def __init__(
+        self,
+        time_factors: List[int],
+        channels_in: int,
+        channels_out_proj: Union[Union[None, int], List[Union[None, int]]] = None,
+        channels_bottleneck: int = 128,
+        channels_block: int = 512,
+        kernel_size: int = 5,
+        num_blocks: int = 8,
+        num_levels: int = 3,
+        norm_type: str = "GlobalLayerNorm",
+    ):
+        """TasNet-based encoder similar to the paper https://arxiv.org/pdf/1809.07454.pdf.
+
+        Default arguments above correspond to the highest performing model in the paper (Table II)
+
+        Args:
+            channels_in: 
+            channels_out_proj:
+            channels_bottleneck: Number of channels in bottleneck 1 × 1-conv block
+            channels_block: Number of channels in convolutional blocks
+            kernel_size: Kernel size in convolutional blocks
+            num_blocks: Number of convolutional blocks in each repeat
+            num_levels: int: Number of repeats
+            norm_type: GlobalLayerNorm, ChannelwiseLayerNorm, TemporalLayerNorm
+        """
+        super().__init__()
+
+        self.time_factors = time_factors
+        self.channels_in = channels_in
+        self.channels_out_proj = [channels_out_proj] * num_levels if isinstance(channels_out_proj, int) else channels_out_proj
+        self.channels_bottleneck = channels_bottleneck
+        self.kernel_size = kernel_size
+        self.num_blocks = num_blocks
+        self.num_levels = num_levels
+        self.norm_type = norm_type
+
+        self.e_size = [self.channels_bottleneck] * num_levels
+        self.overall_stride = time_factors[-1]
+
+        assert time_factors[0] >= 2, "First level stride must be larger 2"
+        assert all(tf % 2 == 0 for tf in time_factors), "All time factors must be wholly divisible by 2 (power of 2)"
+
+        self.strides = [self.time_factors[0]]
+        self.strides += [self.time_factors[l] // self.time_factors[l - 1] for l in range(1, self.num_levels)]
+
+        assert all(
+            2 ** num_blocks >= s for s in self.strides
+        ), f"Not enough blocks per level to get strides of {self.strides=}"
+
+        self.in_transform = nn.Sequential(
+            # [B, 1, T] -> [B, channels_block, T]
+            nn.Conv1d(
+                channels_in,
+                channels_block,
+                kernel_size=kernel_size,
+                stride=2,
+                padding=kernel_size // 2,
+                bias=False,
+            ),
+            nn.PReLU(),
+            nn.GroupNorm(num_channels=channels_block, num_groups=channels_block),
+            # [B, channels_block, T] -> [B, channels_bottleneck, T]
+            nn.Conv1d(channels_block, channels_bottleneck, 1, bias=False),
+        )
+
+        # Blocks
+        self.levels = nn.ModuleList()
+        self.out_projs = nn.ModuleList()
+
+        for l in range(num_levels):
+            # build blocks
+            remaining_stride = self.strides[l] if l > 0 else self.strides[0] // 2
+            blocks = []
+            for x in range(num_blocks):
+                # dilation = 2 ** x
+                # padding = (kernel_size - 1) * dilation if causal else (kernel_size - 1) * dilation // 2
+                dilation = 1
+                stride = 2 if remaining_stride >= 2 else 1
+                if stride > 1:
+                    temporal_block = TemporalTransposeBlock(
+                        channels_bottleneck,
+                        channels_block,
+                        kernel_size,
+                        stride=stride,
+                        padding=0,
+                        dilation=dilation,
+                        norm_type=norm_type,
+                    )
+                    _, unsym_pad = get_same_padding(temporal_block.dsconv.depthwise_conv)
+                    blocks += [temporal_block, Pad(unsym_pad)]
+                else:
+                    temporal_block = TemporalBlock(
+                        channels_bottleneck,
+                        channels_block,
+                        kernel_size,
+                        stride=stride,
+                        padding=kernel_size // 2,
+                        dilation=dilation,
+                        norm_type=norm_type,
+                    )
+                    blocks += [temporal_block]
+                remaining_stride = remaining_stride // 2 if remaining_stride >= 2 else remaining_stride
+
+            assert remaining_stride == 1
+
+            self.levels.append(nn.Sequential(*blocks))
+
+            # build out projection
+            out_proj_l = [Permute(0, 2, 1)]
+            if self.out_proj[l] is not None:
+                out_proj_l.extend(
+                    [
+                        # [B, channels_in, T] -> [B, T, out_proj] (1x1 convolution)
+                        nn.Linear(channels_bottleneck, self.out_proj[l]),
+                        nn.PReLU(),
+                    ]
+                )
+            self.out_projs.append(nn.Sequential(*out_proj_l))
+
+    @property
+    def device(self):
+        return self.in_transform[0].weight.device
+
+    def forward(self, x: TensorType["B", "T"]) -> List[TensorType["B", "T", "D"]]:
+        """
+        Args:
+            x: [B, T], B is batch size
+        returns:
+            est_mask: [B, num_speakers, channels_block, T]
+        """
+        hidden = x.permute(0, 2, 1)
+        hidden = self.in_transform(x)
+        encodings = []
+        for l in range(self.num_levels):
+            hidden = self.levels[l](hidden)
+            encoding = self.out_proj[l](hidden)
+            encodings.append(encoding)
+        # import IPython; IPython.embed(using=False)
+        return encodings
 
 
 class TasNetEncoder(nn.Module):

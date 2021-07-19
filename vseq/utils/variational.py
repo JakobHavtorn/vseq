@@ -3,6 +3,7 @@ import math
 from typing import Optional, Union, Tuple
 
 import torch
+from torch._C import Value
 
 from torchtyping import TensorType
 
@@ -109,18 +110,65 @@ def discount_free_nats(
     return freenats_kl
 
 
+def ornstein_uhlenbeck_sample_gaussian(mu: torch.Tensor, sd: torch.Tensor, num_samples: int, smoothing: float = 0.95):
+    """Given a Gaussian distribution, return `num_samples` correlated OU samples with rho set to `smoothing` [1].
+
+    Args:
+        mu (torch.Tensor): Gaussian mean of shape (*)
+        sd (torch.Tensor): Gaussian standard deviation of shape (*)
+        num_samples (int): Number of OU samples to return
+        smoothing (float): Degree of OU smoothing (symbol rho in paper)
+
+    Returns:
+        torch.Tensor: OU samples of shape (num_samples, *)
+
+    [1] http://proceedings.mlr.press/v139/pervez21a.html
+    """
+    eps1 = torch.randn((num_samples,) + mu.shape, device=mu.device, dtype=mu.dtype)
+    eps2 = torch.randn((num_samples,) + mu.shape, device=mu.device, dtype=mu.dtype)
+    return sd * (smoothing * eps1 + torch.sqrt(1 - smoothing ** 2) * eps2) + mu
+
+
+def ornstein_uhlenbeck_samples_from_guassian_sample(
+    z: torch.Tensor,
+    mu: torch.Tensor,
+    sd: torch.Tensor,
+    num_samples: int,
+    smoothing: float = 0.95,
+):
+    """Given a Gaussian distribution and reparameterized sample `z`, return `num_samples` correlated OU samples with
+    rho set to `smoothing` [1].
+
+    Args:
+        mu (torch.Tensor): Gaussian mean of shape (*)
+        sd (torch.Tensor): Gaussian standard deviation of shape (*)
+        num_samples (int): Number of OU samples to return
+        smoothing (float): Degree of OU smoothing (symbol rho in paper)
+
+    Returns:
+        torch.Tensor: OU samples of shape (num_samples, *)
+
+    [1] http://proceedings.mlr.press/v139/pervez21a.html
+    """
+    eps1 = torch.randn((num_samples,) + z.shape, device=z.device, dtype=z.dtype)
+    return smoothing * z + (1 - smoothing) * mu + sd * torch.sqrt(1 - smoothing ** 2) * eps1
+
+
 @torch.jit.script
-def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor):
+def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor, num_samples: int = 1):
     """Return a reparameterized sample from a given Gaussian distribution.
 
     Args:
-        mu (torch.Tensor): Gaussian mean
-        sd (torch.Tensor): Gaussian standard deviation
+        mu (torch.Tensor): Gaussian mean of shape (*)
+        sd (torch.Tensor): Gaussian standard deviation of shape (*)
 
     Returns:
-        torch.Tensor: Reparameterized sample
+        torch.Tensor: Reparameterized sample of shape (*)
     """
-    return torch.randn_like(sd).mul(sd).add(mu)
+    if num_samples == 1:
+        return torch.randn_like(sd).mul(sd).add(mu)
+    raise ValueError("Not implemented for multiple samples")
+    # return torch.randn((num_samples,) + sd.shape, device=sd.device, dtype=sd.dtype).view(-1, *sd.shape[1:])
 
 
 def rsample_gumbel(
@@ -137,8 +185,7 @@ def rsample_gumbel(
         scale (Optional[torch.Tensor], optional): Gumbel scale. Defaults to None.
         size (Optional[torch.Size], optional): Size of the sample (if mean and scale are None). Defaults to None.
         fast (bool, optional): If True, will sample using log(-log(u)) where u ~ Uniform(eps, 1-eps).
-                               Otherwise, samples via log(e) where e ~ Exponential(1).
-                               Defaults to True.
+                               Otherwise, samples via log(e) where e ~ Exponential(1). Defaults to True.
         eps (float, optional): Small constant for numerical stability in fast sampling. Defaults to 1e-10.
 
     Returns:
@@ -317,13 +364,13 @@ def rsample_discretized_logistic_mixture_rgb(parameters: torch.Tensor, num_mix: 
 @torch.jit.script
 def rsample_exponential(rate: torch.Tensor, eps: float = 1e-8):
     """Returns samples from the Exponential distribution parameterized with λ=rate
-    
+
     Args:
         rate (torch.Tensor): The rate of the exponential distribution
         eps (float): Small constant for numerical stability of log( uniform(0, 1) )
     """
     # return torch.empty_like(rate).exponential_() / rate
-    return - (-torch.empty_like(rate).uniform_(eps, 1-eps)).log1p() / rate  # faster and jit supported
+    return -(-torch.empty_like(rate).uniform_(eps, 1 - eps)).log1p() / rate  # faster and jit supported
 
 
 @torch.jit.script
