@@ -7,7 +7,7 @@ import torch
 import editdistance
 import numpy as np
 
-from vseq.utils.operations import detach
+from vseq.utils.operations import detach, sequence_mask
 
 
 class Metric:
@@ -140,6 +140,36 @@ class RunningMeanMetric(Metric):
 
         self.weight_by = d
 
+class SeqAccuracyMetric(Metric):
+    _str_value_fmt = "<10.3"
+    get_best = max_value
+
+    def __init__(
+        self,
+        predictions: Union[torch.Tensor, float],
+        labels: Union[torch.Tensor, float],
+        mask: torch.Tensor,
+        name: str = "accuracy",
+        tags: Set[str] = None,
+    ):
+        """Classification accuracy"""
+        super().__init__(name, tags)
+        
+        if mask.ndim == 1:
+            mask = sequence_mask(mask, dtype=torch.float32, device=labels.device)
+            
+        predictions = detach(predictions)
+        labels = detach(labels)
+        self.correct = ((predictions == labels).to(torch.float32) * mask).sum().item()
+        self.total = mask.sum().item()
+
+    @property
+    def value(self):
+        return self.correct / self.total
+
+    def update(self, metric: Metric):
+        self.correct += metric.correct
+        self.total += metric.total
 
 class AccuracyMetric(Metric):
     _str_value_fmt = "<10.3"

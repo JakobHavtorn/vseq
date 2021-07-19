@@ -181,34 +181,10 @@ class Model(nn.Module):
         super().__init__()
 
         # encoder
-        self.enc_conv = nn.Conv1d(
-            in_channels=1,
-            out_channels=256,
-            kernel_size=10,
-            stride=10
-        )
-        self.enc_act = nn.ReLU6()
-        self.enc_conv_2 = nn.Conv1d(
-            in_channels=256,
-            out_channels=len(token_map),
-            kernel_size=5,
-            stride=5
-        )
+        self.encoder = nn.Linear(args.duration, len(token_map))
 
         # decoder
-        self.dec_conv = nn.ConvTranspose1d(
-            in_channels=len(token_map),
-            out_channels=256,
-            kernel_size=5,
-            stride=5
-        )
-        self.dec_act = nn.ReLU6()
-        self.dec_conv_2 = nn.ConvTranspose1d(
-            in_channels=256,
-            out_channels=2 ** 8,
-            kernel_size=10,
-            stride=10
-        )
+        self.decoder = nn.Linear(len(token_map), args.duration * 2 ** 8)
 
         # define uniform prior
         self.prior = prior if prior is not None else torch.ones(len(token_map)) / len(token_map)
@@ -229,16 +205,12 @@ class Model(nn.Module):
         
         t = self.target_encode(x)
 
-        if x.ndim == 2:
-            x = x.unsqueeze(dim=1)
+        x = x.reshape(x.size(0), -1, args.duration)
 
-        logits = self.enc_conv(x)
-        logits = self.enc_act(logits)
-        logits = self.enc_conv_2(logits)
-        logits = logits.permute(0, 2, 1)
+        logits = self.encoder(x)
 
         if isinstance(hard, bool):
-            z_btd = F.gumbel_softmax(logits=logits, tau=tau, hard=hard)
+            z = F.gumbel_softmax(logits=logits, tau=tau, hard=hard)
         else:
             if self.training:
                 gumbel_noise = -torch.log(-torch.log(torch.rand(logits.shape))).to(x.device)
@@ -249,17 +221,14 @@ class Model(nn.Module):
             exps = shift_logits.exp() / tau
             sm = exps / exps.sum(dim=2, keepdim=True)
             oh = F.one_hot(sm.argmax(dim=2), num_classes=self.k)
-            z_btd = sm + hard * (oh - sm.detach())
+            z = sm + hard * (oh - sm.detach())
 
-        z_sl = x_sl // 50
+        z_sl = y_sl
         tm_z = sequence_mask(z_sl, dtype=torch.float32, device=x.device) # (B, T)
-        z_btd = z_btd * tm_z.unsqueeze(2)
-        z = z_btd.permute(0, 2, 1)
+        z = z * tm_z.unsqueeze(2)
 
-        r = self.dec_conv(z)
-        r = self.dec_act(r)
-        r = self.dec_conv_2(r)
-        r = r.permute(0, 2, 1) # (B, D, T) --> (B, T, D)
+        r = self.decoder(z)
+        r = r.reshape(r.size(0), -1, 2 **8)
 
         p_y = r - r.logsumexp(dim=-1, keepdim=True)
         log_prob = p_y.gather(-1, t.unsqueeze(-1)).squeeze(-1)
@@ -269,7 +238,7 @@ class Model(nn.Module):
         rec_loss = - log_prob.sum() / x_sl.sum()
 
         # compute sample entropy (if hard --> 0)
-        H_pd =  - (z_btd * torch.log(z_btd + 1e-10)).sum(-1) * tm_z
+        H_pd =  - (z * torch.log(z + 1e-10)).sum(-1) * tm_z
         H = H_pd.sum() / z_sl.sum()
 
         # compute div loss # 0 (not great)
@@ -286,7 +255,7 @@ class Model(nn.Module):
         # D =  - (softmax * torch.log(softmax + 1e-10)).sum()
 
         # alternative div loss # 3 (uniform KL)
-        conj_post = z_btd.sum(dim=(0, 1)) / z_sl.sum() # or softmax normalization
+        conj_post = z.sum(dim=(0, 1)) / z_sl.sum() # or softmax normalization
         kl = (conj_post * torch.log(conj_post / (self.prior + 1e-10) + 1e-10)).sum()
 
         # alternative div loss # 3 (per step uniform KL)1/2
@@ -310,7 +279,7 @@ class Model(nn.Module):
         
         outputs = SimpleNamespace(
             logits=logits,
-            z=z_btd
+            z=z
         )
 
         metrics = [
@@ -319,7 +288,7 @@ class Model(nn.Module):
             WindowMeanMetric(rec_loss, name="rec10"),
             WindowMeanMetric(kl, name="kl10"),
             WindowMeanMetric(H, name="H10"),
-            SeqAccuracyMetric(z_btd.argmax(2), y, tm_z, name="acc"),
+            SeqAccuracyMetric(z.argmax(2), y, tm_z, name="acc"),
             WindowMeanMetric(torch.Tensor([tau]), name="tau")
         ]
 
@@ -393,71 +362,90 @@ for epoch in tracker.epochs(args.epochs):
     if epoch >= args.warm_up:
         lr_scheduler.step()
 
-def optimal_perm_error(refs, hyps, lens, token_map):
-
-    lens = torch.cat(lens, dim=0)
-    max_len = lens.max().item()
-
-    prefs, phyps = [], []
-    for r, h in zip(refs, hyps):
-        p = max_len - r.size(1)
-        b = r.size(0)
-        pad = torch.zeros([b,p], dtype=torch.int64)
-        prefs.append(torch.cat([r, pad], dim=1))
-        phyps.append(torch.cat([h, pad], dim=1))
-    refs = torch.cat(prefs, dim=0)
-    hyps = torch.cat(phyps, dim=0)
-
-    m = sequence_mask(lens, dtype=torch.bool)
-
-    hyps = hyps[m]
-    refs = refs[m]
-
-    c, t = 0, 0
-    bins = []
-    while len(hyps) > 0:
-        i = torch.mode(hyps).values.item()
-        f = (hyps == i)
-        b = torch.bincount(refs[f], minlength=len(token_map))
-        bins.append(b.unsqueeze(0))
-        c += b.max().item()
-        t += f.sum().item()
-        hyps = hyps[~f]
-        refs = refs[~f]
-
-    return c / t, torch.cat(bins, 0)
-
-acc, hist = optimal_perm_error(refs, hyps, lens, token_map)
-
-import numpy as np
-import matplotlib.pyplot as plt
-# sphinx_gallery_thumbnail_number = 2
-
-vegetables = [str(j) for j in list(range(hist.size(0)))]
-farmers = [str(j) for j in list(range(hist.size(1)))]
-
-harvest = hist.numpy()
 
 
-fig, ax = plt.subplots()
-im = ax.imshow(harvest)
 
-# We want to show all ticks...
-ax.set_xticks(np.arange(len(farmers)))
-ax.set_yticks(np.arange(len(vegetables)))
-# ... and label them with the respective list entries
-ax.set_xticklabels(farmers)
-ax.set_yticklabels(vegetables)
 
-# Rotate the tick labels and set their alignment.
-plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
-         rotation_mode="anchor")
 
-# Loop over data dimensions and create text annotations.
-for i in range(len(vegetables)):
-    for j in range(len(farmers)):
-        text = ax.text(j, i, harvest[i, j],
-                       ha="center", va="center", color="w")
 
-fig.tight_layout()
-plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def optimal_perm_error(refs, hyps, lens, token_map):
+
+#     lens = torch.cat(lens, dim=0)
+#     max_len = lens.max().item()
+
+#     prefs, phyps = [], []
+#     for r, h in zip(refs, hyps):
+#         p = max_len - r.size(1)
+#         b = r.size(0)
+#         pad = torch.zeros([b,p], dtype=torch.int64)
+#         prefs.append(torch.cat([r, pad], dim=1))
+#         phyps.append(torch.cat([h, pad], dim=1))
+#     refs = torch.cat(prefs, dim=0)
+#     hyps = torch.cat(phyps, dim=0)
+
+#     m = sequence_mask(lens, dtype=torch.bool)
+
+#     hyps = hyps[m]
+#     refs = refs[m]
+
+#     c, t = 0, 0
+#     bins = []
+#     while len(hyps) > 0:
+#         i = torch.mode(hyps).values.item()
+#         f = (hyps == i)
+#         b = torch.bincount(refs[f], minlength=len(token_map))
+#         bins.append(b.unsqueeze(0))
+#         c += b.max().item()
+#         t += f.sum().item()
+#         hyps = hyps[~f]
+#         refs = refs[~f]
+
+#     return c / t, torch.cat(bins, 0)
+
+# acc, hist = optimal_perm_error(refs, hyps, lens, token_map)
+
+# import numpy as np
+# import matplotlib.pyplot as plt
+# # sphinx_gallery_thumbnail_number = 2
+
+# vegetables = [str(j) for j in list(range(hist.size(0)))]
+# farmers = [str(j) for j in list(range(hist.size(1)))]
+
+# harvest = hist.numpy()
+
+
+# fig, ax = plt.subplots()
+# im = ax.imshow(harvest)
+
+# # We want to show all ticks...
+# ax.set_xticks(np.arange(len(farmers)))
+# ax.set_yticks(np.arange(len(vegetables)))
+# # ... and label them with the respective list entries
+# ax.set_xticklabels(farmers)
+# ax.set_yticklabels(vegetables)
+
+# # Rotate the tick labels and set their alignment.
+# plt.setp(ax.get_xticklabels(), rotation=45, ha="right",
+#          rotation_mode="anchor")
+
+# # Loop over data dimensions and create text annotations.
+# for i in range(len(vegetables)):
+#     for j in range(len(farmers)):
+#         text = ax.text(j, i, harvest[i, j],
+#                        ha="center", va="center", color="w")
+
+# fig.tight_layout()
+# plt.show()
