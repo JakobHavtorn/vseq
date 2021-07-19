@@ -111,7 +111,7 @@ Observations:
 | CWVAE   | **running**      |     | 2L DLM 10 mix Conv1dCoder (64, 512) (MuLaw 16bit) (ContextDecoder) (e5000, LengthSampler)       | generous-bird-98        |
 | CWVAE   | **running**      |     | 3L DLM 10 mix Conv1dCoder (64, 512, 4096) (MuLaw 16bit) (ContextDecoder) (e5000, LengthSampler) | earnest-meadow-100      |
 | CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit divisor) (e5000, LengthSampler)                     | pious-snow-103          |
-| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit divisor) (e5000, LengthSampler, residual posterior) | giddy-glade-108         |
+| CWVAE   | **running**      |     | 1L DLM 10 mix Conv1dCoder (64) (MuLaw 16bit divisor) (e5000, LengthSampler, residual posterior) | giddy-glade-108         | more stable than pious?
 
 
 

@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from torchtyping import TensorType
 
-from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric
+from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric, RunningMeanMetric
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, DiscretizedLogisticMixtureDense, GaussianDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
@@ -88,9 +88,9 @@ class RSSMCell(torch.jit.ScriptModule):
         if self.residual_posterior:
             enc_mu = enc_mu + prior_mu
 
-        z_new = self.posterior[-1].rsample((enc_mu, temperature * enc_sd)) if not use_mode else prior_mu
+        z_new = self.posterior[-1].rsample((enc_mu, temperature * enc_sd)) if not use_mode else enc_mu
 
-        distributions = SimpleNamespace(enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
+        distributions = SimpleNamespace(z=z_new, enc_mu=enc_mu, enc_sd=enc_sd, prior_mu=prior_mu, prior_sd=prior_sd)
 
         return (z_new, h_new), distributions
 
@@ -110,7 +110,7 @@ class RSSMCell(torch.jit.ScriptModule):
         prior_mu, prior_sd = self.prior(h_new)
         z_new = self.prior[-1].rsample((prior_mu, temperature * prior_sd)) if not use_mode else prior_mu
 
-        distributions = SimpleNamespace(prior_mu=prior_mu, prior_sd=prior_sd)
+        distributions = SimpleNamespace(z=z_new, prior_mu=prior_mu, prior_sd=prior_sd)
 
         return (z_new, h_new), distributions
 
@@ -172,7 +172,7 @@ class CWVAE(nn.Module):
         self.receptive_field = self.encoder.receptive_field
         self.overall_stride = self.encoder.overall_stride
 
-    def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats):
+    def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, latents, seq_mask, beta, free_nats):
         kld_metrics_nats = [
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.num_levels)
         ]
@@ -180,6 +180,29 @@ class CWVAE(nn.Module):
             KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / (math.log(2) * self.time_factors[l])))
             for l in range(self.num_levels)
         ]
+        # latent activity as in Burda 2015: Covariance (over batch) of expected value of latent (over latent samples).
+        #                                   We average the variances over time.
+        # latent_activity_metrics1 = [ # all 100
+        #     RunningMeanMetric((latents[l].var((0, 1)) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v1", reduce_by=1)
+        #     for l in range(self.num_levels)
+        # ]
+        # latent_activity_metrics2 = [ # all 100
+        #     RunningMeanMetric((latents[l].var(0).mean(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v2", reduce_by=1)
+        #     for l in range(self.num_levels)
+        # ]
+        # latent_activity_metrics3 = [ # z1 zero, z2 50, z3 100
+        #     RunningMeanMetric((latents[l].mean(1).var(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v3", reduce_by=1)
+        #     for l in range(self.num_levels)
+        # ]
+        # latent_activity_metrics4 = [ # all 100
+        #     RunningMeanMetric((latents[l][:,2,:].var(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v4", reduce_by=1)
+        #     for l in range(self.num_levels)
+        # ]
+        
+        # latent_activity_metrics5 = [ # all 100
+        #     RunningMeanMetric(((latents[l].var((0)) > 0.01) * seq_mask).sum() / (x_sl.sum() * latents[l].shape[2]) * 100, name=f"z_{l} activity (%) v5", reduce_by=1)
+        #     for l in range(self.num_levels)
+        # ]
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo (nats)"),
@@ -190,6 +213,11 @@ class CWVAE(nn.Module):
             KLMetric(kld, name="kl (bpt)", reduce_by=x_sl / (math.log(2) * self.time_factors[0])),
             *kld_metrics_nats,
             *kld_metrics_bpd,
+            # *latent_activity_metrics1,
+            # *latent_activity_metrics2,
+            # *latent_activity_metrics3,
+            # *latent_activity_metrics4,
+            # *latent_activity_metrics5,
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
@@ -248,6 +276,7 @@ class CWVAE(nn.Module):
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
         kl_divs = [[] for _ in range(self.num_levels)]
+        latents = [[] for _ in range(self.num_levels)]
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
@@ -266,12 +295,21 @@ class CWVAE(nn.Module):
             # update context_l for below layer as cat(z_l, h_l)
             context_l = [torch.cat(all_states[t], dim=-1) for t in range(T_l)]
             if l >= 1:
+                # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
+                # if self.decoder[l - 1] is None:
+                #     # repeat context to temporal resolution of below layer
+                #     context_l = [context_l[i // self.strides[l]] for i in range(T_l * self.strides[l])]
+                # else:
+                #     # use context decoder to increase temporal resolution
+                #     context_l = torch.stack(context_l, dim=1)
+                #     context_l = self.context_decoder[l - 1](context_l)
+                #     context_l = context_l.unbind(1)
+
                 if self.context_decoder is None:
                     # repeat context to temporal resolution of below layer
                     context_l = [context_l[i // self.strides[l]] for i in range(T_l * self.strides[l])]
                 else:
                     # use context decoder to increase temporal resolution
-                    # TODO context decoder could be a single decoder with as many layers as encoder (or optionally fewer)
                     context_l = torch.stack(context_l, dim=1)
                     context_l = self.context_decoder.levels[l - 1](context_l)
                     context_l = context_l.unbind(1)
@@ -281,6 +319,7 @@ class CWVAE(nn.Module):
             enc_sd = torch.stack([all_distributions[t].enc_sd for t in range(T_l)], dim=1)
             prior_mu = torch.stack([all_distributions[t].prior_mu for t in range(T_l)], dim=1)
             prior_sd = torch.stack([all_distributions[t].prior_sd for t in range(T_l)], dim=1)
+            latents[l] = torch.stack([all_distributions[t].z for t in range(T_l)], dim=1)
 
             kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
             kl_divs[l] = kld
@@ -292,9 +331,11 @@ class CWVAE(nn.Module):
 
         loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, kl_divs, x_sl, beta, free_nats)
 
-        metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, beta, free_nats)
+        metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, latents, seq_mask, beta, free_nats)
+
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
         outputs.x_hat = self.likelihood.sample(outputs.parameters)
+
         return loss, metrics, outputs
 
     def generate(
@@ -607,12 +648,12 @@ class CWVAEAudioConv1d(BaseModel):
 
         encoder = AudioEncoderConv1d(num_levels=self.num_levels)
 
-        decoder = AudioDecoderConv1d(num_levels=self.num_levels - 1)
+        decoder = AudioDecoderConv1d()
 
         self.cwvae = CWVAE(
             encoder=encoder,
             decoder=decoder,
-            context_decoder=ContextDecoderConv1d(),
+            context_decoder=ContextDecoderConv1d(num_levels=self.num_levels - 1),
             likelihood=likelihood,
             z_size=z_size,
             h_size=h_size,
