@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "9"
 #os.environ["WANDB_MODE"] = "disabled" # equivalent to "wandb disabled"
 
 import argparse
@@ -20,41 +20,40 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import TextBatcher, AudioBatcher
+from vseq.data.batchers import TextBatcher, SpectrogramBatcher
 from vseq.data.datapaths import LIBRISPEECH_TRAIN, LIBRISPEECH_DEV_CLEAN
 from vseq.data.tokens import ENGLISH_STANDARD, BLANK_TOKEN
 from vseq.data.tokenizers import char_tokenizer
-from vseq.data.loaders import TextLoader
+from vseq.data.loaders import TextLoader, AudioLoader
 from vseq.data.token_map import TokenMap
-from vseq.data.transforms import Compose, EncodeInteger, TextCleaner, LogMelSpectrogram, AstroSpeech
+from vseq.data.transforms import Compose, EncodeInteger, TextCleaner, LogMelSpectrogram
 from vseq.data.samplers import LengthTrainSampler, LengthEvalSampler
 from vseq.evaluation import Tracker
 from vseq.training import set_dropout
 from vseq.utils.rand import set_seed, get_random_seed
-from vseq.models import AstroCTCASR
+from vseq.models import DeepLSTMASR
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--seconds_pr_batch", default=320, type=int, help="batch size")
 parser.add_argument("--max_second_diff", default=0.3, type=float, help="control the variation of sample lengths")
-parser.add_argument("--sample_rate", default=8000, type=int, help="sample rate")
-
-parser.add_argument("--duration", default=500, type=int, help="number of frames for each astro speech token")
-parser.add_argument("--fade", default=150, type=int, help="cos-annealing duration for fading in/out astro tokens")
-parser.add_argument("--mel_delta", default=60, type=int, help="the mel-frequency shift between tokens")
-parser.add_argument("--token_shift", default=40, type=int, help="frequency span for each astro token")
+parser.add_argument("--sample_rate", default=16000, type=int, help="sample rate")
+parser.add_argument("--n_fft", default=320, type=int, help="Number of FFTs")
+parser.add_argument("--win_length", default=320, type=int, help="the size of the STFT window")
+parser.add_argument("--hop_length", default=160, type=int, help="the stride of the STFT window")
+parser.add_argument("--n_mels", default=80, type=int, help="number of mel filterbanks")
 
 parser.add_argument("--lr_max", default=3e-4, type=float, help="start learning rate")
 parser.add_argument("--lr_min", default=5e-5, type=float, help="end learning rate")
 parser.add_argument("--optimizer", default='Adam', type=str, help="optimizer")
 parser.add_argument("--optimizer_kwargs", default='{}', type=json.loads, help="extra kwargs for optimizer")
 
-parser.add_argument("--lstm_layers", default=1, type=int, help="number of LSTM layers pr block")
-parser.add_argument("--hidden_size", default=256, type=int, help="size of the LSTM layers")
-parser.add_argument("--dropout_prob", default=0.0, type=float, help="size of the LSTM layers")
+parser.add_argument("--layers_pr_block", default=5, type=int, help="number of LSTM layers pr block")
+parser.add_argument("--hidden_size", default=320, type=int, help="size of the LSTM layers")
+parser.add_argument("--dropout_prob", default=0.1, type=float, help="size of the LSTM layers")
 
-parser.add_argument("--epochs", default=40, type=int, help="number of epochs")
-parser.add_argument("--warm_up", default=20, type=int, help="epochs before lr annealing starts")
+parser.add_argument("--epochs", default=100, type=int, help="number of epochs")
+parser.add_argument("--warm_up", default=50, type=int, help="epochs before lr annealing starts")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -71,58 +70,38 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="asr-astro-ctc-libri",
+    project="asr-ctc-libri",
     group=None,
 )
 wandb.config.update(args)
 
 rich.print(vars(args))
 
-token_map_out = TokenMap(tokens=ENGLISH_STANDARD, add_blank=True)
-blank_token_idx = token_map_out.token2index[BLANK_TOKEN]
-output_size = len(token_map_out)
+token_map = TokenMap(tokens=ENGLISH_STANDARD, add_blank=True)
+blank_token_idx = token_map.token2index[BLANK_TOKEN]
+output_size = len(token_map)
 
 text_loader = TextLoader("txt", cache=False)
-text_cleaner = TextCleaner(lambda s: s.lower().strip())
-encode_int_out = EncodeInteger(token_map=token_map_out, tokenizer=char_tokenizer)
 text_transform = Compose(
-    text_cleaner,
-    encode_int_out
-    
+    TextCleaner(lambda s: s.lower().strip()),
+    EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
 )
 text_batcher = TextBatcher()
 
-token_map_in = TokenMap(tokens=ENGLISH_STANDARD)
-encode_int_in = EncodeInteger(
-    token_map=token_map_in,
-    tokenizer=char_tokenizer
+
+audio_loader = AudioLoader("flac", cache=False, sum_channels=True)
+audio_transform = LogMelSpectrogram(
+    sample_rate=args.sample_rate,
+    n_fft=args.n_fft,
+    win_length=args.win_length,
+    hop_length=args.hop_length,
+    n_mels=args.n_mels,
+    normalize_frq_bins=True
 )
-astro_speech = AstroSpeech(
-    num_tokens=len(token_map_in),
-    whitespace_idx=token_map_in.token2index[" "],
-    duration=args.duration,
-    fade=args.fade,
-    mel_delta=args.mel_delta,
-    token_shift=args.token_shift
-)
-# logmel_spectrogram = LogMelSpectrogram(
-#     sample_rate=args.sample_rate,
-#     n_fft=args.n_fft,
-#     win_length=args.win_length,
-#     hop_length=args.hop_length,
-#     n_mels=args.n_mels,
-#     normalize_frq_bins=True
-# )
-audio_transform = Compose(
-    text_cleaner,
-    encode_int_in,
-    astro_speech
-)
-#audio_batcher = SpectrogramBatcher()
-audio_batcher = AudioBatcher()
+audio_batcher = SpectrogramBatcher()
 
 modalities = [
-    (text_loader, audio_transform, audio_batcher),
+    (audio_loader, audio_transform, audio_batcher),
     (text_loader, text_transform, text_batcher)
 ]
 
@@ -139,8 +118,7 @@ train_sampler = LengthTrainSampler(
     source=LIBRISPEECH_TRAIN,
     field="length.flac.samples",
     max_len=float(args.sample_rate * args.seconds_pr_batch),
-    max_pool_difference=float(args.sample_rate * args.max_second_diff),
-    num_batches=1000
+    max_pool_difference=float(args.sample_rate * args.max_second_diff)
 )
 
 val_sampler = LengthEvalSampler(
@@ -163,14 +141,12 @@ val_loader = DataLoader(
     batch_sampler=val_sampler
 )
 
-model = AstroCTCASR(
-    token_map=token_map_out,
-    in_channels=1,
-    kernel_size=args.duration // 2,
-    stride=args.duration // 2, # we want to produce two outputs for each token --> CTC
+model = DeepLSTMASR(
+    token_map=token_map,
+    layers_pr_block=args.layers_pr_block,
     hidden_size=args.hidden_size,
-    lstm_layers=args.lstm_layers,
-    dropout_prob=0.0
+    dropout_prob=0.0,
+    ctc_model=True
 )
 
 model.to(device)
@@ -182,6 +158,10 @@ lr_scheduler = CosineAnnealingLR(optimizer, T_max=(args.epochs - args.warm_up), 
 tracker = Tracker()
 
 for epoch in tracker.epochs(args.epochs):
+
+    # update hyperparams (pre)
+    p = min(epoch - 1, args.warm_up) / args.warm_up * args.dropout_prob
+    set_dropout(model, p)
 
     # training
     model.train()
