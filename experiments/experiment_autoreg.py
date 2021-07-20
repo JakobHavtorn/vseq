@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "9"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #os.environ["WANDB_MODE"] = "disabled" # equivalent to "wandb disabled"
 
 import argparse
@@ -20,22 +20,21 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import TextBatcher, SpectrogramBatcher
+from vseq.data.batchers import TextBatcher, SpectrogramBatcher, AudioBatcher
 from vseq.data.datapaths import LIBRISPEECH_TRAIN, LIBRISPEECH_DEV_CLEAN
-from vseq.data.tokens import ENGLISH_STANDARD, BLANK_TOKEN
-from vseq.data.tokenizers import char_tokenizer
-from vseq.data.loaders import TextLoader, AudioLoader
+from vseq.data.loaders import AudioLoader
 from vseq.data.token_map import TokenMap
-from vseq.data.transforms import Compose, EncodeInteger, TextCleaner, LogMelSpectrogram
+from vseq.data.transforms import Compose, MuLawEncode
 from vseq.data.samplers import LengthTrainSampler, LengthEvalSampler
 from vseq.evaluation import Tracker
 from vseq.training import set_dropout
 from vseq.utils.rand import set_seed, get_random_seed
 from vseq.models import DeepLSTMASR
+from vseq.modules import STFTConv
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--seconds_pr_batch", default=320, type=int, help="batch size")
+parser.add_argument("--batch_size", default=16, type=int, help="batch size")
 parser.add_argument("--max_second_diff", default=0.3, type=float, help="control the variation of sample lengths")
 parser.add_argument("--sample_rate", default=16000, type=int, help="sample rate")
 parser.add_argument("--n_fft", default=320, type=int, help="Number of FFTs")
@@ -70,39 +69,20 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="asr-ctc-libri",
+    project="lstm-autoregressive",
     group=None,
 )
 wandb.config.update(args)
 
 rich.print(vars(args))
 
-token_map = TokenMap(tokens=ENGLISH_STANDARD, add_blank=True)
-blank_token_idx = token_map.token2index[BLANK_TOKEN]
-output_size = len(token_map)
-
-text_loader = TextLoader("txt", cache=False)
-text_transform = Compose(
-    TextCleaner(lambda s: s.lower().strip()),
-    EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
-)
-text_batcher = TextBatcher()
-
 
 audio_loader = AudioLoader("flac", cache=False, sum_channels=True)
-audio_transform = LogMelSpectrogram(
-    sample_rate=args.sample_rate,
-    n_fft=args.n_fft,
-    win_length=args.win_length,
-    hop_length=args.hop_length,
-    n_mels=args.n_mels,
-    normalize_frq_bins=True
-)
-audio_batcher = SpectrogramBatcher()
+audio_transform = MuLawEncode()
+audio_batcher = AudioBatcher()
 
 modalities = [
     (audio_loader, audio_transform, audio_batcher),
-    (text_loader, text_transform, text_batcher)
 ]
 
 train_dataset = BaseDataset(
@@ -117,14 +97,14 @@ val_dataset = BaseDataset(
 train_sampler = LengthTrainSampler(
     source=LIBRISPEECH_TRAIN,
     field="length.flac.samples",
-    max_len=float(args.sample_rate * args.seconds_pr_batch),
+    batch_size=args.batch_size,
     max_pool_difference=float(args.sample_rate * args.max_second_diff)
 )
 
 val_sampler = LengthEvalSampler(
     source=LIBRISPEECH_DEV_CLEAN,
     field="length.flac.samples",
-    max_len=float(args.sample_rate * args.seconds_pr_batch)
+    batch_size=args.batch_size
 )
 
 train_loader = DataLoader(
@@ -141,14 +121,7 @@ val_loader = DataLoader(
     batch_sampler=val_sampler
 )
 
-model = DeepLSTMASR(
-    token_map=token_map,
-    layers_pr_block=args.layers_pr_block,
-    hidden_size=args.hidden_size,
-    dropout_prob=0.0,
-    ctc_model=True
-)
-
+model = STFTConv() # dummy
 model.to(device)
 
 optimizer = getattr(torch.optim, args.optimizer)
@@ -165,33 +138,35 @@ for epoch in tracker.epochs(args.epochs):
 
     # training
     model.train()
-    for ((x, x_sl), (y, y_sl)), metadata in tracker.steps(train_loader):
+    for (x, x_sl), metadata in tracker.steps(train_loader):
 
         x = x.to(device)
-        y = y.to(device)
-        loss, metrics, outputs = model(x, x_sl, y, y_sl)
+        break
+    break
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    #     loss, metrics, outputs = model(x, x_sl, y, y_sl)
 
-        tracker.update(metrics)
+    #     optimizer.zero_grad()
+    #     loss.backward()
+    #     optimizer.step()
 
-    tracker.reset()
+    #     tracker.update(metrics)
 
-    # evaluation
-    model.eval()
-    with torch.no_grad():
-        for ((x, x_sl), (y, y_sl)), metadata in tracker.steps(val_loader):
+    # tracker.reset()
+
+    # # evaluation
+    # model.eval()
+    # with torch.no_grad():
+    #     for ((x, x_sl), (y, y_sl)), metadata in tracker.steps(val_loader):
             
-            x = x.to(device)
-            y = y.to(device)
-            loss, metrics, outputs = model(x, x_sl, y, y_sl)
+    #         x = x.to(device)
+    #         y = y.to(device)
+    #         loss, metrics, outputs = model(x, x_sl, y, y_sl)
 
-            tracker.update(metrics)
+    #         tracker.update(metrics)
 
-    tracker.reset()
+    # tracker.reset()
 
-    # update hyperparams (post)
-    if epoch >= args.warm_up:
-        lr_scheduler.step()
+    # # update hyperparams (post)
+    # if epoch >= args.warm_up:
+    #     lr_scheduler.step()

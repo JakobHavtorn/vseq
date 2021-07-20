@@ -14,7 +14,7 @@ class LengthTrainSampler(Sampler):
         self,
         source: str,
         field: str,
-        max_len: float, # 16K * 320
+        batch_size: int, # 16K * 320
         max_pool_difference: float, # 16K * 0.3
         min_pool_size: int = 512,
         num_batches: Union[int, None] = None,
@@ -35,7 +35,7 @@ class LengthTrainSampler(Sampler):
 
         self.source = source
         self.field = field
-        self.max_len = max_len
+        self.batch_size = batch_size
         self.max_pool_difference = max_pool_difference
         self.min_pool_size = min_pool_size
         self.num_batches = num_batches
@@ -46,7 +46,6 @@ class LengthTrainSampler(Sampler):
         self.pools = self.create_sample_pools(max_pool_difference, min_pool_size)
         self.batches = self.sample_batches()
 
-        assert self.lengths.max() < self.max_len, "One or more examples are longer than the maximum length."
 
     def load_lengths(self, source_filepath):
         """
@@ -88,9 +87,8 @@ class LengthTrainSampler(Sampler):
                 return batches
 
         ordered_idxs = np.concatenate([random.sample(p, k=len(p)) for p in self.pools])  # shuffle each pool internally
-        batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_len).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(ordered_idxs, split_points)
+        num_batches = np.ceil(len(ordered_idxs) / self.batch_size).astype(int)
+        batches = np.array_split(ordered_idxs, num_batches)
         batches = list(map(lambda x: x.tolist(), batches))
         random.shuffle(batches)  # shuffle the order of batches
 
@@ -116,7 +114,7 @@ class LengthEvalSampler(Sampler):
         self,
         source: str,
         field: str,
-        max_len: float
+        batch_size: float
     ):
         """
         This batch_sampler groups the source into sample pools of examples with similar length meeting criterias defined
@@ -130,7 +128,7 @@ class LengthEvalSampler(Sampler):
 
         self.source = source
         self.field = field
-        self.max_len = max_len
+        self.batch_size = batch_size
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
@@ -147,9 +145,8 @@ class LengthEvalSampler(Sampler):
     def sample_batches(self):
         """Sample batches from the pools."""
         sorted_idxs = np.argsort(self.lengths)
-        batch_idxs = (self.lengths[sorted_idxs].cumsum() // self.max_len).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(sorted_idxs, split_points)
+        num_batches = np.ceil(len(sorted_idxs) / self.batch_size).astype(int)
+        batches = np.array_split(sorted_idxs, num_batches)
         batches = list(map(lambda x: x.tolist(), batches))
         return batches
     
