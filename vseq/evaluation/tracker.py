@@ -184,8 +184,9 @@ class Tracker:
     def unset(self):
         """Resets print timer and prints final line, unsets `source` and accumulates metrics."""
         self.print(end="\n")  # print line for last iteration regardless of `do_print()`
+
         if self.is_ddp:
-            distributed.barrier()
+            self.ddp_gather_and_reduce(self.source)
 
             # reset terminal to bottom of terminal window
             # NOTE This is due to risk of race condition not resetting this properly.
@@ -297,9 +298,6 @@ class Tracker:
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
-        if self.is_ddp:
-            self.ddp_gather_and_reduce()
-
         # add best and tracker metrics and any `extra_log_data`
         values = self.values
         values.update(extra_log_data)
@@ -334,25 +332,25 @@ class Tracker:
         for k, v in kwargs.items():
             self.accumulated_output[k].append(v)
 
-    def ddp_gather_and_reduce(self):
-        """Share metrics across all `Tracker` objects, reduce them in `rank==0` and update that Tracker"""
+    def ddp_gather_and_reduce(self, source):
+        """Share metrics across all `Tracker` objects, reduce them in `rank==self.rank` and update the Tracker"""
         # gather metric objects across processes
         metrics_per_rank = [None] * self.world_size
-        distributed.all_gather_object(metrics_per_rank, (self.rank, self.metrics))
+        distributed.all_gather_object(metrics_per_rank, (self.rank, self.metrics[source]))
+
+        # filter gathered metrics
+        gathered_metrics = [metrics for (rank, metrics) in metrics_per_rank if rank != self.rank]
+
+        # update metrics
+        for metrics in gathered_metrics:
+            m = list(metrics.values())
+            self.update(m, source=source)
+
+        # update steps to match total steps taken
+        self.step[source] = self.step[source] * (len(gathered_metrics) + 1)
+        self.max_steps[source] = self.max_steps[source] * (len(gathered_metrics) + 1)
 
         if self.rank == 0:
-            # reduce gathered metrics
-            gathered_metrics = [metrics for (rank, metrics) in metrics_per_rank if rank != 0]
-            for source in self.best_values.keys():
-                # update metrics
-                for metrics in gathered_metrics:
-                    m = list(metrics[source].values())
-                    self.update(m, source=source)
-
-                # update steps to match total steps taken
-                self.step[source] = self.step[source] * (len(gathered_metrics) + 1)
-                self.max_steps[source] = self.max_steps[source] * (len(gathered_metrics) + 1)
-
             # print summary of gathered and redued metrics
             rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
             for source in self.best_values.keys():

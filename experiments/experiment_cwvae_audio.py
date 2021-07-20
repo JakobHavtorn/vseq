@@ -235,7 +235,7 @@ for epoch in tracker.epochs(args.epochs):
 
         if (
             args.save_checkpoints
-            and wandb.run.dir != "/"
+            and wandb.run is not None and wandb.run.dir != "/"
             and epoch > 1
             and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
             > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]

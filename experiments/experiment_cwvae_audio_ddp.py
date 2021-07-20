@@ -254,8 +254,10 @@ def run(gpu_idx, args):
             and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
             > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
         ):
+            print('\n')
+            print(f"Rank {rank} ready to save, waiting to consolidate optimizer.state_dict()")
             optimizer.consolidate_state_dict()
-            if wandb.run is not None and rank == 0:
+            if wandb.run is not None and wandb.run.dir != "/" and rank == 0:
                 model.module.save(wandb.run.dir)
                 checkpoint = dict(
                     epoch=epoch,
@@ -263,6 +265,8 @@ def run(gpu_idx, args):
                     optimizer_state_dict=optimizer.state_dict(),
                 )
                 torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
+            print(f"Rank {rank} done saving")
+            print('\n')
 
     wandb.finish()
     distributed.destroy_process_group()
