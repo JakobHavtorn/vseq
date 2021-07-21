@@ -1,5 +1,6 @@
 import argparse
 import os
+from vseq.data.samplers.batch_samplers import LengthEvalSampler, LengthTrainSampler
 
 import torch
 import torch.nn as nn
@@ -38,6 +39,7 @@ def main():
     parser.add_argument("--node_rank", "-nr", default=0, type=int, help="ranking of this node within the nodes")
 
     parser.add_argument("--batch_size", default=32, type=int, help="batch size")
+    parser.add_argument("--length_sampler", default=True, type=str2bool, help="use length sampler (batch size is seconds)")
     parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
     parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
     parser.add_argument("--latent_size", default=128, type=int, nargs="+", help="dimensionality of latent state in CWVAE")
@@ -70,6 +72,7 @@ def main():
 
     mp.spawn(run, nprocs=args.gpus, args=(args,))
 
+
 def run(gpu_idx, args):
 
     rank = args.node_rank * args.gpus + gpu_idx
@@ -94,7 +97,7 @@ def run(gpu_idx, args):
         num_level_layers=args.num_level_layers,
         num_mix=args.num_mix,
         num_bins=2 ** args.num_bits,
-        residual_posterior=args.residual_posterior
+        residual_posterior=args.residual_posterior,
     )
     # model = vseq.models.CWVAEAudioDense(
     # # model = vseq.models.CWVAEAudioConv1D(
@@ -107,12 +110,11 @@ def run(gpu_idx, args):
     #     residual_posterior=args.residual_posterior
     # )
 
-
     decode_transform = []
     encode_transform = []
     if args.input_coding == "mu_law":
-        encode_transform.append(MuLawEncode(bits=8))  #args.num_bits))
-        decode_transform.append(MuLawDecode(bits=8))  #args.num_bits))
+        encode_transform.append(MuLawEncode(bits=8))  # args.num_bits))
+        decode_transform.append(MuLawDecode(bits=8))  # args.num_bits))
 
     # encode_transform.extend([Quantize(bits=8, rescale=True)])
     encode_transform = Compose(*encode_transform)
@@ -132,38 +134,80 @@ def run(gpu_idx, args):
         modalities=modalities,
     )
 
-    train_sampler = DistributedSamplerWrapper(
-        sampler=torch.utils.data.RandomSampler(train_dataset),
-        num_replicas=args.world_size,
-        rank=rank,
-        drop_last=True,
-    )
-    valid_sampler = DistributedSamplerWrapper(
-        sampler=torch.utils.data.BatchSampler(
-            sampler=torch.utils.data.SequentialSampler(valid_dataset),
+    if args.length_sampler:
+        train_sampler = LengthTrainSampler(
+            source=TIMIT_TRAIN,
+            field="length.wav.samples",
+            max_len="max", # 16000 * args.batch_size,
+            max_pool_difference=16000 * 0.3,
+            min_pool_size=512,
+            #num_batches=10,
+        )
+        train_sampler = DistributedSamplerWrapper(
+            sampler=train_sampler,
+            num_replicas=args.world_size,
+            rank=rank,
+            seed=args.seed,
+            drop_last=True,
+        )
+        valid_sampler = LengthEvalSampler(
+            source=TIMIT_TEST,
+            field="length.wav.samples",
+            max_len="max", #16000 * args.batch_size,
+        )
+        #valid_sampler.batches = valid_sampler.batches[:10]
+        valid_sampler = DistributedSamplerWrapper(
+            sampler=valid_sampler,
+            num_replicas=args.world_size,
+            rank=rank,
+            seed=args.seed,
+        )
+        train_loader = DataLoader(
+            dataset=train_dataset,
+            collate_fn=train_dataset.collate,
+            num_workers=args.num_workers,
+            batch_sampler=train_sampler,
+            pin_memory=True,
+        )
+        valid_loader = DataLoader(
+            dataset=valid_dataset,
+            collate_fn=valid_dataset.collate,
+            num_workers=args.num_workers,
+            batch_sampler=valid_sampler,
+            pin_memory=True,
+        )
+    else:
+        train_sampler = DistributedSamplerWrapper(
+            sampler=torch.utils.data.RandomSampler(train_dataset),
+            num_replicas=args.world_size,
+            rank=rank,
+            drop_last=True,
+        )
+        valid_sampler = DistributedSamplerWrapper(
+            sampler=torch.utils.data.BatchSampler(
+                sampler=torch.utils.data.SequentialSampler(valid_dataset),
+                batch_size=args.batch_size,
+                drop_last=False,
+            ),
+            num_replicas=args.world_size,
+            rank=rank,
+        )
+        train_loader = DataLoader(
+            dataset=train_dataset,
+            collate_fn=train_dataset.collate,
+            num_workers=args.num_workers,
+            sampler=train_sampler,
             batch_size=args.batch_size,
-            drop_last=False,
-        ),
-        num_replicas=args.world_size,
-        rank=rank,
-    )
-
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        collate_fn=train_dataset.collate,
-        num_workers=args.num_workers,
-        sampler=train_sampler,
-        batch_size=args.batch_size,
-        pin_memory=True,
-        drop_last=True,
-    )
-    valid_loader = DataLoader(
-        dataset=valid_dataset,
-        collate_fn=valid_dataset.collate,
-        num_workers=args.num_workers,
-        batch_sampler=valid_sampler,
-        pin_memory=True,
-    )
+            pin_memory=True,
+            drop_last=True,
+        )
+        valid_loader = DataLoader(
+            dataset=valid_dataset,
+            collate_fn=valid_dataset.collate,
+            num_workers=args.num_workers,
+            batch_sampler=valid_sampler,
+            pin_memory=True,
+        )
 
 
     if rank == 0:
@@ -176,8 +220,11 @@ def run(gpu_idx, args):
 
         rich.print(vars(args))
         rich.print(train_dataset)
+        if args.length_sampler:
+            rich.print(train_sampler)
+            rich.print(valid_sampler)
         print(model)
-        model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride]), device='cpu')
+        model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride]), device="cpu")
 
         wandb.watch(model, log="all", log_freq=len(train_loader))
 
@@ -186,7 +233,6 @@ def run(gpu_idx, args):
 
     optimizer = ZeroRedundancyOptimizer(model.parameters(), torch.optim.Adam, lr=args.lr)
     # optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 
     beta_annealer = CosineAnnealer(anneal_steps=args.beta_anneal_steps, start_value=args.beta_start_value, end_value=1)
     free_nats_annealer = CosineAnnealer(
@@ -224,38 +270,50 @@ def run(gpu_idx, args):
                 tracker.update(metrics)
 
             extra = dict()
-            if rank == 0 and epoch % 10 == 0:
+            if rank == 0 and epoch % 1 == 0:
                 outputs.x_hat = decode_transform(outputs.x_hat)
-                reconstructions = [wandb.Audio(outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(2, args.batch_size))]
+                reconstructions = [
+                    wandb.Audio(
+                        outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000
+                    )
+                    for i in range(min(2, outputs.x_hat.size(0)))
+                ]
 
                 (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000)
                 x = decode_transform(x)
-                samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+                samples = [
+                    wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000)
+                    for i in range(min(2, x.size(0)))
+                ]
 
                 (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000, temperature=0.75)
                 x = decode_transform(x)
-                samples_t75 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.75)", sample_rate=16000) for i in range(2)]
+                samples_t75 = [
+                    wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.75)", sample_rate=16000)
+                    for i in range(min(2, x.size(0)))
+                ]
 
                 (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000, temperature=0.1)
                 x = decode_transform(x)
-                samples_t10 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.10)", sample_rate=16000) for i in range(2)]
+                samples_t10 = [
+                    wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.10)", sample_rate=16000)
+                    for i in range(min(2, x.size(0)))
+                ]
 
-                # (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, use_mode_observations=True)
-                # x = decode_transform(x)
-                # samples_mode = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
-
-                # extra = dict(samples=samples, samples_mode=samples_mode, reconstructions=reconstructions)
-                extra = dict(samples=samples, samples_t75=samples_t75, samples_t10=samples_t10, reconstructions=reconstructions)
+                extra = dict(
+                    samples=samples, samples_t75=samples_t75, samples_t10=samples_t10, reconstructions=reconstructions
+                )
 
             tracker.log(**extra)
 
-        if (args.save_checkpoints
+        if (
+            args.save_checkpoints
             and epoch > 1
             and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
             > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
         ):
-            print('\n')
-            print(f"Rank {rank} ready to save, waiting to consolidate optimizer.state_dict()")
+            # print("\n")
+            # print(f"Rank {rank} ready to save, waiting to consolidate optimizer.state_dict()")
             optimizer.consolidate_state_dict()
             if wandb.run is not None and wandb.run.dir != "/" and rank == 0:
                 model.module.save(wandb.run.dir)
@@ -265,8 +323,8 @@ def run(gpu_idx, args):
                     optimizer_state_dict=optimizer.state_dict(),
                 )
                 torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
-            print(f"Rank {rank} done saving")
-            print('\n')
+            # print(f"Rank {rank} done saving")
+            # print("\n")
 
     wandb.finish()
     distributed.destroy_process_group()
