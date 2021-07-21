@@ -38,8 +38,8 @@ pwd
 which python3
 which pip
 
-echo "pip list"
-pip list
+# echo "pip list"
+# pip list
 
 echo "python3 -m pip list"
 python3 -m pip list
