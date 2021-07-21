@@ -27,7 +27,6 @@ source $VENV_PATH/vseq/bin/activate
 
 # logging
 pwd
-ll -ah
 
 # execute script
 WANDB_NOTES=""
