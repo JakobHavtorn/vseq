@@ -1,12 +1,14 @@
 import collections
-import re
+import itertools
 import psutil
+import re
 
-from datetime import datetime
 from blessed import Terminal
 from collections import defaultdict
-from typing import Dict, Iterable, Union, Any, List, Optional
+from datetime import datetime
 from time import time
+from types import SimpleNamespace
+from typing import Dict, Iterable, Union, Any, List, Optional
 
 import rich
 import wandb
@@ -16,12 +18,13 @@ from torch.utils.data import DataLoader
 
 from .metrics import Metric
 
+
 FORMATTING_PATTERN = r"\[([^\]]+)\]"
 FORMATTING_REGEX = re.compile(FORMATTING_PATTERN)
 
 
 def length_of_formatting(string: str):
-    return sum(len(s) + 2 for s in FORMATTING_REGEX.findall(string))
+    return sum(len(s) + 2 for s in FORMATTING_REGEX.findall(string))  # plus 2 for parenthesis
 
 
 def length_without_formatting(string: str):
@@ -39,11 +42,10 @@ def rank_string(rank):
 class Tracker:
     def __init__(
         self,
-        min_indent: int = 40,
         print_every: Union[int, float] = 1.0,
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
-        cpu_util_window: int = 10
+        cpu_util_window: int = 10,
     ) -> None:
         """Tracks metrics, prints to console and logs to wandb.
 
@@ -79,7 +81,7 @@ class Tracker:
                 tracker.update(metrics)
                 tracker.print()
             tracker.unset()
-            
+
             tracker.log()
             tracker.reset()
         ```
@@ -92,10 +94,13 @@ class Tracker:
             world_size (Optional[int]): Total number of worker processes if using Distributed Data Parallel (DDP).
         """
 
-        self.min_indent = min_indent  # TODO Compute `min_indent` dynamically
         self.print_every = print_every
         self.rank = 0 if rank is None else rank
         self.world_size = world_size
+
+        # dynamic variables
+        self.max_source_str_len = 0
+        self.max_progress_str_len = 0
 
         # ddp logic
         assert (rank is None) == (world_size is None), "Must either set both `rank` and `world_size` or neither of them"
@@ -199,7 +204,9 @@ class Tracker:
             if self.rank == 0:
                 if self.is_ddp:
                     # print summary of gathered and reduced metrics
-                    rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
+                    rich.print(
+                        f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n"
+                    )
                     for source in self.best_values.keys():
                         self.print(source=source)
                         print(flush=True)
@@ -312,40 +319,44 @@ class Tracker:
         # source string
         ss = source_string(source)
 
-        # metrics string
-        sep = " [magenta]|[/]"  # +19 format pr metric
-        ms = (
-            "".join(
-                [
-                    f"{sep} {metric.name} = {metric.str_value}"
-                    for metric in self.metrics[source].values()
-                    if metric.log_to_console
-                ]
-            )
-            + sep
-        )
+        # update dynamic string lengths
+        self.max_source_str_len = max(self.max_source_str_len, len(ss))
+        self.max_progress_str_len = max(self.max_progress_str_len, len(ps))
 
-        # full log string
-        sp = f"{ss} - {ps}"
-        s = f"{sp:<{self.min_indent + length_of_formatting(sp)}s}{ms}"
+        # source progress string
+        sp = f"{ss:<{self.max_source_str_len}} - {ps:<{self.max_progress_str_len}}"
+        if self.is_ddp:
+            sp = rank_string(self.rank) + " " + sp
+            end = "\r" if self.rank == 0 else "\n"
+
+        # metrics string
+        sep = " [magenta]|[/] "  # " | "
+        metrics = [f"{name} = {met.str_value}" for name, met in self.metrics[source].items() if met.log_to_console]
+        metrics_len = [3 + len(m) for m in metrics]  # 3 is length of sep without formatting
+        metrics_len[0] += 3  # add sep left of first metric
+        metrics_len[-1] -= 1  # remove space right of sep right of last metric
+        metrics_cumlen = list(itertools.accumulate(metrics_len))
+        max_metrics_str_len = self.terminal.width - length_without_formatting(sp)
+        if metrics_cumlen[-1] > max_metrics_str_len:
+            idx = next(i for i, v in enumerate(metrics_cumlen) if v > max_metrics_str_len - 3)  # last before too long
+            metrics = metrics[:idx] + ["..."]
+        ms = sep + sep.join(metrics)
+
+        # final string
+        s = f"{sp:<}{ms}"
+
+        self.last_log_line_len = length_without_formatting(s)
+        s = s + " " * 5  # add some whitespace to overwrite any lingering characters
 
         if self.is_ddp:
             # TODO Instead of rich, print with regular print and add colors manually.
             #      The current implementation has a race condition on placing the cursor
             #      and printing the line with rich. This is merged to one print call without rich.
             # print(self.terminal.move_y(self.terminal.height - self.rank - 2) + s, end='\r')#, flush=True)
-            end = "\r" if self.rank == 0 else "\n"
-            s = rank_string(self.rank) + " " + s
-            s_len = length_without_formatting(s)
-            s = s + " " * (self.terminal.width - s_len)
             with self.terminal.location(0, self.terminal.height - 2 - self.rank):
                 rich.print(s, end=end, flush=True)
         else:
-            s_len = length_without_formatting(s)
-            s = s + " " * (self.terminal.width - s_len)
             rich.print(s, end=end, flush=True)
-
-        self.last_log_line_len = s_len
 
     def log(self, **extra_log_data: Dict[str, Any]):
         """Log all tracked metrics to experiment tracking framework and reset `metrics`."""
@@ -376,17 +387,27 @@ class Tracker:
 
     def ddp_gather_and_reduce(self, source):
         """Share metrics across all `Tracker` objects, reduce them in `rank==self.rank` and update the Tracker"""
-        # gather metric objects across processes
-        metrics_per_rank = [None] * self.world_size
-        distributed.all_gather_object(metrics_per_rank, (self.rank, self.metrics[source]))
+        # gather various variables across processes
+        namespace_to_gather = SimpleNamespace(
+            rank=self.rank,
+            metrics=self.metrics[source],
+            max_source_str_len=self.max_source_str_len,
+            max_progress_str_len=self.max_progress_str_len,
+        )
+        gathered_namespaces = [None] * self.world_size
+        distributed.all_gather_object(gathered_namespaces, namespace_to_gather)
 
         # filter gathered metrics
-        gathered_metrics = [metrics for (rank, metrics) in metrics_per_rank if rank != self.rank]
+        gathered_metrics = [ns.metrics for ns in gathered_namespaces if ns.rank != self.rank]
 
         # update metrics
         for metrics in gathered_metrics:
             m = list(metrics.values())
             self.update(m, source=source)
+
+        # sync log line width
+        self.max_source_str_len = max([ns.max_source_str_len for ns in gathered_namespaces])
+        self.max_progress_str_len = max([ns.max_progress_str_len for ns in gathered_namespaces])
 
         # update steps to match total steps taken
         self.step[source] = self.step[source] * self.world_size
