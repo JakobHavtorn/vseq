@@ -1,6 +1,6 @@
 # !/bin/bash
 
-# Stop on error
+# stop on error
 set -e
 
 # unload modules
@@ -10,11 +10,11 @@ module unload cuda/11.1
 module load python3/3.9.5
 module load cuda/11.1
 
-# Use HOME directory as base
+# use HOME directory as base
 VENV_PATH=$HOME/venvs
 REPO_PATH=$HOME/Documents
 
-# Setup virtual env
+# setup virtual env
 if [ ! -d $VENV_PATH/vseq ]
 then
     echo "Found no virtual environment at " $VENV_PATH/vseq
@@ -32,5 +32,12 @@ else
     echo "Using existing virtual environment vseq"
     source $VENV_PATH/vseq/bin/activate
 fi
+
+# # create data root directory
+# touch VSEQ.env
+# echo ""
+
+# # download data
+# python3 scripts/data/prepare_timit.py
 
 echo "Setup script completed successfully"
