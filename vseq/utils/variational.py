@@ -3,7 +3,6 @@ import math
 from typing import Optional, Union, Tuple
 
 import torch
-from torch._C import Value
 
 from torchtyping import TensorType
 
