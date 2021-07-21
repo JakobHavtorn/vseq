@@ -11,7 +11,7 @@ VENV_PATH=$HOME/venvs
 REPO_PATH=$HOME/Documents
 
 # run setup script
-bash hpc_python_setup.sh
+bash dtuhpc/hpc_python_setup.sh
 
 source $VENV_PATH/vseq/bin/activate
 
