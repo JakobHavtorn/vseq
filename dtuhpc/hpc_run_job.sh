@@ -36,6 +36,14 @@ source $VENV_PATH/vseq/bin/activate
 # logging
 pwd
 which python3
+which pip
+
+echo "pip list"
+pip list
+
+echo "python3 -m pip list"
+python3 -m pip list
+
 
 # execute script
 WANDB_NOTES=""

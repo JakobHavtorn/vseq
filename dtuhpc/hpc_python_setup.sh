@@ -25,8 +25,8 @@ then
     source $VENV_PATH/vseq/bin/activate
 
     cd $REPO_PATH/vseq
-    python3 -m pip install --upgrade -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable .
-    python3 -m pip install --upgrade torch==1.8.1+cu111 torchvision torchaudio torchtext -f https://download.pytorch.org/whl/torch_stable.html
+    python3 -m pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable .
+    #python3 -m pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade torch==1.8.1+cu111 torchvision torchaudio torchtext
     echo "Finished installing vseq"
 else
     echo "Using existing virtual environment vseq"
