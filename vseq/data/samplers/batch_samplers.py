@@ -14,7 +14,7 @@ class LengthTrainSampler(Sampler):
         self,
         source: str,
         field: str,
-        max_len: float, # 16K * 320
+        max_len: Union[float, str], # 16K * 320
         max_pool_difference: float, # 16K * 0.3
         min_pool_size: int = 512,
         num_batches: Union[int, None] = None,
@@ -27,7 +27,7 @@ class LengthTrainSampler(Sampler):
         Args:
             source (object): Dataset for which the sampler will be used.
             field (str): The field containing the relevant length information.
-            max_len (float): The maximum size of the batch in seconds.
+            max_len (float): The maximum size of the batch in the unit of lengths. If "max", will be set to length of longest example.
             max_pool_difference (float): The maximum length difference between shortest and longest sample a pool.
             min_pool_size (float): The minimum number of examples in a pool. Overwrites max_pool_difference.
             num_batches (int or None): Samples num_batches (with replacement if necessary) instead of running a standard epoch.
@@ -43,10 +43,15 @@ class LengthTrainSampler(Sampler):
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
+
+        if not isinstance(self.max_len, int):
+            assert self.max_len == "max"
+            self.max_len = max(self.lengths)
+
         self.pools = self.create_sample_pools(max_pool_difference, min_pool_size)
         self.batches = self.sample_batches()
 
-        assert self.lengths.max() < self.max_len, "One or more examples are longer than the maximum length."
+        assert self.lengths.max() <= self.max_len, "One or more examples are longer than the maximum length."
 
     def load_lengths(self, source_filepath):
         """
@@ -103,11 +108,6 @@ class LengthTrainSampler(Sampler):
                 batch = [idx]
                 batch_len = l
         
-        # batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_len).astype(int)
-        # split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        # batches = np.array_split(ordered_idxs, split_points)
-        # batches = list(map(lambda x: x.tolist(), batches))
-        
         random.shuffle(batches)  # shuffle the order of batches
 
         if self.num_batches is not None:
@@ -125,6 +125,16 @@ class LengthTrainSampler(Sampler):
 
     def __len__(self):
         return len(self.batches)
+
+    def __repr__(self):
+        source = self.source
+        field = self.field
+        max_len = self.max_len
+        max_pool_difference = self.max_pool_difference
+        min_pool_size = self.min_pool_size
+        num_batches = self.num_batches
+        s = f"LengthTrainSampler({source=}, {field=}, {max_len=}, {max_pool_difference=}, {min_pool_size=}, {num_batches=})"
+        return s
 
 
 class LengthEvalSampler(Sampler):
@@ -150,6 +160,11 @@ class LengthEvalSampler(Sampler):
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
+
+        if not isinstance(self.max_len, int):
+            assert self.max_len == "max"
+            self.max_len = max(self.lengths)
+
         self.batches = self.sample_batches()
 
     def load_lengths(self, source_filepath):
@@ -174,10 +189,17 @@ class LengthEvalSampler(Sampler):
                 batch = [idx]
                 batch_len = l
         return batches
-    
+
     def __iter__(self) -> Iterator[List[int]]:
         for batch in self.batches:
             yield batch
 
     def __len__(self):
         return len(self.batches)
+
+    def __repr__(self):
+        source = self.source
+        field = self.field
+        max_len = self.max_len
+        s = f"LengthEvalSampler({source=}, {field=}, {max_len=})"
+        return s
