@@ -47,6 +47,43 @@ class Tracker:
     ) -> None:
         """Tracks metrics, prints to console and logs to wandb.
 
+        Example using `.epochs()` and `.steps()`:
+        ```
+        for epoch in tracker.epochs(num_epochs):
+            for (x, x_sl), metadata in tracker.steps(train_dataloader):
+                ...
+                tracker.update(metrics)
+
+            for (x, x_sl), metadata in tracker.steps(valid_dataloader):
+                ...
+                tracker.update(metrics)
+
+            tracker.log()
+        ```
+
+        Example without `.epochs()` and `.steps()`
+        ```
+        for epoch in range(num_epochs):
+            tracker.set("train", max_steps=100)
+            for (x, x_sl), metadata in range(train_dataloader):
+                ...
+                tracker.increment_step()
+                tracker.update(metrics)
+                tracker.print()
+            tracker.unset()
+
+            tracker.set("test", max_steps=10)
+            for (x, x_sl), metadata in tracker.steps(valid_dataloader):
+                ...
+                tracker.increment_step()
+                tracker.update(metrics)
+                tracker.print()
+            tracker.unset()
+            
+            tracker.log()
+            tracker.reset()
+        ```
+
         Args:
             min_indent (int): Minimum indent for dataset name. Defaults to 40.
             print_every (Union[int, float]): Time between prints measured in steps (if int) or seconds (if float).
@@ -78,7 +115,6 @@ class Tracker:
 
         self.metrics = defaultdict(dict)  # dict(source=dict(metric.name=metric))
         self.accumulated_metrics = defaultdict(lambda: defaultdict(list))  # dict(source=dict(metric.name=list(metric)))
-        self.accumulated_output = defaultdict(list)  # dict(key=list(value))
 
     @property
     def values(self) -> Dict[str, Dict[str, float]]:
@@ -122,11 +158,12 @@ class Tracker:
 
     def steps(self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None):
         if source is None and not isinstance(steppable, DataLoader):
-            raise ValueError("Must call steps() on a DataLoader if source is None")
+            raise ValueError("Must call .steps() on a DataLoader if source is None")
 
         source = source if source is not None else steppable
 
         self.set(source)
+
         iterator = iter(steppable)
 
         if hasattr(iterator, "_workers"):
@@ -136,10 +173,15 @@ class Tracker:
 
         for batch in iterator:
             yield batch
+            self.increment_step()
             if self.do_print():
                 self.print(workers=workers)
 
         self.unset()
+
+    def increment_step(self):
+        """Increment the internal step counter `self.step[self.source]`"""
+        self.step[self.source] += 1
 
     def epochs(self, N) -> Iterable[int]:
         """Yields the epoch index while printing epoch number and epoch delimiter."""
@@ -147,6 +189,7 @@ class Tracker:
             self.epoch = epoch
 
             if self.rank == 0:
+                # print epoch and timestamp
                 s = f"\n[bold bright_white]Epoch {epoch}:[/bold bright_white] "
                 s += "[grey30]" + datetime.now().strftime("%d/%m/%Y %H:%M:%S") + "[/]"
                 rich.print(s, flush=True)
@@ -154,20 +197,29 @@ class Tracker:
             yield epoch
 
             if self.rank == 0:
+                if self.is_ddp:
+                    # print summary of gathered and reduced metrics
+                    rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
+                    for source in self.best_values.keys():
+                        self.print(source=source)
+                        print(flush=True)
+
                 print("-" * (self.last_log_line_len or 50), flush=True)
+
+            self.reset()
 
     def __call__(self, loader: Union[str, DataLoader]):
         """Shortcut applicable to the standard case."""
         return self.steps(loader)
 
-    def set(self, source: Union[str, DataLoader]):
+    def set(self, source: Union[str, DataLoader], max_steps: int = None):
         """Set source name, start time and maximum number of steps if available."""
         if isinstance(source, DataLoader):
             self.source = source.dataset.source
-            self.max_steps[self.source] = len(source)
+            self.max_steps[self.source] = len(source) if max_steps is None else max_steps
         else:
             self.source = source
-            self.max_steps[self.source] = None
+            self.max_steps[self.source] = max_steps
 
         self.start_time[self.source] = time()
 
@@ -201,7 +253,6 @@ class Tracker:
 
         self.source = None
         self.printed_last = 0
-        self.accumulated_output = defaultdict(list)
         self.cpu_utils[self.rank] = collections.deque(maxlen=10)
 
     def reset(self):
@@ -308,8 +359,6 @@ class Tracker:
         if self.rank == 0:
             wandb.log(values)
 
-        self.reset()
-
     def update(self, metrics: List[Metric], source: Optional[str] = None):
         """Update all metrics tracked on `source` with the given `metrics` and add any not currently tracked"""
         names = [metric.name for metric in metrics]
@@ -319,18 +368,11 @@ class Tracker:
         if self.start_time[source] is None:
             self.start_time[source] = time()
 
-        self.step[self.source] += 1
-
         for metric in metrics:
             if metric.name in self.metrics[source]:
                 self.metrics[source][metric.name].update(metric)
             else:
                 self.metrics[source][metric.name] = metric.copy()
-
-    def accumulate(self, **kwargs: Dict[Any, Any]):
-        """Accumulate some outputs of interest. Gets reset on every call to `reset()` (e.g. epoch)"""
-        for k, v in kwargs.items():
-            self.accumulated_output[k].append(v)
 
     def ddp_gather_and_reduce(self, source):
         """Share metrics across all `Tracker` objects, reduce them in `rank==self.rank` and update the Tracker"""
@@ -347,14 +389,5 @@ class Tracker:
             self.update(m, source=source)
 
         # update steps to match total steps taken
-        self.step[source] = self.step[source] * (len(gathered_metrics) + 1)
-        self.max_steps[source] = self.max_steps[source] * (len(gathered_metrics) + 1)
-
-        if self.rank == 0:
-            # print summary of gathered and redued metrics
-            rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n")
-            for source in self.best_values.keys():
-                self.print(source=source)
-                print(flush=True)
-
-        distributed.barrier()
+        self.step[source] = self.step[source] * self.world_size
+        self.max_steps[source] = self.max_steps[source] * self.world_size
