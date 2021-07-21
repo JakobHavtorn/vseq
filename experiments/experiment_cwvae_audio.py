@@ -115,7 +115,7 @@ train_dataset = BaseDataset(
     source=TIMIT_TRAIN,
     modalities=modalities,
 )
-test_dataset = BaseDataset(
+valid_dataset = BaseDataset(
     source=TIMIT_TEST,
     modalities=modalities,
 )
@@ -131,7 +131,7 @@ if args.length_sampler:
         max_pool_difference=16000 * 0.3,
         min_pool_size=512,
     )
-    test_sampler = LengthEvalSampler(
+    valid_sampler = LengthEvalSampler(
         source=TIMIT_TEST,
         field="length.wav.samples",
         max_len=16000 * args.batch_size,
@@ -143,11 +143,11 @@ if args.length_sampler:
         batch_sampler=train_sampler,
         pin_memory=True,
     )
-    test_loader = DataLoader(
-        dataset=test_dataset,
-        collate_fn=test_dataset.collate,
+    valid_loader = DataLoader(
+        dataset=valid_dataset,
+        collate_fn=valid_dataset.collate,
         num_workers=args.num_workers,
-        batch_sampler=test_sampler,
+        batch_sampler=valid_sampler,
         pin_memory=True,
     )
 else:
@@ -160,9 +160,9 @@ else:
         pin_memory=True,
         drop_last=True,
     )
-    test_loader = DataLoader(
-        dataset=test_dataset,
-        collate_fn=test_dataset.collate,
+    valid_loader = DataLoader(
+        dataset=valid_dataset,
+        collate_fn=valid_dataset.collate,
         num_workers=args.num_workers,
         shuffle=False,
         batch_size=args.batch_size,
@@ -172,7 +172,7 @@ else:
 
 
 print(model)
-x, x_sl = next(iter(test_loader))[0]
+x, x_sl = next(iter(valid_loader))[0]
 model.summary(input_data=x, x_sl=x_sl, device='cpu')
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
@@ -207,7 +207,7 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker(test_loader):
+        for (x, x_sl), metadata in tracker(valid_loader):
             x = x.to(device, non_blocking=True)
 
             loss, metrics, outputs = model(x, x_sl)
