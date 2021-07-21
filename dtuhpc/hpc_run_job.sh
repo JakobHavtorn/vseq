@@ -13,6 +13,14 @@ REPO_PATH=$HOME/Documents
 # run setup script
 bash dtuhpc/hpc_python_setup.sh
 
+# unload modules
+module unload python3/3.9.5
+module unload cuda/11.1
+# load modules
+module load python3/3.9.5
+module load cuda/11.1
+
+# activate venv
 source $VENV_PATH/vseq/bin/activate
 
 # # Set $HOME if running as a bsub script
@@ -27,6 +35,7 @@ source $VENV_PATH/vseq/bin/activate
 
 # logging
 pwd
+which python3
 
 # execute script
 WANDB_NOTES=""
