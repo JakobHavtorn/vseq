@@ -59,6 +59,10 @@ def main():
     parser.add_argument("--seed", default=None, type=int, help="random seed")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
+    parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
+    parser.add_argument("--wandb_notes", default=None, type=str, help='custom notes for this experiment (optional)')
+    parser.add_argument("--wandb_tags", default=None, type=str, nargs="+", help='custom tags for this experiment (optional)')
+
     args = parser.parse_args()
 
     if args.seed is None:
@@ -213,9 +217,11 @@ def run(gpu_idx, args):
         wandb.init(
             entity="vseq",
             project="cwvae",
-            group=None,
+            group=args.wandb_group,
+            notes=args.wandb_notes,
+            tags=args.wandb_tags,
+            config=args,
         )
-        wandb.config.update(args)
 
         rich.print(vars(args))
         rich.print(train_dataset)
