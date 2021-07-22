@@ -52,10 +52,13 @@ class LengthTrainSampler(Sampler):
         """
         Loads the example lengths into an array with same order as the examples of the source dataset.
         """
-
-        with open(source_filepath, newline='') as source_file_buffer:
-            reader = csv.DictReader(source_file_buffer)
-            lengths = [int(row[self.field]) for row in reader]
+        
+        if isinstance(source_filepath, str):
+            with open(source_filepath, newline='') as source_file_buffer:
+                reader = csv.DictReader(source_file_buffer)
+                lengths = [int(row[self.field]) for row in reader]
+        else: # assume dataset instance
+            lengths = self.source_filepath.get_example_lengths(0)
 
         return np.array(lengths)
 
@@ -137,10 +140,13 @@ class LengthEvalSampler(Sampler):
         self.batches = self.sample_batches()
 
     def load_lengths(self, source_filepath):
-        """Loads the example lengths into an array with same order as the examples of the source dataset."""
-        with open(source_filepath, newline='') as source_file_buffer:
-            reader = csv.DictReader(source_file_buffer)
-            lengths = [int(row[self.field]) for row in reader]
+        """Loads the example lengths into an array with same order as the examples of the source dataset.""" 
+        if isinstance(source_filepath, str):
+            with open(source_filepath, newline='') as source_file_buffer:
+                reader = csv.DictReader(source_file_buffer)
+                lengths = [int(row[self.field]) for row in reader]
+        else: # assume dataset instance
+            lengths = self.source_filepath.get_example_lengths(0)
 
         return np.array(lengths)
 

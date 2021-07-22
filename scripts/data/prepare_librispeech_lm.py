@@ -1,6 +1,7 @@
 import os
 import gzip
 import wget
+import random
 
 from math import ceil
 from tqdm import tqdm
@@ -30,7 +31,8 @@ with gzip.open(download_path, "rb") as file_buffer:
 
 # create 40 chunks from the full data file
 num_data_files = 40
-examples = data.splitlines()
+examples = data.strip().splitlines()
+random.shuffle(examples)
 max_examples_pr_file = ceil(len(examples) / num_data_files)
 
 print("\nSaving data files...")

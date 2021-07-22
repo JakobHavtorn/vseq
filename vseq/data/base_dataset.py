@@ -1,5 +1,6 @@
 import csv
 
+import numpy as np
 from tqdm import tqdm
 from typing import List, Tuple, Any
 
@@ -89,7 +90,19 @@ class BaseDataset(Dataset):
         if len(data) == 1:
             return data[0], metadata[0]
         return tuple(data), tuple(metadata)
-
+    
+    def get_example_lengths(self, modality_idx):
+        
+        loader = self.loaders[modality_idx]
+        
+        print(f"\nCollecting lengths for {self.source}:")
+        lengths = []
+        for example_id in tqdm(self.examples):
+            _, metadata = loader(example_id)
+            lengths.append(metadata.length)
+        
+        return lengths
+            
     def collate(self, batch: List[Tuple[Any, Any]]):
         """Arrange a list of outputs from `__getitem__` into a batch via the batcher of each transform"""
         if self.sort:
