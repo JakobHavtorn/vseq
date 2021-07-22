@@ -1,8 +1,11 @@
-from typing import Optional, Iterator, List
+import random
+
+from typing import Optional, Iterator
 
 from operator import itemgetter
 
 import torch
+import numpy as np
 
 from torch.utils.data import Dataset, Sampler, DistributedSampler
 
@@ -45,29 +48,26 @@ class DistributedSamplerWrapper(DistributedSampler):
     """Wrapper of `Sampler` for distributed training. Allows use of any (constant size) sampler in distributed mode.
 
     It is especially useful in conjunction with `torch.nn.parallel.DistributedDataParallel`. Each process can then
-    pass a `DistributedSamplerWrapper` instance as a `DataLoader` `sampler` or `batch_sampler`.
+    pass a `DistributedSamplerWrapper` instance to a `DataLoader` as `sampler` or `batch_sampler`.
 
-    On every epoch, each process seeds torch according to the epoch and `seed` and resamples the entire dataset
-    using the `sampler`. This results in `num_replicas` identical samplings of the dataset.
+    On every epoch, each process seeds torch, numpy and random according to the epoch and `seed` and resamples the 
+    entire dataset using the `sampler`. This results in `num_replicas` identical samplings of the dataset.
 
     This sampling of the dataset can additionally be randomly shuffled (`shuffle==True`) before being divided into
     subsets. This is useful if the `sampler` is deterministic and we want the unique subset passed to each process to
-    be different for every epoch. Otherwise, it doesn't harm.
+    be different for every epoch. Otherwise, it rarely harms.
 
     If the dataset is not evenly divisible among `num_replicas` processes, the distributed sampler either adds
-    additional copies (`drop_last == False`) or removes the extra number of examples (`drop_last == True`).
+    additional copies (if `drop_last == False`) or removes the extra number of examples (if `drop_last == True`).
 
-    The DistributedSamplerWrapper then uses the DistributedSampler to deterministically define `num_replicas`
+    The DistributedSamplerWrapper then instantiates a DistributedSampler to deterministically define `num_replicas`
     different subsets of this sampling of the dataset.
-    
+
     The end-result is `num_replicas` equally sized and (almost) unique subsets of the dataset as sampled by `sampler`.
 
     This works both when `sampler` is a `Sampler` and a `BatchSampler`.
-    
-    If batch sampling, the `drop_last` argument ...
 
-    .. note::
-        `sampler` is assumed to be of constant size.
+    If batch sampling, the `drop_last` argument ...
 
     Sources:
         https://github.com/catalyst-team/catalyst/blob/master/catalyst/data/sampler.py
@@ -103,15 +103,25 @@ class DistributedSamplerWrapper(DistributedSampler):
                 replicas. If ``False``, the sampler will add extra indices to make
                 the data evenly divisible across the replicas. Default: ``False``.
         """
-        super().__init__(
-            DatasetFromSampler(sampler),
-            num_replicas=num_replicas,
-            rank=rank,
-            shuffle=shuffle,
-            seed=seed,
-            drop_last=drop_last
-        )
         self.sampler = sampler
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.shuffle = shuffle
+        self.seed = seed
+        self.drop_last = drop_last
+
+        self.dataset = DatasetFromSampler(self.sampler)
+
+        distributed_sampler = DistributedSampler(
+            dataset=self.dataset,
+            num_replicas=self.num_replicas,
+            rank=self.rank,
+            shuffle=self.shuffle,
+            seed=self.seed,
+            drop_last=self.drop_last
+        )
+        self.num_samples = distributed_sampler.num_samples
+        self.epoch = 0
 
     def __iter__(self) -> Iterator[int]:
         """Iterate over sampler.
@@ -121,9 +131,31 @@ class DistributedSamplerWrapper(DistributedSampler):
         """
         # Deterministically shuffle based on epoch to get distinct splits for each worker
         torch.manual_seed(self.seed + self.epoch)
+        random.seed(self.seed + self.epoch)
+        np.random.seed(self.seed + self.epoch)
         self.epoch += 1
 
-        self.dataset = DatasetFromSampler(self.sampler)  # Resample entire dataset identically across processes
-        indices_of_indices = super().__iter__()  # Get subsampled indices for this process
+        self.dataset = DatasetFromSampler(self.sampler)
+
+        distributed_sampler = DistributedSampler(
+            self.dataset,
+            num_replicas=self.num_replicas,
+            rank=self.rank,
+            shuffle=self.shuffle,
+            seed=self.seed,
+            drop_last=self.drop_last
+        )
+        self.num_samples = distributed_sampler.num_samples
+        indices_of_indices = distributed_sampler.__iter__()  # Get subsampled indices for this process
         # return the indices given by `indices_of_indices` from the dataset
         return iter(itemgetter(*indices_of_indices)(self.dataset))
+
+    def __repr__(self):
+        sampler = self.sampler
+        num_replicas = self.num_replicas
+        rank = self.rank
+        shuffle = self.shuffle
+        seed = self.seed
+        drop_last = self.drop_last
+        s = f"DistributedSamplerWrapper({sampler=}, {num_replicas=}, {rank=}, {shuffle=}, {seed=}, {drop_last=})"
+        return s

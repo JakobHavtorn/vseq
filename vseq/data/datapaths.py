@@ -1,5 +1,7 @@
 import os
 
+from types import SimpleNamespace
+
 from vseq.settings import SOURCE_DIRECTORY
 
 
@@ -21,6 +23,7 @@ PENN_TREEBANK_TRAIN = "ptb_train"
 PENN_TREEBANK_VALID = "ptb_valid"
 PENN_TREEBANK_TEST = "ptb_test"
 
+MIDI_PIANO = "midi_piano"
 MIDI_PIANO_TRAIN = "midi_piano_train"
 MIDI_PIANO_VALID = "midi_piano_valid"
 MIDI_PIANO_TEST = "midi_piano_test"
@@ -34,6 +37,7 @@ MIDI_MUSEDATA_TRAIN = "midi_musedata_train"
 MIDI_MUSEDATA_VALID = "midi_musedata_valid"
 MIDI_MUSEDATA_TEST = "midi_musedata_test"
 
+TIMIT = "timit"
 TIMIT_TRAIN = "timit_train"
 TIMIT_TEST = "timit_test"
 
@@ -73,3 +77,9 @@ DATAPATHS_MAPPING = {
     TIMIT_TRAIN: os.path.join(SOURCE_DIRECTORY, "timit", "train.txt"),
     TIMIT_TEST: os.path.join(SOURCE_DIRECTORY, "timit", "test.txt")
 }
+
+
+DATASETS = SimpleNamespace(
+    TIMIT=SimpleNamespace(train=TIMIT_TRAIN, test=TIMIT_TEST),
+    MIDI_PIANO=SimpleNamespace(train=MIDI_PIANO_TRAIN, valid=MIDI_PIANO_VALID, test=MIDI_PIANO_TEST),
+)

@@ -9,11 +9,13 @@ pyyaml
 rich
 scikit-learn
 seaborn
-torch==1.8.1
+torch==1.8.1+cu111
 torchaudio
+torchinfo
 torchtext
 torchtyping
 torchvision
 tqdm
+uniplot
 wandb
 wget

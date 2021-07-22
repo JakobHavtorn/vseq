@@ -23,10 +23,6 @@ def round_up_to_even(f):
     return math.ceil(f / 2.) * 2
 
 
-def round_down_to_even(f):
-    return math.floor(f / 2.) * 2
-
-
 @pytest.mark.parametrize('n_examples, shuffle, drop_last',
     [
         (40, False, False),
@@ -166,3 +162,8 @@ def test_distributed_sampler_wrapper_sequential_batch(n_examples, batch_size, ba
         # batch sampler keeps the odd sized batch and distributed sampler creates a new batch with copies from other subset
         if not total_batches_to_drop and size_odd_batch_to_drop:
             assert (len(batches1[-1]) == size_odd_batch_to_drop) or (len(batches2[-1]) == size_odd_batch_to_drop)
+
+
+def distributed_length_sampler():
+    # TODO Create me and the sampler!
+    pass

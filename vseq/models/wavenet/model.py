@@ -1,7 +1,7 @@
 """WaveNet main model"""
 
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Optional
 
 import tqdm
 import numpy as np
@@ -55,7 +55,7 @@ class WaveNet(BaseModel):
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
-            res_channels (int): Number of channels in residual blocks (and embedding if in_channels > 1).
+            res_channels (int): Number of channels in residual blocks (and embedding if num_embeddings > 1).
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -103,7 +103,7 @@ class WaveNet(BaseModel):
         target = x.squeeze(-1)  # (B, T, C) to (B, T)
         target = (target + 1) / 2  # Transform [-1, 1] to [0, 1]
         target = target * (self.out_classes - 1)  # Transform [0, 1] to [0, 255]
-        target = target.floor().to(torch.int64)  # To integer (floor because of added noise for dequantization)
+        target = target.floor().to(torch.int64)  # To integer (floor because of noise from dequantization or more bits)
         return target
 
     def compute_loss(

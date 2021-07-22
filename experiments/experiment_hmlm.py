@@ -42,13 +42,14 @@ parser.add_argument("--hidden_size", default=512, type=int, help="dimensionality
 parser.add_argument("--num_layers", default=3, type=int, help="number of LSTM layers")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 # parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
+parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
 parser.add_argument("--epochs", default=350, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 if args.seed is None:
     args.seed = get_random_seed()
@@ -67,14 +68,18 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-token_map = TokenMap(tokens=PENN_TREEBANK_ALPHABET, add_start=False, add_end=False, add_delimit=True, add_unknown=True)
-penn_treebank_transform = Compose(
-    TextCleaner(cleaner_fcn=lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
-    EncodeInteger(
-        token_map=token_map,
-        tokenizer=char_tokenizer,
-    ),
-)
+if args.token_level == "word":
+    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
+    token_map = TokenMap(tokens=tokens, add_delimit=True)
+    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
+else:
+    tokens = PENN_TREEBANK_ALPHABET
+    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
+    penn_treebank_transform = Compose(
+        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
+        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer)
+    )
+
 batcher = TextBatcher()
 loader = TextLoader('txt', cache=True)
 
@@ -83,17 +88,14 @@ modalities = [(loader, penn_treebank_transform, batcher)]
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
     modalities=modalities,
-    cache=args.cache_dataset,
 )
 
 train_loader = DataLoader(
@@ -133,13 +135,12 @@ model = vseq.models.HMLM(
     # delimiter_token_idx=delimiter_token_idx,
 )
 
-
 wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
 # x, x_sl = next(iter(train_loader))[0]
 # x = x.to(device)
-# print(model.summary(input_example=x, x_sl=x_sl))
+# model.summary(input_data=x, x_sl=x_sl)
 
 optimizer = args.optimizer_json.pop("optimizer")
 optimizer = getattr(torch.optim, optimizer)

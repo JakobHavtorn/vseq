@@ -2,7 +2,6 @@ import argparse
 import logging
 
 import torch
-import torchaudio
 import wandb
 import rich
 
@@ -14,7 +13,7 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import TIMIT_TRAIN, TIMIT_TEST
 from vseq.data.loaders import AudioLoader
-from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, Scale, MuLawEncode, StackWaveform
+from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, MuLawEncode, StackWaveform
 from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
@@ -49,9 +48,9 @@ device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
 if args.input_coding == "frames":
-    args.num_embeddings = None
+    args.in_channels = None
 elif args.input_coding == "mu_law":
-    args.num_embeddings = 2 ** args.num_bits
+    args.in_channels = 2 ** args.num_bits
 else:
     raise ValueError()
 
@@ -66,18 +65,16 @@ rich.print(vars(args))
 
 
 if args.input_coding == "mu_law":
-    wavenet_transform = Compose(RandomSegment(length=16000), MuLawEncode(), Quantize(bits=args.num_bits))
+    encode_transform = Compose(RandomSegment(length=16000), MuLawEncode(bits=args.num_bits), Quantize(bits=args.num_bits))
     decode_transform = MuLawDecode(bits=args.num_bits)
 elif args.input_coding == "frames":
     decode_transform = None
     if args.stack_frames == 1:
-        wavenet_transform = Compose(RandomSegment(length=16000))
+        encode_transform = Compose(RandomSegment(length=16000))
     else:
-        wavenet_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
+        encode_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
 
-modalities = [
-    (AudioLoader("wav"), wavenet_transform, AudioBatcher()),
-]
+modalities = [(AudioLoader("wav"), encode_transform, AudioBatcher())]
 
 train_dataset = BaseDataset(
     source=TIMIT_TRAIN,
@@ -108,19 +105,18 @@ val_loader = DataLoader(
 model = vseq.models.WaveNet(
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    num_embeddings=args.num_embeddings,
+    in_channels=args.in_channels,
     res_channels=args.res_channels,
     out_classes=256,
 )
 (x, x_sl), metadata = next(iter(train_loader))
-model.summary(input_example=x, x_sl=x_sl)
+model.summary(input_data=x, x_sl=x_sl)
 model = model.to(device)
 print(model)
 rich.print(model.receptive_field)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 
 tracker = Tracker()
 
@@ -151,7 +147,7 @@ for epoch in tracker.epochs(args.epochs):
         output.x_hat = decode_transform(output.x_hat) if decode_transform is not None else output.x_hat
         reconstructions = [wandb.Audio(output.x_hat[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
 
-        x = model.generate(n_samples=2, n_frames=12800 // args.stack_frames)
+        x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
         x = decode_transform(x) if decode_transform is not None else x
         samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
