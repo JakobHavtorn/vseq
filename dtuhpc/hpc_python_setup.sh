@@ -41,6 +41,7 @@ fi
 
 
 if [ ! -f VSEQ.env ]
+then
     # create data root directory
     echo "Creating VSEQ.env file and setting VSEQ_DATA_ROOT_DIRECTORY"
     touch VSEQ.env
