@@ -32,6 +32,6 @@ which pip
 
 # execute script
 export WANDB_NOTES=""
-export WANDB_MODE="disabled"
+export WANDB_MODE=""
 export VSEQ_DATA_ROOT_DIRECTORY=/zhome/c2/b/86488/Documents/vseq/data
 eval $CMD_STRING
