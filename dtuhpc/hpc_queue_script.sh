@@ -25,8 +25,45 @@
 #BSUB -eo dtuhpc/logs/%J.out
 # -- end of LSF options --
 
-echo "============================"
+# exit if error
+set -e
+
+echo "==============================================================="
 echo "Submitting job with command:"
 echo "$@"
+echo "==============================================================="
 
-bash dtuhpc/hpc_run_job.sh "$@"  # Pass all arguments along to run script
+# get command
+CMD_STRING=$@
+
+# use HOME directory as base
+VENV_PATH=$HOME/venvs
+REPO_PATH=$HOME/Documents
+
+# run setup script
+bash dtuhpc/hpc_python_setup.sh
+
+# unload modules
+module unload python3/3.8.2
+module unload cuda/11.1
+# load modules
+module load python3/3.8.2
+module load cuda/11.1
+
+# activate venv
+source $VENV_PATH/vseq/bin/activate
+
+# debugging
+pwd
+which python3
+which python
+which pip3
+which pip
+
+echo "==============================================================="
+echo "Executing command ..."
+# execute script
+export WANDB_NOTES=""
+# export WANDB_MODE="disabled"
+export VSEQ_DATA_ROOT_DIRECTORY=/zhome/c2/b/86488/Documents/vseq/data
+eval $CMD_STRING
