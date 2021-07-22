@@ -78,7 +78,7 @@ class LatestMeanMetric(Metric):
             values (Union[torch.Tensor, float]): Values of the metric
             name (str): Name of the metric
             tags (Set[str]): Tags to use for grouping with other metrics.
-            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
         """
         super().__init__(name=name, tags=tags, get_best=get_best)
 
@@ -120,7 +120,7 @@ class RunningMeanMetric(Metric):
             values (Union[torch.Tensor, float]): Values of the metric
             name (str): Name of the metric
             tags (Set[str]): Tags to use for grouping with other metrics.
-            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
             weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
         """
         super().__init__(
@@ -139,11 +139,11 @@ class RunningMeanMetric(Metric):
         weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
 
         self.weight_by = weight_by
-        self._value = value / reduce_by
+        self._mean = value / reduce_by
 
     @property
     def value(self):
-        return self._value
+        return self._mean
 
     def update(self, metric: Metric):
         """Update the running mean statistic.
@@ -155,9 +155,142 @@ class RunningMeanMetric(Metric):
         w1 = self.weight_by / d
         w2 = metric.weight_by / d
 
-        self._value = self._value * w1 + metric._value * w2  # Reduce between batches (over entire epoch)
+        self._mean = self._mean * w1 + metric._mean * w2  # Reduce between batches (over entire epoch)
 
         self.weight_by = d
+
+
+class RunningVarianceMetric(Metric):
+    _str_value_fmt = "<.3"
+
+    def __init__(
+        self,
+        values: Union[torch.Tensor, float],
+        name: str,
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: str = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
+    ):
+        """Create a running variance metric that maintains the running variance when updated.
+
+        Args:
+            values (Union[torch.Tensor, float]): Values of the metric
+            name (str): Name of the metric
+            tags (Set[str]): Tags to use for grouping with other metrics.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
+            weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
+        """
+        super().__init__(
+            name=name, tags=tags, get_best=get_best, log_to_console=log_to_console, log_to_framework=log_to_framework
+        )
+
+        self.running_mean = RunningMeanMetric(
+            values,
+            name,
+            # tags=tags,
+            # reduce_by=reduce_by,
+            # weight_by=weight_by,
+            # get_best=get_best,
+            log_to_console=False,
+            log_to_framework=False,
+        )
+
+        values = detach(values)
+        reduce_by = detach(reduce_by)
+        weight_by = detach(weight_by)
+
+        numel = values.numel() if isinstance(values, torch.Tensor) else 1
+        value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
+
+        reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
+
+        weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
+
+        self.weight_by = self.running_mean.weight_by
+        # sum of squares of differences from the current mean
+        self.M2 = ((values - self.running_mean.value) ** 2).sum().item() if isinstance(values, torch.Tensor) else float("nan")
+        self._sample_variance = self.M2 / reduce_by  # biased variance
+        self._population_variance = self.M2 / (reduce_by - 1)  # unbiased variance
+        # import IPython; IPython.embed(using=False)
+
+    @property
+    def value(self):
+        return self._population_variance
+
+    def update(self, metric: Metric):
+        """Update the running variance statistic.
+
+        Online variance update c.f. parallel variance algorithm at [1].
+
+        Args:
+            metric (RunningMeanMetric): The running variance metric to update with.
+
+        [1] https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+        """
+        # import IPython; IPython.embed(using=False)
+        avg_a, w_a, M2_a = self.running_mean.value, self.running_mean.weight_by, self.M2
+        avg_b, w_b, M2_b = metric.value, metric.weight_by, metric.M2
+
+        w = w_a + w_b
+        delta = avg_b - avg_a
+        M2 = M2_a + M2_b + delta ** 2 * w_a * w_b / w
+        var_ab = M2 / (w - 1)
+
+        self._population_variance = var_ab
+
+        self.weight_by = w # ??
+        self.M2 = M2  # ??
+        self.running_mean.update(metric.running_mean)
+
+
+        # d = self.weight_by + metric.weight_by
+        # w1 = self.weight_by / d
+        # w2 = metric.weight_by / d
+
+        # self._population_variance = self._population_variance * w1 + metric._population_variance * w2  # Reduce between batches (over entire epoch)
+
+        # self.weight_by = d
+
+
+class LatentActivityMetric(RunningVarianceMetric):
+    def __init__(
+        self,
+        latents: Union[torch.Tensor, float],
+        seq_len: Union[torch.Tensor, int],
+        min_len: Optional[int] = None,
+        name: str = "latent_activity",
+        tags: Set[str] = None,
+        reduce_by: Optional[Union[torch.Tensor, float]] = None,
+        weight_by: Optional[Union[torch.Tensor, float]] = None,
+        get_best: str = "max",
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
+    ):
+        assert latents.ndim == 2, "latents must have shape (B, D)"
+
+        latents = detach(latents)
+        seq_len = detach(seq_len)
+
+        if min_len is not None:
+            min_mask = seq_len <= min_len
+            latents = latents[min_mask]
+
+        super().__init__(
+            latents,
+            name,
+            tags=tags,
+            reduce_by=reduce_by,
+            weight_by=weight_by,
+            get_best=get_best,
+            log_to_console=log_to_console,
+            log_to_framework=log_to_framework,
+        )
+        self.seq_len = seq_len
+
+        # ((latents[l].var((0)) > 0.01) * seq_mask).sum() / (x_sl.sum() * latents[l].shape[2]) * 100
 
 
 class AccuracyMetric(Metric):
@@ -375,5 +508,5 @@ class HoyerSparsityMetric(RunningMeanMetric):
         sqrt_d = math.sqrt(D)
         l1 = torch.linalg.norm(values, ord=1, dim=-1)
         l2 = torch.linalg.norm(values, ord=2, dim=-1)
-        hoyer_sparsity = (sqrt_d - l1/l2) / (sqrt_d - 1)
+        hoyer_sparsity = (sqrt_d - l1 / l2) / (sqrt_d - 1)
         return hoyer_sparsity
