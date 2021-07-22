@@ -22,6 +22,7 @@ SUBSETS = ["test", "train"]
 data_dir = os.path.join(DATA_DIRECTORY, "timit")
 source_dir = os.path.join(SOURCE_DIRECTORY, "timit")
 
+assert os.path.exists(data_dir), "TIMIT dataset must already be downloaded."
 assert not os.path.exists(source_dir), "Dataset already exists in source directory."
 
 os.mkdir(source_dir)
