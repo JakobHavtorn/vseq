@@ -91,6 +91,19 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], stride: int = 1, max_len:
     return seq_mask.to(dtype)
 
 
+def update_running_variance(avg_a, avg_b, w_a, w_b, M2_a, M2_b):
+    """Online variance update c.f. parallel variance algorithm at [1].
+
+    [1] https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+    """
+    w = w_a + w_b
+    delta = avg_b - avg_a
+    M2 = M2_a + M2_b + delta ** 2 * w_a * w_b / w
+    var = M2 / (w - 1)
+    avg = (w_a * avg_a + w_b * avg_b) / w
+    return var, avg, w, M2
+
+
 def detach(x: Union[torch.Tensor, Any]):
     """Detach a tensor from the computational graph"""
     if isinstance(x, torch.Tensor):

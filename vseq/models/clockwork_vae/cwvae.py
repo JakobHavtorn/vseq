@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from torchtyping import TensorType
 
-from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatestMeanMetric, LossMetric, RunningMeanMetric
+from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatentActivityMetric, LatestMeanMetric, LossMetric, RunningMeanMetric, RunningVarianceMetric
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, DiscretizedLogisticMixtureDense, GaussianDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
@@ -180,29 +180,19 @@ class CWVAE(nn.Module):
             KLMetric(klds[l], name=f"kl_{l} (bpt)", reduce_by=(x_sl / (math.log(2) * self.time_factors[l])))
             for l in range(self.num_levels)
         ]
-        # latent activity as in Burda 2015: Covariance (over batch) of expected value of latent (over latent samples).
-        #                                   We average the variances over time.
-        # latent_activity_metrics1 = [ # all 100
-        #     RunningMeanMetric((latents[l].var((0, 1)) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v1", reduce_by=1)
-        #     for l in range(self.num_levels)
-        # ]
-        # latent_activity_metrics2 = [ # all 100
-        #     RunningMeanMetric((latents[l].var(0).mean(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v2", reduce_by=1)
-        #     for l in range(self.num_levels)
-        # ]
-        # latent_activity_metrics3 = [ # z1 zero, z2 50, z3 100
-        #     RunningMeanMetric((latents[l].mean(1).var(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v3", reduce_by=1)
-        #     for l in range(self.num_levels)
-        # ]
-        # latent_activity_metrics4 = [ # all 100
-        #     RunningMeanMetric((latents[l][:,2,:].var(0) > 0.01).sum() / latents[l].shape[2] * 100, name=f"z_{l} activity (%) v4", reduce_by=1)
-        #     for l in range(self.num_levels)
-        # ]
-        
-        # latent_activity_metrics5 = [ # all 100
-        #     RunningMeanMetric(((latents[l].var((0)) > 0.01) * seq_mask).sum() / (x_sl.sum() * latents[l].shape[2]) * 100, name=f"z_{l} activity (%) v5", reduce_by=1)
-        #     for l in range(self.num_levels)
-        # ]
+        latent_activity_metrics_percent = [
+            LatentActivityMetric(latents[l][:, :x_sl.min()], name=f"z_{l} (%)", threshold=0.01, reduce_by=latents[l].size(0), weight_by=latents[l].size(0) * x_sl.min())
+            for l in range(self.num_levels)
+        ]
+        latent_activity_metrics_variance = [
+            LatentActivityMetric(latents[l][:, :x_sl.min()], name=f"z_{l} (var)", reduce_by=latents[l].size(0), weight_by=latents[l].size(0) * x_sl.min())
+            for l in range(self.num_levels)
+        ]
+        latent_activity_metrics_variance2 = [
+            RunningMeanMetric(latents[l][:, :x_sl.min()].var(0).mean(0), name=f"z_{l} (var2)", weight_by=latents[l].size(0) * x_sl.min())
+            for l in range(self.num_levels)
+        ]
+
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo (nats)"),
@@ -213,11 +203,9 @@ class CWVAE(nn.Module):
             KLMetric(kld, name="kl (bpt)", reduce_by=x_sl / (math.log(2) * self.time_factors[0])),
             *kld_metrics_nats,
             *kld_metrics_bpd,
-            # *latent_activity_metrics1,
-            # *latent_activity_metrics2,
-            # *latent_activity_metrics3,
-            # *latent_activity_metrics4,
-            # *latent_activity_metrics5,
+            *latent_activity_metrics_percent,
+            *latent_activity_metrics_variance,
+            *latent_activity_metrics_variance2,
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]

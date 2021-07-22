@@ -5,7 +5,7 @@ from typing import List, Optional, Set, Union
 
 import torch
 
-from vseq.utils.operations import detach
+from vseq.utils.operations import detach, update_running_variance
 
 
 class Metric:
@@ -135,15 +135,14 @@ class RunningMeanMetric(Metric):
         value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
 
         reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
-
         weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
 
         self.weight_by = weight_by
-        self._mean = value / reduce_by
+        self.running_mean = value / reduce_by
 
     @property
     def value(self):
-        return self._mean
+        return self.running_mean
 
     def update(self, metric: Metric):
         """Update the running mean statistic.
@@ -155,8 +154,7 @@ class RunningMeanMetric(Metric):
         w1 = self.weight_by / d
         w2 = metric.weight_by / d
 
-        self._mean = self._mean * w1 + metric._mean * w2  # Reduce between batches (over entire epoch)
-
+        self.running_mean = self.running_mean * w1 + metric.running_mean * w2
         self.weight_by = d
 
 
@@ -187,17 +185,6 @@ class RunningVarianceMetric(Metric):
             name=name, tags=tags, get_best=get_best, log_to_console=log_to_console, log_to_framework=log_to_framework
         )
 
-        self.running_mean = RunningMeanMetric(
-            values,
-            name,
-            # tags=tags,
-            # reduce_by=reduce_by,
-            # weight_by=weight_by,
-            # get_best=get_best,
-            log_to_console=False,
-            log_to_framework=False,
-        )
-
         values = detach(values)
         reduce_by = detach(reduce_by)
         weight_by = detach(weight_by)
@@ -206,61 +193,45 @@ class RunningVarianceMetric(Metric):
         value = values.sum().tolist() if isinstance(values, torch.Tensor) else values
 
         reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
-
         weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
 
-        self.weight_by = self.running_mean.weight_by
         # sum of squares of differences from the current mean
-        self.M2 = ((values - self.running_mean.value) ** 2).sum().item() if isinstance(values, torch.Tensor) else float("nan")
-        self._sample_variance = self.M2 / reduce_by  # biased variance
-        self._population_variance = self.M2 / (reduce_by - 1)  # unbiased variance
-        # import IPython; IPython.embed(using=False)
+        self.weight_by = weight_by
+        self.running_mean = value / reduce_by
+        self.M2 = ((values - self.running_mean) ** 2).sum().item() if isinstance(values, torch.Tensor) else 0
+        self.population_variance = self.M2 / (reduce_by - 1) if reduce_by > 1 else float("nan")  # unbiased variance
 
     @property
     def value(self):
-        return self._population_variance
+        return self.population_variance
 
     def update(self, metric: Metric):
         """Update the running variance statistic.
 
-        Online variance update c.f. parallel variance algorithm at [1].
-
         Args:
             metric (RunningMeanMetric): The running variance metric to update with.
-
-        [1] https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
         """
-        # import IPython; IPython.embed(using=False)
-        avg_a, w_a, M2_a = self.running_mean.value, self.running_mean.weight_by, self.M2
-        avg_b, w_b, M2_b = metric.value, metric.weight_by, metric.M2
-
-        w = w_a + w_b
-        delta = avg_b - avg_a
-        M2 = M2_a + M2_b + delta ** 2 * w_a * w_b / w
-        var_ab = M2 / (w - 1)
-
-        self._population_variance = var_ab
-
-        self.weight_by = w # ??
-        self.M2 = M2  # ??
-        self.running_mean.update(metric.running_mean)
+        var, avg, w, M2 = update_running_variance(
+            avg_a=self.running_mean,
+            avg_b=metric.running_mean,
+            w_a=self.weight_by,
+            w_b=metric.weight_by,
+            M2_a=self.M2,
+            M2_b=metric.M2,
+        )
+        self.running_mean = avg
+        self.population_variance = var
+        self.weight_by = w
+        self.M2 = M2
 
 
-        # d = self.weight_by + metric.weight_by
-        # w1 = self.weight_by / d
-        # w2 = metric.weight_by / d
-
-        # self._population_variance = self._population_variance * w1 + metric._population_variance * w2  # Reduce between batches (over entire epoch)
-
-        # self.weight_by = d
-
-
-class LatentActivityMetric(RunningVarianceMetric):
+class LatentActivityMetric(Metric):
     def __init__(
         self,
-        latents: Union[torch.Tensor, float],
-        seq_len: Union[torch.Tensor, int],
-        min_len: Optional[int] = None,
+        values: Union[torch.Tensor, float],
+        # seq_len: Union[torch.Tensor, int],
+        # min_len: Optional[int] = None,
+        threshold: Optional[float] = None,
         name: str = "latent_activity",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
@@ -269,28 +240,77 @@ class LatentActivityMetric(RunningVarianceMetric):
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
-        assert latents.ndim == 2, "latents must have shape (B, D)"
-
-        latents = detach(latents)
-        seq_len = detach(seq_len)
-
-        if min_len is not None:
-            min_mask = seq_len <= min_len
-            latents = latents[min_mask]
+        assert values.ndim == 2 or values.ndim == 3, "latents must have shape (B, D) or (B, T, D)"
 
         super().__init__(
-            latents,
-            name,
-            tags=tags,
-            reduce_by=reduce_by,
-            weight_by=weight_by,
-            get_best=get_best,
-            log_to_console=log_to_console,
-            log_to_framework=log_to_framework,
+            name=name, tags=tags, get_best=get_best, log_to_console=log_to_console, log_to_framework=log_to_framework
         )
-        self.seq_len = seq_len
 
-        # ((latents[l].var((0)) > 0.01) * seq_mask).sum() / (x_sl.sum() * latents[l].shape[2]) * 100
+        self.threshold = threshold
+        self.is_temporal = values.ndim == 3
+
+        self._str_value_fmt = "<.3" if threshold is None else "<5.1"  # raw variance or percent
+
+        values = detach(values)
+        reduce_by = detach(reduce_by)
+        weight_by = detach(weight_by)
+
+        numel = values.numel() if isinstance(values, torch.Tensor) else 1
+
+        reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
+        weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
+
+        self.weight_by = weight_by
+        self.running_mean = values.mean(0)  # mean over batch (T, D)
+        self.M2 = (
+            ((values - self.running_mean.unsqueeze(0)) ** 2).sum(0) if isinstance(values, torch.Tensor) else 0
+        )  # (T, D)
+
+        # report average variance if threshold is None, otherwise percentage with variance over threshold
+        self.running_variance = self.M2 / (reduce_by - 1) if reduce_by > 1 else float("nan")
+
+        if reduce_by > 1 and self.threshold is not None:
+            self.activity = (self.running_variance > self.threshold).sum() / self.running_variance.numel() * 100
+        elif reduce_by > 1 and self.threshold is None:
+            self.activity = self.running_variance.mean()
+        else:
+            self.activity = float("nan")
+
+    @property
+    def value(self):
+        return self.activity
+
+    def update(self, metric: Metric):
+        """Update the running variance statistic.
+
+        Args:
+            metric (RunningMeanMetric): The running variance metric to update with.
+        """
+        if self.is_temporal:
+            # cut off to shortest
+            T = min(self.running_mean.size(0), metric.running_mean.size(0))
+            self.running_mean = self.running_mean[:T]
+            self.M2 = self.M2[:T]
+            metric.running_mean = metric.running_mean[:T]
+            metric.M2 = metric.M2[:T]
+
+        var, avg, w, M2 = update_running_variance(
+            avg_a=self.running_mean,
+            avg_b=metric.running_mean,
+            w_a=self.weight_by,
+            w_b=metric.weight_by,
+            M2_a=self.M2,
+            M2_b=metric.M2,
+        )
+        if self.threshold is not None:
+            activity = (var > self.threshold).sum() / var.numel() * 100
+        else:
+            activity = var.mean()
+
+        self.activity = activity
+        self.running_mean = avg
+        self.weight_by = w
+        self.M2 = M2
 
 
 class AccuracyMetric(Metric):

@@ -19,7 +19,7 @@ import vseq.utils.device
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
-from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
+from vseq.data.datapaths import DATASETS
 from vseq.data.loaders import AudioLoader
 from vseq.data.samplers import DistributedSamplerWrapper, LengthEvalSampler, LengthTrainSampler
 from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode, Quantize, StackWaveform
@@ -53,6 +53,8 @@ def main():
     parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
     parser.add_argument("--free_nats_start_value", default=4, type=float, help="free bits per timestep")
 
+    parser.add_argument("--dataset", default="timit", type=str, help="dataset to use")
+
     parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
     parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
     parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -62,6 +64,7 @@ def main():
     parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
     parser.add_argument("--wandb_notes", default=None, type=str, help='custom notes for this experiment (optional)')
     parser.add_argument("--wandb_tags", default=None, type=str, nargs="+", help='custom tags for this experiment (optional)')
+    parser.add_argument("--wandb_mode", default=None, type=str, help='tracking mode for this experiment (optional)')
 
     args = parser.parse_args()
 
@@ -83,6 +86,8 @@ def run(gpu_idx, args):
     torch.cuda.set_device(gpu_idx)
 
     set_seed(args.seed)
+    
+    dataset = DATASETS[args.dataset]
 
     # model = vseq.models.CWVAEAudioConv1d(
     #     z_size=args.latent_size,
@@ -129,17 +134,17 @@ def run(gpu_idx, args):
     modalities = [(loader, encode_transform, batcher)]
 
     train_dataset = BaseDataset(
-        source=TIMIT_TRAIN,
+        source=dataset[dataset.train],
         modalities=modalities,
     )
     valid_dataset = BaseDataset(
-        source=TIMIT_TEST,
+        source=dataset.test,
         modalities=modalities,
     )
 
     if args.length_sampler:
         train_sampler = LengthTrainSampler(
-            source=TIMIT_TRAIN,
+            source=dataset[dataset.train],
             field="length.wav.samples",
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
@@ -154,7 +159,7 @@ def run(gpu_idx, args):
             drop_last=True,
         )
         valid_sampler = LengthEvalSampler(
-            source=TIMIT_TEST,
+            source=dataset.test,
             field="length.wav.samples",
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         )
@@ -220,6 +225,7 @@ def run(gpu_idx, args):
             group=args.wandb_group,
             notes=args.wandb_notes,
             tags=args.wandb_tags,
+            mode=args.wandb_mode,
             config=args,
         )
 
@@ -313,15 +319,15 @@ def run(gpu_idx, args):
         if (
             args.save_checkpoints
             and epoch > 1
-            and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
-            > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
+            and min(tracker.accumulated_values[dataset.test]["loss"][:-1])
+            > tracker.accumulated_values[dataset.test]["loss"][-1]
         ):
             optimizer.consolidate_state_dict()
             if wandb.run is not None and wandb.run.dir != "/" and rank == 0:
                 model.module.save(wandb.run.dir)
                 checkpoint = dict(
                     epoch=epoch,
-                    best_loss=tracker.accumulated_values[TIMIT_TEST]["loss"][-1],
+                    best_loss=tracker.accumulated_values[dataset.test]["loss"][-1],
                     optimizer_state_dict=optimizer.state_dict(),
                 )
                 torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))

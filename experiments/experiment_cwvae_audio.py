@@ -15,7 +15,7 @@ import vseq.utils.device
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
-from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
+from vseq.data.datapaths import DATASETS
 from vseq.data.loaders import AudioLoader
 from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode
 from vseq.data.samplers.batch_samplers import LengthTrainSampler, LengthEvalSampler
@@ -42,6 +42,8 @@ parser.add_argument("--beta_start_value", default=0, type=float, help="initial b
 parser.add_argument("--free_nats_steps", default=0, type=int, help="number of steps to constant/anneal free bits")
 parser.add_argument("--free_nats_start_value", default=4, type=float, help="free bits per timestep")
 
+parser.add_argument("--dataset", default="timit", type=str, help="dataset to use")
+
 parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -51,6 +53,7 @@ parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
 parser.add_argument("--wandb_notes", default=None, type=str, help='custom notes for this experiment (optional)')
 parser.add_argument("--wandb_tags", default=None, type=str, nargs="+", help='custom tags for this experiment (optional)')
+parser.add_argument("--wandb_mode", default=None, type=str, help='tracking mode for this experiment (optional)')
 
 args = parser.parse_args()
 
@@ -62,6 +65,7 @@ set_seed(args.seed)
 
 device = vseq.utils.device.get_device() if args.device == "auto" else torch.device(args.device)
 
+dataset = DATASETS[args.dataset]
 
 wandb.init(
     entity="vseq",
@@ -69,6 +73,7 @@ wandb.init(
     group=args.wandb_group,
     notes=args.wandb_notes,
     tags=args.wandb_tags,
+    mode=args.wandb_mode,
     config=args,
 )
 rich.print(vars(args))
@@ -119,30 +124,31 @@ loader = AudioLoader("wav", cache=False)
 modalities = [(loader, encode_transform, batcher)]
 
 train_dataset = BaseDataset(
-    source=TIMIT_TRAIN,
+    source=dataset.train,
     modalities=modalities,
 )
 valid_dataset = BaseDataset(
-    source=TIMIT_TEST,
+    source=dataset.test,
     modalities=modalities,
 )
 rich.print(train_dataset)
 
 
-
 if args.length_sampler:
     train_sampler = LengthTrainSampler(
-        source=TIMIT_TRAIN,
+        source=dataset.train,
         field="length.wav.samples",
         max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         max_pool_difference=16000 * 0.3,
         min_pool_size=512,
+        # num_batches=784
     )
     valid_sampler = LengthEvalSampler(
-        source=TIMIT_TEST,
+        source=dataset.test,
         field="length.wav.samples",
         max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
     )
+    # valid_sampler.batches =valid_sampler.batches[:70]
     train_loader = DataLoader(
         dataset=train_dataset,
         collate_fn=train_dataset.collate,
@@ -179,8 +185,7 @@ else:
 
 
 print(model)
-x, x_sl = next(iter(valid_loader))[0]
-model.summary(input_data=x, x_sl=x_sl, device='cpu')
+model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride]), device="cpu")
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
@@ -244,13 +249,13 @@ for epoch in tracker.epochs(args.epochs):
             args.save_checkpoints
             and wandb.run is not None and wandb.run.dir != "/"
             and epoch > 1
-            and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
-            > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
+            and min(tracker.accumulated_values[dataset.test]["loss"][:-1])
+            > tracker.accumulated_values[dataset.test]["loss"][-1]
         ):
             model.save(wandb.run.dir)
             checkpoint = dict(
                 epoch=epoch,
-                best_loss=tracker.accumulated_values[TIMIT_TEST]["loss"][-1],
+                best_loss=tracker.accumulated_values[dataset.test]["loss"][-1],
                 optimizer_state_dict=optimizer.state_dict(),
             )
             torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
