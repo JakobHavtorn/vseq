@@ -1,6 +1,5 @@
 import argparse
 import os
-from vseq.data.samplers.batch_samplers import LengthEvalSampler, LengthTrainSampler
 
 import torch
 import torch.nn as nn
@@ -22,7 +21,7 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
 from vseq.data.datapaths import TIMIT_TEST, TIMIT_TRAIN
 from vseq.data.loaders import AudioLoader
-from vseq.data.samplers.distributed_sampler import DistributedSamplerWrapper
+from vseq.data.samplers import DistributedSamplerWrapper, LengthEvalSampler, LengthTrainSampler
 from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode, Quantize, StackWaveform
 from vseq.evaluation import Tracker
 from vseq.utils.argparsing import str2bool
@@ -141,7 +140,7 @@ def run(gpu_idx, args):
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
             min_pool_size=512,
-            #num_batches=10,
+            # num_batches=10,
         )
         train_sampler = DistributedSamplerWrapper(
             sampler=train_sampler,
@@ -155,7 +154,7 @@ def run(gpu_idx, args):
             field="length.wav.samples",
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         )
-        #valid_sampler.batches = valid_sampler.batches[:10]
+        # valid_sampler.batches = valid_sampler.batches[:10]
         valid_sampler = DistributedSamplerWrapper(
             sampler=valid_sampler,
             num_replicas=args.world_size,
@@ -232,7 +231,6 @@ def run(gpu_idx, args):
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu_idx], output_device=gpu_idx)
 
     optimizer = ZeroRedundancyOptimizer(model.parameters(), torch.optim.Adam, lr=args.lr)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     beta_annealer = CosineAnnealer(anneal_steps=args.beta_anneal_steps, start_value=args.beta_start_value, end_value=1)
     free_nats_annealer = CosineAnnealer(
@@ -308,13 +306,10 @@ def run(gpu_idx, args):
 
         if (
             args.save_checkpoints
-            and wandb.run is not None and wandb.run.dir != "/"
             and epoch > 1
             and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
             > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]
         ):
-            # print("\n")
-            # print(f"Rank {rank} ready to save, waiting to consolidate optimizer.state_dict()")
             optimizer.consolidate_state_dict()
             if wandb.run is not None and wandb.run.dir != "/" and rank == 0:
                 model.module.save(wandb.run.dir)
@@ -324,8 +319,7 @@ def run(gpu_idx, args):
                     optimizer_state_dict=optimizer.state_dict(),
                 )
                 torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
-            # print(f"Rank {rank} done saving")
-            # print("\n")
+                print(f"Saved model checkpoint at {wandb.run.dir}")
 
     wandb.finish()
     distributed.destroy_process_group()
