@@ -27,4 +27,4 @@
 #BSUB -e dtuhpc/logs/%J.out
 # -- end of LSF options --
 
-bash dtuhpc/run_hpc_job.sh "$@"  # Pass all arguments along to run script
+bash dtuhpc/hpc_run_job.sh "$@"  # Pass all arguments along to run script
