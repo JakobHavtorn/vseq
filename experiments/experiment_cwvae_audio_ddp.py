@@ -38,7 +38,7 @@ def main():
     parser.add_argument("--gpus", "-g", default=1, type=int, help="number of gpus per node")
     parser.add_argument("--node_rank", "-nr", default=0, type=int, help="ranking of this node within the nodes")
 
-    parser.add_argument("--batch_size", default=32, type=int, help="batch size")
+    parser.add_argument("--batch_size", default=0, type=int, help="batch size")
     parser.add_argument("--length_sampler", default=True, type=str2bool, help="use length sampler (batch size is seconds)")
     parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
     parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
@@ -138,7 +138,7 @@ def run(gpu_idx, args):
         train_sampler = LengthTrainSampler(
             source=TIMIT_TRAIN,
             field="length.wav.samples",
-            max_len="max", # 16000 * args.batch_size,
+            max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
             min_pool_size=512,
             #num_batches=10,
@@ -153,7 +153,7 @@ def run(gpu_idx, args):
         valid_sampler = LengthEvalSampler(
             source=TIMIT_TEST,
             field="length.wav.samples",
-            max_len="max", #16000 * args.batch_size,
+            max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         )
         #valid_sampler.batches = valid_sampler.batches[:10]
         valid_sampler = DistributedSamplerWrapper(
@@ -308,6 +308,7 @@ def run(gpu_idx, args):
 
         if (
             args.save_checkpoints
+            and wandb.run is not None and wandb.run.dir != "/"
             and epoch > 1
             and min(tracker.accumulated_values[TIMIT_TEST]["loss"][:-1])
             > tracker.accumulated_values[TIMIT_TEST]["loss"][-1]

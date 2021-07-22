@@ -26,7 +26,7 @@ from vseq.training.annealers import CosineAnnealer
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=32, type=int, help="batch size")
+parser.add_argument("--batch_size", default=0, type=int, help="batch size")
 parser.add_argument("--length_sampler", default=True, type=str2bool, help="use length sampler (batch size is seconds)")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
@@ -67,16 +67,7 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-model = vseq.models.CWVAEAudioConv1d(
-    z_size=args.latent_size,
-    h_size=args.hidden_size,
-    time_factors=args.time_factors,
-    num_level_layers=args.num_level_layers,
-    num_mix=args.num_mix,
-    num_bins=2 ** args.num_bits,
-    residual_posterior=args.residual_posterior
-)
-# model = vseq.models.CWVAEAudioTasNet(
+# model = vseq.models.CWVAEAudioConv1d(
 #     z_size=args.latent_size,
 #     h_size=args.hidden_size,
 #     time_factors=args.time_factors,
@@ -85,6 +76,15 @@ model = vseq.models.CWVAEAudioConv1d(
 #     num_bins=2 ** args.num_bits,
 #     residual_posterior=args.residual_posterior
 # )
+model = vseq.models.CWVAEAudioTasNet(
+    z_size=args.latent_size,
+    h_size=args.hidden_size,
+    time_factors=args.time_factors,
+    num_level_layers=args.num_level_layers,
+    num_mix=args.num_mix,
+    num_bins=2 ** args.num_bits,
+    residual_posterior=args.residual_posterior
+)
 # model = vseq.models.CWVAEAudioDense(
 # # model = vseq.models.CWVAEAudioConv1D(
 #     z_size=args.latent_size,
@@ -127,14 +127,14 @@ if args.length_sampler:
     train_sampler = LengthTrainSampler(
         source=TIMIT_TRAIN,
         field="length.wav.samples",
-        max_len=16000 * args.batch_size,
+        max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         max_pool_difference=16000 * 0.3,
         min_pool_size=512,
     )
     valid_sampler = LengthEvalSampler(
         source=TIMIT_TEST,
         field="length.wav.samples",
-        max_len=16000 * args.batch_size,
+        max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
     )
     train_loader = DataLoader(
         dataset=train_dataset,
