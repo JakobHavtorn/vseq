@@ -14,10 +14,10 @@ REPO_PATH=$HOME/Documents
 bash dtuhpc/hpc_python_setup.sh
 
 # unload modules
-module unload python3/3.9.5
+module unload python3/3.8.2
 module unload cuda/11.1
 # load modules
-module load python3/3.9.5
+module load python3/3.8.2
 module load cuda/11.1
 
 # activate venv

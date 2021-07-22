@@ -31,7 +31,7 @@ bsub -J $UUID -oo "dtuhpc/logs/$UUID.out" -eo "dtuhpc/logs/$UUID.out" -q gpujdha
 
 ## Submit a job
 ```
-bsub < queue_script.sh
+bsub < dtuhpc/queue_script.sh "command to run"
 ```
 
 ## Monitor a job

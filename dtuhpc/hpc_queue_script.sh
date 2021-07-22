@@ -5,7 +5,7 @@
 ### –- specify queue --
 #BSUB -q gpujdha
 ### -- set the job Name --
-#BSUB -J $(uuidgen)
+#BSUB -J CW-VAE
 ### -- ask for number of cores (default: 1) --
 #BSUB -n 4
 ### -- Select the resources: 4 gpu in exclusive process mode --
@@ -23,8 +23,8 @@
 #BSUB -N
 ### -- Specify the output and error file. %J is the job-id --
 ### -- -o and -e mean append, -oo and -eo mean overwrite --
-#BSUB -o dtuhpc/logs/%J.out
-#BSUB -e dtuhpc/logs/%J.out
+#BSUB -oo dtuhpc/logs/%J.out
+#BSUB -eo dtuhpc/logs/%J.out
 # -- end of LSF options --
 
 bash dtuhpc/hpc_run_job.sh "$@"  # Pass all arguments along to run script
