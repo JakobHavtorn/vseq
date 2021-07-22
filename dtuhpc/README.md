@@ -30,8 +30,14 @@ bsub -J $UUID -oo "dtuhpc/logs/$UUID.out" -eo "dtuhpc/logs/$UUID.out" -q gpujdha
 ```
 
 ## Submit a job
+```bash
+bsub < dtuhpc/hpc_queue_script.sh "command to run"
 ```
-bsub < dtuhpc/queue_script.sh "command to run"
+For instance
+
+```bash
+export CMD="WANDB_NOTES='V100 test run' python3 experiments/experiment_cwvae_audio_ddp.py --gpus 4 --num_workers 4 --epochs 3000 --free_nats_start_value 4 --free_nats_steps 1500000 --hidden_size 256 --latent_size 256 --time_factors 64 --input_coding mu_law --num_bits 16 --save_checkpoints True"
+bsub < dtuhpc/hpc_queue_script.sh $CMD
 ```
 
 ## Monitor a job

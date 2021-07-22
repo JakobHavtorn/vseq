@@ -1,6 +1,4 @@
 #!/bin/sh
-
-# -- start of LSF options --
 ### General options
 ### –- specify queue --
 #BSUB -q gpujdha
@@ -26,5 +24,9 @@
 #BSUB -oo dtuhpc/logs/%J.out
 #BSUB -eo dtuhpc/logs/%J.out
 # -- end of LSF options --
+
+echo "============================"
+echo "Submitting job with command:"
+echo "$@"
 
 bash dtuhpc/hpc_run_job.sh "$@"  # Pass all arguments along to run script
