@@ -111,6 +111,7 @@ class Tracker:
         self.printed_last = 0
         self.last_log_line_len = 0
         self.cpu_utils = defaultdict(lambda: collections.deque(maxlen=cpu_util_window))
+        self.iowait = "-"
         self.source = None
         self.start_time = defaultdict(lambda: None)
         self.end_time = defaultdict(lambda: None)
@@ -161,13 +162,13 @@ class Tracker:
             for source in best_metrics.keys()
         }
 
-    def steps(self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None):
+    def steps(self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None, max_steps: Optional[int] = None):
         if source is None and not isinstance(steppable, DataLoader):
-            raise ValueError("Must call .steps() on a DataLoader if source is None")
+            raise ValueError("Must provide `source` to .steps() if steppable is not a DataLoader")
 
         source = source if source is not None else steppable
 
-        self.set(source)
+        self.set(source, max_steps=max_steps)
 
         iterator = iter(steppable)
 
@@ -296,25 +297,29 @@ class Tracker:
         ps = f"{steps_frac}"
         if self.start_time[source] is None:
             duration = "-"
-            s_per_step = "-"
+            ms_per_step = "-"
         else:
             duration = time() - self.start_time[source]
-            s_per_step = duration / self.step[source] * 1000
-            s_per_step = f"{int(s_per_step):d}ms"
+            ms_per_step = duration / self.step[source] * 1000
+            ms_per_step = f"{int(ms_per_step):d}ms"
             mins = int(duration // 60)
             secs = int(duration % 60)
             duration = f"{mins:d}m {secs:d}s"
 
         if workers is not None:
-            cpu = int(round(sum([p.cpu_percent(interval=0.0) for p in workers]), 0))
+            cpu = int(round(sum([p.cpu_percent(interval=0.0) for p in workers]), 0))  # percent since last call
             self.cpu_utils[self.rank].append(cpu)
+            cpu_times = [p.cpu_times() for p in workers]  # accumulated over lifetime of process
+            iowait = sum([ct.iowait for ct in cpu_times]) # / len(workers)
+            cpu = sum([sum(ct[:2]) for ct in cpu_times]) # / len(workers)
+            self.iowait = f"{cpu:.0f}/{iowait:.0f}"
         if len(self.cpu_utils[self.rank]):
             cpu = sum(self.cpu_utils[self.rank]) / len(self.cpu_utils[self.rank])
             cpu = f"{cpu:.0f}%"
         else:
-            cpu = "-"
+            cpu = "-%"
 
-        ps = f"{steps_frac} [bright_white not bold]({duration}, {s_per_step}, {cpu})[/]"  # +26 format
+        ps = f"{steps_frac} [bright_white not bold]({duration}, {ms_per_step}, {cpu} {self.iowait}s)[/]"  # +26 format
 
         # source string
         ss = source_string(source)
@@ -332,14 +337,15 @@ class Tracker:
         # metrics string
         sep = " [magenta]|[/] "  # " | "
         metrics = [f"{name} = {met.str_value}" for name, met in self.metrics[source].items() if met.log_to_console]
-        metrics_len = [3 + len(m) for m in metrics]  # 3 is length of sep without formatting
-        metrics_len[0] += 3  # add sep left of first metric
-        metrics_len[-1] -= 1  # remove space right of sep right of last metric
-        metrics_cumlen = list(itertools.accumulate(metrics_len))
-        max_metrics_str_len = self.terminal.width - length_without_formatting(sp)
-        if metrics_cumlen[-1] > max_metrics_str_len:
-            idx = next(i for i, v in enumerate(metrics_cumlen) if v > max_metrics_str_len - 3)  # last before too long
-            metrics = metrics[:idx] + ["..."]
+        if len(metrics) > 0:
+            metrics_len = [3 + len(m) for m in metrics]  # 3 is length of sep without formatting
+            metrics_len[0] += 3  # add sep left of first metric
+            metrics_len[-1] -= 1  # remove space right of sep right of last metric
+            metrics_cumlen = list(itertools.accumulate(metrics_len))
+            max_metrics_str_len = self.terminal.width - length_without_formatting(sp)
+            if metrics_cumlen[-1] > max_metrics_str_len:
+                idx = next(i for i, v in enumerate(metrics_cumlen) if v > max_metrics_str_len - 3)  # last before too long
+                metrics = metrics[:idx] + ["..."]
         ms = sep + sep.join(metrics)
 
         # final string
