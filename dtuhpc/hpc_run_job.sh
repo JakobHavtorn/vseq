@@ -23,29 +23,15 @@ module load cuda/11.1
 # activate venv
 source $VENV_PATH/vseq/bin/activate
 
-# # Set $HOME if running as a bsub script
-# if [ -z "$BSUB_O_WORKDIR" ]; then
-#     export HOME=$BSUB_O_WORKDIR
-# fi
-# # Set $HOME if running as a qsub script
-# if [ -z "$PBS_O_WORKDIR" ]; then
-#     export HOME=$PBS_O_WORKDIR
-# fi
-# cd $HOME
-
-# logging
+# debugging
 pwd
 which python3
+which python
+which pip3
 which pip
 
-# echo "pip list"
-# pip list
-
-echo "python3 -m pip list"
-python3 -m pip list
-
-
 # execute script
-WANDB_NOTES=""
-WANDB_MODE="disabled"
+export WANDB_NOTES=""
+export WANDB_MODE="disabled"
+export VSEQ_DATA_ROOT_DIRECTORY=/zhome/c2/b/86488/Documents/vseq/data
 eval $CMD_STRING
