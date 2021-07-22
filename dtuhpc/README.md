@@ -3,8 +3,12 @@
 `ssh jdha@login1.hpc.dtu.dk`
 `ssh jdha@login2.hpc.dtu.dk`
 
-1. Create `VSEQ.env` file containing the `VSEQ_DATA_ROOT_DIRECTORY`.
-2. Prepare any datasets to be used by running `scripts/data/prepare_<name>.py`
+Home dir
+`/zhome/c2/b/86488`
+
+1. `git clone https://github.com/JakobHavtorn/vseq.git`
+2. Create `VSEQ.env` file containing the `VSEQ_DATA_ROOT_DIRECTORY`.
+3. Prepare any datasets to be used by running `scripts/data/prepare_<name>.py`
 
 
 `nodestat -G gpujdha`
@@ -15,7 +19,7 @@ The `test.log`, `test.err` and `test.out` files are created at the current worki
 
 
 Submit a job from `root/path/Documents/vseq`
-```
+```bash
 UUID=$(uuidgen)
 bsub -J $UUID -oo "dtuhpc/logs/$UUID.out" -eo "dtuhpc/logs/$UUID.out" -q gpujdha -u "jdh@corti.ai" -B -N -W 1:00 -n 4 -gpu "num=4:mode=exclusive_process" -R "span[hosts=1] rusage[mem=6GB]" "bash dtuhpc/hpc_run_job.sh 'python3 experiments/experiment_cwvae_audio_ddp.py --gpus 4 --num_workers 4 --epochs 1000 --free_nats_start_value 4 --free_nats_steps 80000 --hidden_size 96 --latent_size 96 --time_factors 64 --input_coding mu_law --num_bits 16 --save_checkpoints True'"
 ```
@@ -25,5 +29,22 @@ UUID=$(uuidgen)
 bsub -J $UUID -oo "dtuhpc/logs/$UUID.out" -eo "dtuhpc/logs/$UUID.out" -q gpujdha -u "jdh@corti.ai" -B -N -W 1:00 -n 4 -gpu "num=4:mode=exclusive_process" -R "span[hosts=1] rusage[mem=6GB]" "bash dtuhpc/hpc_run_job.sh 'python3 test.py'"
 ```
 
-https://www.hpc.dtu.dk/?page_id=2759
+## Submit a job
+```
+bsub < queue_script.sh
+```
 
+## Monitor a job
+```bash
+qstat gpujdha
+
+bstat jobid
+bkill jobid
+bstat -C  # Efficiency
+bstat -M  # Memory
+```
+
+
+## References
+https://www.hpc.dtu.dk/?page_id=2759
+https://www.hpc.dtu.dk/?page_id=1519
