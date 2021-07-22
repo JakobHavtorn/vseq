@@ -13,7 +13,7 @@
 ### -- set walltime limit: hh:mm --  maximum 24 hours for GPU-queues right now
 #BSUB -W 672:00
 # request 10GB of system-memory
-#BSUB -R "rusage[mem=10GB]"
+#BSUB -R "span[hosts=1] rusage[mem=10GB]"
 ### -- set the email address --
 # if you want to receive e-mail notifications on a non-default address
 #BSUB -u jdh@corti.ai
