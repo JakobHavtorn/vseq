@@ -91,7 +91,7 @@ def sequence_mask(seq_lens: Union[list, torch.Tensor], stride: int = 1, max_len:
     return seq_mask.to(dtype)
 
 
-def update_running_variance(avg_a, avg_b, w_a, w_b, M2_a, M2_b):
+def update_running_variance(avg_a: Union[torch.Tensor, float], avg_b, w_a, w_b, M2_a, M2_b):
     """Online variance update c.f. parallel variance algorithm at [1].
 
     [1] https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance

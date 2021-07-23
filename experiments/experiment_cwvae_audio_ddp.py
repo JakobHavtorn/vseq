@@ -134,7 +134,7 @@ def run(gpu_idx, args):
     modalities = [(loader, encode_transform, batcher)]
 
     train_dataset = BaseDataset(
-        source=dataset[dataset.train],
+        source=dataset.train,
         modalities=modalities,
     )
     valid_dataset = BaseDataset(
@@ -144,12 +144,12 @@ def run(gpu_idx, args):
 
     if args.length_sampler:
         train_sampler = LengthTrainSampler(
-            source=dataset[dataset.train],
+            source=dataset.train,
             field="length.wav.samples",
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
             min_pool_size=512,
-            # num_batches=10,
+            # num_batches=30,
         )
         train_sampler = DistributedSamplerWrapper(
             sampler=train_sampler,

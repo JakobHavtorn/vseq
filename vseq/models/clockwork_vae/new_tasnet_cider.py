@@ -294,9 +294,6 @@ class TemporalBlock(nn.Module):
             padding (str or int): Integer padding for depth-wise separable convolution or str "same" for same padding.
             dilation (int): Dilation for depth-wise separable convolution
             norm_type (str, optional): Name of the normalization to use. Defaults to "GlobalLayerNorm".
-
-        Raises:
-            NotImplementedError: [description]
         """
         super().__init__()
 
@@ -328,7 +325,7 @@ class TemporalBlock(nn.Module):
             norm_type=norm_type,
         )
         if transposed and stride > 1:
-            dsconv = ConvTransposeDepthwiseSeparable1d(**kwargs, padding=0)
+            dsconv = ConvTransposeDepthwiseSeparable1d(**kwargs)
             self.dsconv = nn.Sequential(dsconv, Pad(padding))
         else:
             self.dsconv = ConvDepthwiseSeparable1d(**kwargs, padding=padding)
@@ -347,7 +344,16 @@ class TemporalBlock(nn.Module):
         x = self.norm(x) if self.norm is not None else x
         x = self.dsconv(x)
 
-        return x + residual[:, :, :: self.stride]
+        if self.transposed and self.stride > 1:
+            # residual connection via copies of residual
+            out_length = residual.shape[2] * self.stride
+            c_start = math.floor((x.shape[2] - out_length) / 2)
+            c_final = math.ceil((x.shape[2] - out_length) / 2) + out_length - 1
+            x[:, :, c_start:c_final] = x[:, :, c_start:c_final] + residual.repeat(1, 1, self.stride)
+        else:
+            # residual connection via striding
+            x = x + residual[:, :, :: self.stride]
+        return x
         # looks like w/o F.relu is better than w/ F.relu
         # return F.relu(out + residual)
 
@@ -425,7 +431,16 @@ class TemporalBlock(nn.Module):
 
 
 class ConvDepthwiseSeparable1d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, norm_type):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        norm_type: str = "ChannelwiseLayerNorm",
+    ):
         super().__init__()
 
         self.stride = _single(stride)
@@ -464,7 +479,16 @@ class ConvDepthwiseSeparable1d(nn.Module):
 
 
 class ConvTransposeDepthwiseSeparable1d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, norm_type):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        norm_type: str = "ChannelwiseLayerNorm",
+    ):
         super().__init__()
 
         self.stride = _single(stride)
