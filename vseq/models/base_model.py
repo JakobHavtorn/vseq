@@ -134,7 +134,7 @@ class BaseModel(nn.Module):
         batch_dim: Optional[int] = None,
         col_names: Optional[Iterable[str]] = ["input_size", "output_size", "num_params", "kernel_size", "mult_adds"],
         col_width: int = 25,
-        depth: int = 5,
+        depth: int = 6,
         device: Optional[torch.device] = None,
         dtypes: Optional[List[torch.dtype]] = None,
         row_settings: Optional[Iterable[str]] = None,

@@ -75,7 +75,7 @@ class TasNetEncoder(nn.Module):
                 kernel_size=kernel_size,
                 stride=2,
                 padding=kernel_size // 2,
-                bias=False,
+                bias=True,
             ),
             nn.PReLU(),
             nn.GroupNorm(num_channels=channels_block, num_groups=channels_block),
@@ -163,7 +163,7 @@ class TasNetDecoder(nn.Module):
 
         # [B, channels_in, T] -> [B, channels_block, T] -> [B, channels_bottleneck, T]
         self.in_transform = nn.Sequential(
-            nn.Conv1d(channels_in, channels_block, kernel_size, stride=1, padding=kernel_size // 2, bias=False),
+            nn.Conv1d(channels_in, channels_block, kernel_size, stride=1, padding=kernel_size // 2, bias=True),
             nn.PReLU(),
             nn.GroupNorm(num_channels=channels_block, num_groups=channels_block),
             nn.Conv1d(channels_block, channels_bottleneck, 1, bias=False),
@@ -200,7 +200,7 @@ class TasNetDecoder(nn.Module):
                 kernel_size=kernel_size,
                 stride=1,
                 padding=kernel_size // 2,
-                bias=False,
+                bias=True,
             ),
             nn.PReLU(),
             nn.GroupNorm(num_channels=channels_out, num_groups=channels_out),
@@ -284,7 +284,7 @@ class TasNetCoder(nn.Module):
                 kernel_size=kernel_size,
                 stride=1,
                 padding=kernel_size // 2,
-                bias=False,
+                bias=True,
             ),
             nn.PReLU(),
             nn.GroupNorm(num_channels=channels_block, num_groups=channels_block),
@@ -421,7 +421,7 @@ class TemporalBlock(nn.Module):
         else:
             self.pad = None
             self.dsconv = ConvDepthwiseSeparable1d(**kwargs, padding=padding)
-
+        
     def forward(self, x):
         """
         Args:
@@ -453,8 +453,6 @@ class TemporalBlock(nn.Module):
             # x = x + residual.view(residual.size(0), residual.size(1), -1, self.stride).mean(-1)
 
         return x
-        # looks like w/o F.relu is better than w/ F.relu
-        # return F.relu(out + residual)
 
 
 class ConvDepthwiseSeparable1d(nn.Module):
@@ -484,7 +482,7 @@ class ConvDepthwiseSeparable1d(nn.Module):
             padding=padding,
             dilation=dilation,
             groups=in_channels,
-            bias=False,
+            bias=True,
         )
         self.prelu = nn.PReLU()
         self.norm = get_normalization(norm_type, num_channels=in_channels)
@@ -532,7 +530,7 @@ class ConvTransposeDepthwiseSeparable1d(nn.Module):
             padding=padding,
             dilation=dilation,
             groups=in_channels,
-            bias=False,
+            bias=True,
         )
         self.prelu = nn.PReLU()
         self.norm = get_normalization(norm_type, num_channels=in_channels)

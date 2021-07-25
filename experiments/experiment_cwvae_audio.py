@@ -36,6 +36,7 @@ parser.add_argument("--num_level_layers", default=8, type=int, help="dense layer
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
 parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
+parser.add_argument("--mu_law_bits", default=None, type=int, help="number of bits for mu law if different from DML")
 parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
 parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
 parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
@@ -112,8 +113,8 @@ model = vseq.models.CWVAEAudioTasNet(
 decode_transform = []
 encode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform.append(MuLawEncode(bits=8))  #args.num_bits))
-    decode_transform.append(MuLawDecode(bits=8))  #args.num_bits))
+    encode_transform.append(MuLawEncode(bits=args.mu_law_bits or args.num_bits))
+    decode_transform.append(MuLawDecode(bits=args.mu_law_bits or args.num_bits))
 
 # encode_transform.extend([Quantize(bits=8, rescale=True)])
 encode_transform = Compose(*encode_transform)
@@ -259,5 +260,6 @@ for epoch in tracker.epochs(args.epochs):
                 optimizer_state_dict=optimizer.state_dict(),
             )
             torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
- 
+            print(f"Saved model checkpoint at {wandb.run.dir}")
+
         tracker.log(**extra)

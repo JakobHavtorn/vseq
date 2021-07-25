@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
     parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
     parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
+    parser.add_argument("--mu_law_bits", default=None, type=int, help="number of bits for mu law if different from DML")
     parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
     parser.add_argument("--beta_anneal_steps", default=0, type=int, help="number of steps to anneal beta")
     parser.add_argument("--beta_start_value", default=0, type=float, help="initial beta annealing value")
@@ -121,8 +122,8 @@ def run(gpu_idx, args):
     decode_transform = []
     encode_transform = []
     if args.input_coding == "mu_law":
-        encode_transform.append(MuLawEncode(bits=8))  # args.num_bits))
-        decode_transform.append(MuLawDecode(bits=8))  # args.num_bits))
+        encode_transform.append(MuLawEncode(bits=args.mu_law_bits or args.num_bits))
+        decode_transform.append(MuLawDecode(bits=args.mu_law_bits or args.num_bits))
 
     # encode_transform.extend([Quantize(bits=8, rescale=True)])
     encode_transform = Compose(*encode_transform)
@@ -149,7 +150,7 @@ def run(gpu_idx, args):
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
             min_pool_size=512,
-            # num_batches=30,
+            # num_batches=10,
         )
         train_sampler = DistributedSamplerWrapper(
             sampler=train_sampler,
@@ -280,7 +281,7 @@ def run(gpu_idx, args):
                 tracker.update(metrics)
 
             extra = dict()
-            if rank == 0 and epoch % 1 == 0:
+            if rank == 0 and epoch % 10 == 0:
                 outputs.x_hat = decode_transform(outputs.x_hat)
                 reconstructions = [
                     wandb.Audio(
