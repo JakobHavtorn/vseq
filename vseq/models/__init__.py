@@ -12,4 +12,5 @@ from vseq.models.astro_ctc_asr import AstroCTCASR
 from vseq.models.astro_ce_asr import AstroCEASR
 from vseq.models.astro_dae import AstroDAE
 from vseq.models.text_vae import TextVAE
+from vseq.models.astro_vae import AstroVAE
 

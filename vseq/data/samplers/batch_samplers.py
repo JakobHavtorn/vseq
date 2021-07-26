@@ -58,7 +58,7 @@ class LengthTrainSampler(Sampler):
                 reader = csv.DictReader(source_file_buffer)
                 lengths = [int(row[self.field]) for row in reader]
         else: # assume dataset instance
-            lengths = self.source_filepath.get_example_lengths(0)
+            lengths = self.source_filepath.get_example_lengths(self.field)
 
         return np.array(lengths)
 

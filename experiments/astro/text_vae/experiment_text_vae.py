@@ -115,7 +115,7 @@ def prepare_train_data(idx):
 
     train_sampler = LengthTrainSampler(
         source=train_dataset,
-        field=None,
+        field=0,
         max_len=float(args.max_len),
         max_pool_difference=float(args.max_pool_difference),
         num_batches=1000
