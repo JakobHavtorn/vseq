@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 #os.environ["WANDB_MODE"] = "disabled" # equivalent to "wandb disabled"
 
 import argparse
@@ -9,6 +9,7 @@ import json
 import torch
 import wandb
 import rich
+import numpy as np
 
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -29,13 +30,13 @@ from vseq.data.samplers import LengthTrainSampler, LengthEvalSampler
 from vseq.evaluation import Tracker
 from vseq.training import set_dropout
 from vseq.utils.rand import set_seed, get_random_seed
-from vseq.models import DeepLSTMASR
-from vseq.modules import STFTConv
+from vseq.models import WaveLSTM
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=16, type=int, help="batch size")
-parser.add_argument("--max_second_diff", default=0.3, type=float, help="control the variation of sample lengths")
+parser.add_argument("--batch_size", default=4, type=int, help="batch size")
+parser.add_argument("--chunk_size", default=1, type=float, help="number of seconds per data chunk")
+parser.add_argument("--max_second_diff", default=0.2, type=float, help="control the variation of sample lengths")
 parser.add_argument("--sample_rate", default=16000, type=int, help="sample rate")
 parser.add_argument("--n_fft", default=320, type=int, help="Number of FFTs")
 parser.add_argument("--win_length", default=320, type=int, help="the size of the STFT window")
@@ -98,7 +99,8 @@ train_sampler = LengthTrainSampler(
     source=LIBRISPEECH_TRAIN,
     field="length.flac.samples",
     batch_size=args.batch_size,
-    max_pool_difference=float(args.sample_rate * args.max_second_diff)
+    max_pool_difference=float(args.sample_rate * args.max_second_diff),
+    num_batches=100
 )
 
 val_sampler = LengthEvalSampler(
@@ -121,8 +123,9 @@ val_loader = DataLoader(
     batch_sampler=val_sampler
 )
 
-model = STFTConv() # dummy
+model = WaveLSTM()
 model.to(device)
+model.set_transform_device(device)
 
 optimizer = getattr(torch.optim, args.optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr_max, **args.optimizer_kwargs)
@@ -130,27 +133,47 @@ lr_scheduler = CosineAnnealingLR(optimizer, T_max=(args.epochs - args.warm_up), 
 
 tracker = Tracker()
 
+def chunk_data(x, sl, chunk_size):
+    assert (sl.max() - sl.min()) < chunk_size
+    num_chunks = int(np.ceil(sl.max() / chunk_size))
+    chunks = []
+    for i in range(num_chunks):
+        c = x[:, i * chunk_size : (i + 1) * chunk_size]
+        c_sl = torch.clip(sl - i * chunk_size, min=0, max=chunk_size)
+        m = c_sl > 0
+        chunks += [(c[m], c_sl[m], m)]
+    return chunks
+        
 for epoch in tracker.epochs(args.epochs):
-
-    # update hyperparams (pre)
-    p = min(epoch - 1, args.warm_up) / args.warm_up * args.dropout_prob
-    set_dropout(model, p)
 
     # training
     model.train()
     for (x, x_sl), metadata in tracker.steps(train_loader):
 
-        x = x.to(device)
-        break
-    break
+        states = None
+        cum_metrics = None
+        
+        for xc, xc_sl, mask in chunk_data(x, x_sl, int(args.sample_rate * args.chunk_size)):
+            
+            xc = xc.to(device)
+            
+            states = states if states is None else [(s1[:, mask], s2[:, mask]) for (s1, s2) in states]
+            loss, metrics, outputs = model(xc, xc_sl, states=states)
+            states = [(s1.detach(), s2.detach()) for (s1, s2) in outputs.states]
+            
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        
+            if cum_metrics is None:
+                cum_metrics = metrics
+            else:
+                for c, m in zip(cum_metrics, metrics):
+                    c.update(m)
+            
+        tracker.update(cum_metrics)
+        
 
-    #     loss, metrics, outputs = model(x, x_sl, y, y_sl)
-
-    #     optimizer.zero_grad()
-    #     loss.backward()
-    #     optimizer.step()
-
-    #     tracker.update(metrics)
 
     # tracker.reset()
 

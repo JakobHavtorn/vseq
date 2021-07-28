@@ -8,7 +8,7 @@ from vseq.modules import Dropout1dPackedData
 class LSTMBlock(nn.Module):
 
     def __init__(self, input_size=320, hidden_size=320, num_layers=5, bidirectional=True, sum_directions=True,
-                 dropout_prob=0.40, temp_dropout=True, return_all=False):
+                 dropout_prob=0.40, temp_dropout=True, return_all=False, return_states=False):
         """
         Implements multiple consecutive LSTM layers.
 
@@ -33,6 +33,7 @@ class LSTMBlock(nn.Module):
         self.p = dropout_prob
         self.temp_dropout = temp_dropout
         self.return_all = return_all
+        self.return_states = return_states
         self.lstm_layers = []
         self.dropout_layers = []
 
@@ -53,7 +54,7 @@ class LSTMBlock(nn.Module):
             self.dropout_layers.append(dropout_layer)
             input_size = (hidden_size * bd_scale) // sd_scale
 
-    def forward(self, input, seq_lens):
+    def forward(self, input, seq_lens, states=None):
         """
         Args:
             input (Tensor): Input of shape TNF with dtype == float32.
@@ -63,17 +64,24 @@ class LSTMBlock(nn.Module):
             Tensor: Output of shape TNF with F = hidden_size or hidden_size x 2 if sum_directions is False.
         """
         x = input if isinstance(input, PackedSequence) else pack_padded_sequence(input, seq_lens)
-        outputs = []
-        for lstm_layer, dropout_layer in zip(self.lstm_layers, self.dropout_layers):
-            x, _ = lstm_layer(x)
+        start_states = states if states is not None else [None] * self.num_layers
+        outputs, end_states = [], []
+        for lstm_layer, dropout_layer, start_state in zip(self.lstm_layers, self.dropout_layers, start_states):
+            x, end_state = lstm_layer(x, start_state)
             if self.sum_directions:
                 sd_data = x.data.view(-1, 2, self.hidden_size).sum(dim=1)
                 x = torch.nn.utils.rnn.PackedSequence(data=sd_data, batch_sizes=x.batch_sizes)
             do_data = dropout_layer(x.data) # TODO: Implement support for variational dropout
             x = torch.nn.utils.rnn.PackedSequence(data=do_data, batch_sizes=x.batch_sizes)
             outputs.append(x)
+            end_states.append(end_state)
 
         if self.return_all:
-            return [pad_packed_sequence(x)[0] for x in outputs], seq_lens
+            outputs = ([pad_packed_sequence(x)[0] for x in outputs], seq_lens)
         else:
-            return pad_packed_sequence(x) # pad_packed_sequences returns seq_lens
+            outputs = pad_packed_sequence(x) # pad_packed_sequences returns seq_lens
+        
+        if self.return_states:
+            return *outputs, end_states
+        else:
+            return outputs
