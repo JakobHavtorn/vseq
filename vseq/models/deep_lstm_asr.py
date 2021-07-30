@@ -154,7 +154,6 @@ class DeepLSTMASR(nn.Module):
 
         metrics = [
             LossMetric(loss, weight_by=z_sl.sum()),
-            WindowMeanMetric(loss),
             ErrorRateMetric(refs, hyps, word_tokenizer, name="wer"),
             ErrorRateMetric(refs, hyps, char_tokenizer, name="cer")
         ]
