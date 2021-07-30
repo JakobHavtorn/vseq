@@ -136,8 +136,8 @@ class TextVAE(nn.Module):
 
         # compute parameters
         if self.sep_embeddings:
-            q_z_weights = self.embedding_infer(x)
-            q_z_weights = F.gumbel_softmax(q_z_weights, tau=2, hard=False)
+            q_z_weights = self.embedding_infer(x).softmax(2)
+            # q_z_weights = F.gumbel_softmax(q_z_weights, tau=2, hard=True)
             q_z_logits = torch.matmul(q_z_weights, self.embedding.weight)
         else:
             q_z_logits = self.embedding(x)
