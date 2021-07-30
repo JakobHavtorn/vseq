@@ -7,6 +7,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.distributions as D
 
 from vseq.data.token_map import TokenMap
@@ -22,7 +23,8 @@ class TextVAE(nn.Module):
         self,
         hidden_size: int,
         prior_hidden_size: int,
-        token_map: TokenMap
+        token_map: TokenMap,
+        sep_embeddings: bool = False
     ):
         super().__init__()
 
@@ -30,11 +32,17 @@ class TextVAE(nn.Module):
         self.hidden_size = hidden_size
         self.prior_hidden_size = prior_hidden_size
         self.num_tokens = len(token_map)
+        self.sep_embeddings = sep_embeddings
 
         self.std_activation_infer = nn.Softplus(beta=np.log(2))
         self.std_activation_prior = nn.Softplus(beta=np.log(2))
 
         self.embedding = nn.Embedding(num_embeddings=self.num_tokens, embedding_dim=hidden_size * 2)
+        
+        if sep_embeddings:
+            # self.embedding_infer = nn.Embedding(num_embeddings=self.num_tokens, embedding_dim=hidden_size * 2)
+            self.embedding_infer = nn.Embedding(num_embeddings=self.num_tokens, embedding_dim=self.num_tokens)
+        
         self.lstm_prior = nn.LSTM(
             input_size=hidden_size,
             hidden_size=prior_hidden_size,
@@ -59,7 +67,7 @@ class TextVAE(nn.Module):
         mask_2d = sequence_mask(x_sl, dtype=x.dtype, device=x.device)
         mask_3d = mask_2d.unsqueeze(2)
         
-        q_z = self.infer(x, x_sl)
+        q_z, test = self.infer(x, x_sl)
         z = q_z.rsample() * mask_3d
         p_z = self.prior(z, x_sl)
         p_x = self.reconstruct(z)
@@ -78,13 +86,13 @@ class TextVAE(nn.Module):
         preds = p_x.logits.argmax(2)
         loss = - ((log_prob - beta * kl).sum() / x_sl.sum())
 
-        
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
             LLMetric(elbo, name="elbo"),
             LLMetric(log_prob, name="rec"),
+            LLMetric(log_prob, name="rec (npt)", reduce_by=x_sl),
             KLMetric(kl),
-            KLMetric(kl, name="kl (bpt)", reduce_by=x_sl / math.log(2)),
+            KLMetric(kl, name="kl (npt)", reduce_by=x_sl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             SeqAccuracyMetric(preds, x, mask=mask_2d, name="acc")
         ]
@@ -98,6 +106,7 @@ class TextVAE(nn.Module):
             q_z=q_z,
             p_z=p_z,
             z=z,
+            test=test,
         )
         return loss, metrics, outputs
 
@@ -126,14 +135,19 @@ class TextVAE(nn.Module):
     def infer(self, x: torch.Tensor, x_sl: torch.Tensor):
 
         # compute parameters
-        q_z_logits = self.embedding(x)
+        if self.sep_embeddings:
+            q_z_weights = self.embedding_infer(x)
+            q_z_weights = F.gumbel_softmax(q_z_weights, tau=2, hard=False)
+            q_z_logits = torch.matmul(q_z_weights, self.embedding.weight)
+        else:
+            q_z_logits = self.embedding(x)
         
         # parameterize q_z
         mu, log_sigma = q_z_logits.chunk(2, dim=2)
         sigma = self.std_activation_infer(log_sigma)
         q_z = D.Normal(mu, sigma)
         
-        return q_z
+        return q_z, q_z_weights
 
     def reconstruct(self, z):
         """
