@@ -68,6 +68,7 @@ class WindowMeanMetric(Metric):
 
 class ErrorRateMetric(Metric):
     _str_value_fmt = "<10.3"
+    get_best = min_value
 
     def __init__(self, refs, hyps, tokenizer, name="ER", tags=None):
         super().__init__(name=name, tags=tags)

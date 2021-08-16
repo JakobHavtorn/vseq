@@ -12,6 +12,10 @@ from vseq.utils.decoding import greedy_ctc #, greedy_aed
 from vseq.data.token_map import TokenMap
 from vseq.data.tokens import DELIMITER_TOKEN, BLANK_TOKEN
 
+DEEP_LSTM_2D_CONV_FRONTEND = ((32, (3, 3), (2, 2)),
+                              (32, (3, 3), (2, 1)),
+                              (32, (3, 3), (2, 1)))
+
 
 def stack_frames(x):
     
@@ -33,6 +37,7 @@ class DeepLSTMASR(nn.Module):
                  token_map: TokenMap,
                  hidden_size: int = 320,
                  layers_pr_block: int = 5,
+                 conv_config: list = None,
                  dropout_prob: float = 0.0,
                  ctc_model: bool = False
     ):
@@ -51,11 +56,13 @@ class DeepLSTMASR(nn.Module):
         self.token_map = token_map
         self.hidden_size = hidden_size
         self.layers_pr_block = layers_pr_block
+        self.conv_config = conv_config or DEEP_LSTM_2D_CONV_FRONTEND
         self.p = dropout_prob
         self.ctc_model = ctc_model
 
         # encoder layers: conv --> block 1 --> block 2 --> output
-        self.conv2d_block = Conv2dBlock(dropout_prob=dropout_prob)
+        self.conv2d_block = Conv2dBlock(config=self.conv_config,
+                                        dropout_prob=dropout_prob)
         
         self.lstm_block_1 = LSTMBlock(num_layers=layers_pr_block,
                                       input_size=hidden_size,

@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 #os.environ["WANDB_MODE"] = "disabled" # equivalent to "wandb disabled"
 
 import argparse
@@ -36,7 +36,7 @@ from vseq.training.saving import save_exp_file, save_model
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--seconds_pr_batch", default=320, type=int, help="batch size")
+parser.add_argument("--seconds_pr_batch", default=160, type=int, help="batch size")
 parser.add_argument("--max_second_diff", default=0.3, type=float, help="control the variation of sample lengths")
 parser.add_argument("--sample_rate", default=16000, type=int, help="sample rate")
 parser.add_argument("--n_fft", default=320, type=int, help="Number of FFTs")
@@ -49,11 +49,12 @@ parser.add_argument("--lr_min", default=5e-5, type=float, help="end learning rat
 parser.add_argument("--optimizer", default='Adam', type=str, help="optimizer")
 parser.add_argument("--optimizer_kwargs", default='{}', type=json.loads, help="extra kwargs for optimizer")
 
+parser.add_argument("--conv_filters", default=52, type=int, help="number of 2D conv filters")
 parser.add_argument("--layers_pr_block", default=5, type=int, help="number of LSTM layers pr block")
-parser.add_argument("--hidden_size", default=320, type=int, help="size of the LSTM layers")
-parser.add_argument("--dropout_prob", default=0.1, type=float, help="size of the LSTM layers")
+parser.add_argument("--hidden_size", default=520, type=int, help="size of the LSTM layers")
+parser.add_argument("--dropout_prob", default=0.20, type=float, help="size of the LSTM layers")
 
-parser.add_argument("--num_batches_per_epoch", default=2500, type=int, help="number of batches per epoch")
+parser.add_argument("--num_batches_per_epoch", default=5000, type=int, help="number of batches per epoch")
 parser.add_argument("--epochs", default=300, type=int, help="number of epochs")
 parser.add_argument("--warm_up", default=100, type=int, help="epochs before lr annealing starts")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
@@ -203,15 +204,23 @@ test_other_loader = DataLoader(
     batch_sampler=test_other_sampler
 )
 
+conv_config = ((args.conv_filters, (3, 3), (2, 2)),
+               (args.conv_filters, (3, 3), (2, 1)),
+               (args.conv_filters, (3, 3), (2, 1)))
+
 model = DeepLSTMASR(
     token_map=token_map,
     layers_pr_block=args.layers_pr_block,
     hidden_size=args.hidden_size,
     dropout_prob=0.0,
+    conv_config=conv_config,
     ctc_model=True
 )
 
 model.to(device)
+# path = "/home/labo/repos/vseq/experiments/wandb/offline-run-20210730_154601-lcry9m4u/files/model_clean.pt"
+# state_dict = torch.load(path)
+# model.load_state_dict(state_dict, strict=True)
 
 optimizer = getattr(torch.optim, args.optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr_max, **args.optimizer_kwargs)
@@ -219,7 +228,7 @@ lr_scheduler = CosineAnnealingLR(optimizer, T_max=(args.epochs - args.warm_up), 
 
 tracker = Tracker()
 
-get_best_loss = lambda x: tracker.best_metrics[x]["best_loss"].value
+get_best_wer = lambda x: tracker.best_metrics[x]["best_wer"].value
 best_clean = float("inf")
 best_other = float("inf")
 
@@ -278,7 +287,7 @@ for epoch in tracker.epochs(args.epochs):
             loss, metrics, outputs = model(x, x_sl, y, y_sl)
 
             tracker.update(metrics)
-
+    
     tracker.log(dropout=p, learning_rate=lr_scheduler.get_last_lr()[0])
     
     # update hyperparams (post)
@@ -288,10 +297,10 @@ for epoch in tracker.epochs(args.epochs):
     # save model
     if tracking_enabled:
         
-        if get_best_loss(LIBRISPEECH_DEV_CLEAN) < best_clean:
+        if get_best_wer(LIBRISPEECH_DEV_CLEAN) < best_clean:
             save_model(wandb.run.dir, model.state_dict(), "model_clean")
-            best_clean = get_best_loss(LIBRISPEECH_DEV_CLEAN)
+            best_clean = get_best_wer(LIBRISPEECH_DEV_CLEAN)
             
-        if get_best_loss(LIBRISPEECH_DEV_OTHER) < best_other:
+        if get_best_wer(LIBRISPEECH_DEV_OTHER) < best_other:
             save_model(wandb.run.dir, model.state_dict(), "model_other")
-            best_other = get_best_loss(LIBRISPEECH_DEV_OTHER)
+            best_other = get_best_wer(LIBRISPEECH_DEV_OTHER)
