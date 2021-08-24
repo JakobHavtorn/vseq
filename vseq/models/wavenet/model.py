@@ -22,6 +22,7 @@ from ..base_model import BaseModel
 
 LOGGER = logging.getLogger(name=__file__)
 
+
 class InputSizeError(Exception):
     def __init__(self, input_size, receptive_field):
         message = "Input size has to be larger than receptive_field\n"
@@ -38,7 +39,7 @@ class WaveNet(BaseModel):
         n_layers: int = 10,
         n_stacks: int = 5,
         res_channels: int = 512,
-        stack_waveform : bool = False, 
+        stack_waveform: bool = False,
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
@@ -186,7 +187,8 @@ class WaveNet(BaseModel):
                 logits.size(0),
                 self.out_classes,
                 logits.size(-1),
-                logits.size(1) // self.out_classes,
+                logits.size(1)
+                // self.out_classes,  # this should be self.in_channels if we have a stack
             )
         loss, log_prob = self.compute_loss(target, x_sl, logits)
 
@@ -200,7 +202,9 @@ class WaveNet(BaseModel):
         ]
         if self.stack_waveform:
             metrics.append(
-                BitsPerDimMetric(log_prob, name="sbpd", reduce_by=x_sl * float(self.in_channels))
+                BitsPerDimMetric(
+                    log_prob, name="sbpd", reduce_by=x_sl * float(self.in_channels)
+                )
             )
 
         output = SimpleNamespace(
@@ -210,7 +214,11 @@ class WaveNet(BaseModel):
 
     def generate(self, n_samples: int, n_frames: int = 48000):
         """Generate samples from the WaveNet starting from a zero vector"""
-        if self.num_embeddings is None:
+        if self.stack_waveform:
+            x = torch.zeros(
+                n_samples, self.receptive_field, self.in_channels, device=self.device
+            )  # (B, T, C)
+        elif self.num_embeddings is None:
             # start with floats of zeros
             x = torch.zeros(
                 n_samples, self.receptive_field, 1, device=self.device
@@ -230,21 +238,39 @@ class WaveNet(BaseModel):
             output = self.causal(x, pad=False)
             skip_connections = self.res_stack(output, skip_size=1)
             output = torch.sum(skip_connections, dim=0)
-            output = self.out_convs(output)
+            logits = self.out_convs(output)
 
-            categorical = D.Categorical(logits=output.transpose(1, 2))
+            if self.in_channels > 1:
+                logits = logits.view(
+                    logits.size(0),
+                    self.out_classes,
+                    logits.size(-1),
+                    logits.size(1) // self.out_classes,
+                )
+                logits = logits.transpose(1, 3)
+            else:
+                logits = logits.transpose(1, 2)
+
+            categorical = D.Categorical(logits=logits)
             x_new = categorical.sample()  # Value in {0, ..., 255}
             x_hat.append(x_new)
 
             # prepare prediction as next input
-            if self.num_embeddings is None:
-                x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
+            if self.stack_waveform:  # Already in shape (B, T, C)
+                if len(x_new.shape) < 3: # (B, T) in case of single channel stack_waveform
+                    x_new = x_new.unsqueeze(-1)
                 x_new = x_new / (self.out_classes - 1)  # To [0, 1]
                 x_new = x_new * 2 - 1  # To [-1, 1]
-            else:
-                x_new = self.embedding(x_new)  # (B, T, C) (1, 1, C)
 
-            x_new = x_new.transpose(1, 2)  # (B, C, T)
+            elif self.num_embeddings is None:
+                x_new = x_new.unsqueeze(-1)  # (B, T) --> (B, T, C) (1, 1, 1)
+                x_new = x_new / (self.out_classes - 1)  # To [0, 1]
+                x_new = x_new * 2 - 1  # To [-1, 1]
+                x_new = x_new.transpose(1, 2)  # (B, C, T)
+
+            else:
+                x_new = self.embedding(x_new)  # (B, T, C) (1, 1, C)\
+                x_new = x_new.transpose(1, 2)  # (B, C, T)
 
             x = torch.cat([x[:, :, 1:], x_new], dim=2)  # FIFO along T
 

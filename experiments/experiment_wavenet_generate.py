@@ -4,7 +4,7 @@ import argparse
 import logging
 from types import SimpleNamespace
 
-
+import IPython
 import torch
 import torchaudio
 import wandb
@@ -36,14 +36,6 @@ from vseq.evaluation.tracker import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
 from vseq.utils.rand import set_seed, get_random_seed
-
-
-def prep_audio_for_save(audio: torch.TensorType) -> torch.TensorType:
-    # TODO: this assumes mono channel
-    _audio = audio.squeeze().cpu().flatten()
-    if len(_audio.shape) == 1:
-        _audio = _audio.unsqueeze(-1)
-    return _audio
 
 
 N_SAMPLES_SAVE = 5  # TODO: make arg
@@ -215,17 +207,17 @@ tracker = Tracker()
 
 for epoch in tracker.epochs(args.epochs):
 
-    model.train()
-    for (x, x_sl), metadata in tracker.steps(train_loader):
-        x = x.to(device)
+    # model.train()
+    # for (x, x_sl), metadata in tracker.steps(train_loader):
+    #     x = x.to(device)
 
-        loss, metrics, output = model(x, x_sl)
+    #     loss, metrics, output = model(x, x_sl)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    #     optimizer.zero_grad()
+    #     loss.backward()
+    #     optimizer.step()
 
-        tracker.update(metrics)
+    #     tracker.update(metrics)
 
     model.eval()
     with torch.no_grad():
@@ -255,28 +247,30 @@ for epoch in tracker.epochs(args.epochs):
         # tracker.log(samples=samples, reconstructions=reconstructions)
 
         tracker.log()
-    if epoch % args.save_freq == 0:  # and epoch != 0 :  # epoch 10, 20, ...
-        if args.delete_last_model and os.path.exists(
-            f"./models/{model_name_str}-epoch-{epoch-args.save_freq}"
-        ):
-            # delete past model
-            os.removedirs(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}")
-        model_save_path = f"./models/{model_name_str}-epoch-{epoch}"
-        model.save(model_save_path)
-        rich.print(f"Saved model to {model_save_path}")
+    # if epoch % args.save_freq == 0:  # and epoch != 0 :  # epoch 10, 20, ...
+        # if args.delete_last_model and os.path.exists(
+        #     f"./models/{model_name_str}-epoch-{epoch-args.save_freq}"
+        # ):
+        #     # delete past model
+        #     os.removedirs(f"./models/{model_name_str}-epoch-{epoch-args.save_freq}")
+        # model.save(f"./models/{model_name_str}-epoch-{epoch}")
 
-        rich.print("X SHAPE")
-        rich.print(x.shape)
+        for i in range(min(N_SAMPLES_SAVE, args.batch_size)):
 
-        rich.print("X HAT SHAPE")
-        rich.print(output.x_hat.shape)
+            rich.print("X SHAPE")
+            rich.print(x.shape)
+            rich.print(x[i, 1000:1100])
 
-        for i in range(min(args.batch_size, N_SAMPLES_SAVE)):
+            rich.print("X HAT SHAPE")
+            rich.print(output.x_hat.shape)
+            rich.print(output.x_hat[i, 1000:1100])
+
+            IPython.embed()
+            exit()
             # save reference (true) samples
-
             torchaudio.save(
                 f"./wavenet_samples/{model_name_str}-epoch-{epoch}-tru_sample_{i}.wav",
-                prep_audio_for_save(x[i]),
+                x[i].cpu().squeeze(),
                 sample_rate=16000,
                 channels_first=False,
                 encoding="ULAW",
@@ -285,12 +279,13 @@ for epoch in tracker.epochs(args.epochs):
             # save reconstruction of true samples
             torchaudio.save(
                 f"./wavenet_samples/{model_name_str}-epoch-{epoch}-rec_sample_{i}.wav",
-                prep_audio_for_save(output.x_hat[i]),
+                output.x_hat[i].cpu().squeeze(),
                 sample_rate=16000,
                 channels_first=False,
                 encoding="ULAW",
             )
 
+        # exit()
         # save generated samples
 
         x_gen = model.generate(
@@ -304,4 +299,3 @@ for epoch in tracker.epochs(args.epochs):
                 channels_first=False,
                 encoding="ULAW",
             )
-

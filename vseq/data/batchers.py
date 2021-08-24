@@ -64,7 +64,8 @@ class TensorBatcher(Batcher):
 
 
 class AudioBatcher(Batcher):
-    def __init__(self) -> None:
+    def __init__(self, min_length:int = None) -> None:
+        self.min_length = min_length
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
@@ -72,6 +73,8 @@ class AudioBatcher(Batcher):
         sequence_lengths = [audio.shape[0] for audio in batch]
 
         T = max(sequence_lengths)
+        # if self.min_length is not None:
+        #     T = max(self.min_length, T)
         N = len(batch)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
