@@ -1,10 +1,10 @@
-# datasets
-# transformers
+datasets
+transformers
 gpustat
-haste_pytorch
 ipdb
 ipython
 jupyter
+jupyterlab
 jupyterlab-git
 nbstripout
 pandas

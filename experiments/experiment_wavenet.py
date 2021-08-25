@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 
 import torch
-import torchaudio
 import wandb
 import rich
 
@@ -201,7 +200,7 @@ val_loader = DataLoader(
 
 # exit()
 (x, x_sl), metadata = next(iter(train_loader))
-model.summary(input_example=x, x_sl=x_sl)
+model.summary(input_data=x, x_sl=x_sl)
 model = model.to(device)
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
@@ -270,7 +269,8 @@ for epoch in tracker.epochs(args.epochs):
 
         rich.print("X HAT SHAPE")
         rich.print(output.x_hat.shape)
-
+        output.x_hat = transform_decode(output.x_hat) if transform_decode is not None else output.x_hat
+        x = transform_decode(x) if transform_decode is not None else x
         for i in range(min(args.batch_size, N_SAMPLES_SAVE)):
             # save reference (true) samples
 
@@ -292,10 +292,12 @@ for epoch in tracker.epochs(args.epochs):
             )
 
         # save generated samples
+        # samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
         x_gen = model.generate(
             n_samples=N_SAMPLES_SAVE, n_frames=128000 // args.stack_frames
         ).cpu()
+        x_gen = transform_decode(x_gen) if transform_decode else x_gen
         for i in range(N_SAMPLES_SAVE):
             torchaudio.save(
                 f"./wavenet_samples/{model_name_str}-epoch-{epoch}-gen_sample_{i}.wav",

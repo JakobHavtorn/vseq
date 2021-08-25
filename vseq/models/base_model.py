@@ -2,12 +2,13 @@ import inspect
 import logging
 import os
 
+from typing import Any, Optional, List, Iterable, Union
+
 import torch
 import torch.nn as nn
+import torchinfo
 
 import vseq.models
-
-from vseq.utils.summary import summary
 
 
 LOGGER = logging.getLogger(name=__file__)
@@ -18,12 +19,15 @@ MODEL_STATE_DICT_STR = "model_state_dict.pt"
 
 
 def load_model(path, model_class_name: str = None, device: torch.device = torch.device("cpu")):
+    if not os.path.exists(path):
+        raise RuntimeError(f"Tried to load model checkpoint but the path does not exist: {path}")
+
     if model_class_name is None:
         if os.path.exists(os.path.join(path, MODEL_CLASS_NAME_STR)):
             model_class_name = torch.load(os.path.join(path, MODEL_CLASS_NAME_STR))
             LOGGER.debug(f"Loading '{model_class_name}' from 'vseq.models'")
         else:
-            raise RuntimeError(f"Name of class of model to load not specified and not saved in checkpoint: {path}")
+            raise RuntimeError(f"Name of class of model to load was not given and not saved in checkpoint: {path}")
 
     model_class = getattr(vseq.models, model_class_name)
     model = model_class.load(path, device=device)
@@ -35,16 +39,12 @@ class BaseModel(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # TODO We may need to handle *args and **kwargs better
-        #      Any "*" and "**" type arguments can be identified by checking Parameter.kind.
-        #      For "*" arguments, 'Parameter.kind == Parameter.VAR_KEYWORD'
-        #      For "**" arguments: 'Parameter.kind == ParameterVAR_POSITIONAL)'
-        #      These could then be assigned their own hidden attribute here similar to `_init_arguments`
-        #      We might also be able to unpack "**" type arguments into `_kwarg_names` and `_init_arguments`
-        #      For "*" type arguments we can get the variable's name via the __init__ signature and link them to values in the order they are passed in.
-        signature = inspect.signature(self.__class__.__init__)
-        self._kwarg_names = [p for p in signature.parameters if p != "self"]
         self._init_arguments = None
+        self._kwarg_names = self._capture_argument_names()
+
+    def _capture_argument_names(self):
+        signature = inspect.signature(self.__class__.__init__)
+        return [p for p in signature.parameters if p != "self"]
 
     def init_arguments(self):
         """Return a dictionary of the kwargs used to instantiate this module"""
@@ -70,6 +70,15 @@ class BaseModel(nn.Module):
     def device(self):
         """Heuristically return the device which this model is on"""
         return next(self.parameters()).device
+
+    def get_checkpoint(self):
+        """Return a checkpoint dict of the module class name, init_arguments and state_dict"""
+        checkpoint = dict(
+            model_class_name=self.__class__.__name__,
+            model_init_kwargs=self.init_arguments(),
+            model_state_dict=self.state_dict()
+        )
+        return checkpoint
 
     def save(self, path):
         """Save the module class name, init_arguments and state_dict to different files in the directory given by path"""
@@ -119,21 +128,31 @@ class BaseModel(nn.Module):
         return s
 
     def summary(
-        self,
-        input_example=None,
-        input_size=None,
-        batch_size=1,
-        input_dtype=torch.FloatTensor,
-        device=None,
-        **forward_kwargs,
+        self: nn.Module,
+        input_size: Optional[Union[Iterable[int]]] = None,
+        input_data: Optional[Iterable[torch.Tensor]] = None,
+        batch_dim: Optional[int] = None,
+        col_names: Optional[Iterable[str]] = ["input_size", "output_size", "num_params", "kernel_size", "mult_adds"],
+        col_width: int = 25,
+        depth: int = 6,
+        device: Optional[torch.device] = None,
+        dtypes: Optional[List[torch.dtype]] = None,
+        row_settings: Optional[Iterable[str]] = None,
+        verbose: int = 1,
+        **kwargs: Any,
     ):
         """Return a summary of the model"""
-        return summary(
-            self,
-            input_example=input_example,
+        return torchinfo.summary(
+            model=self,
             input_size=input_size,
-            batch_size=batch_size,
-            input_dtype=input_dtype,
+            input_data=input_data,
+            batch_dim=batch_dim,
+            col_names=col_names,
+            col_width=col_width,
+            depth=depth,
             device=device,
-            **forward_kwargs,
+            dtypes=dtypes,
+            row_settings=row_settings,
+            verbose=verbose,
+            **kwargs,
         )

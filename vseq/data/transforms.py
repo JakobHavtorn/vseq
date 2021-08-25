@@ -1,6 +1,6 @@
 import math
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -13,10 +13,16 @@ class Transform(nn.Module):
     def forward(self, x):
         raise NotImplementedError()
 
+    def __repr__(self):
+        name = self.__class__.__name__
+        attrs = vars(self)
+        var_str = ", ".join([f"{k}={v}" for k, v in attrs.items() if k[0] != "_" and k != "training"])
+        return f"{name}({var_str})"
+
 
 class Compose:
     def __init__(self, *transforms):
-        self.transforms = transforms
+        self.transforms = [transform for transform in transforms if transform is not None]
 
     def __call__(self, x):
         return self.forward(x)
@@ -27,12 +33,19 @@ class Compose:
         return x
 
     def __repr__(self):
-        format_string = self.__class__.__name__ + "("
+        format_strings = []
         for t in self.transforms:
-            format_string += "\n"
-            format_string += "    {0}".format(t)
-        format_string += "\n)"
-        return format_string
+            format_strings.append(str(t))
+
+        if len(", ".join(format_strings)) < 110:
+            s = ", ".join(format_strings)
+            end = ")"
+        else:
+            s = "\n    " + ",\n    ".join(format_strings)
+            end = "\n)"
+
+        s = self.__class__.__name__ + "(" + s + end
+        return s
 
 
 class Reshape(Transform):
@@ -41,8 +54,7 @@ class Reshape(Transform):
         self.shape = shape
 
     def forward(self, x):
-        batch_size = x.size(0)
-        return x.view(batch_size, *self.shape)
+        return x.view(*self.shape)
 
 
 class TextCleaner(Transform):
@@ -70,9 +82,15 @@ class EncodeInteger(Transform):
 
 
 class DecodeInteger(Transform):
-    def __init__(self):
+    def __init__(self, join_token, token_map):
         super().__init__()
-        raise NotImplementedError()
+        self.join_token = join_token
+        self.token_map = token_map
+
+    def forward(self, x: str):
+        x = self.token_map.decode(x)
+        x = self.join_token.join(x)
+        return x
 
 
 class StackWaveform(Transform):
@@ -138,6 +156,16 @@ class Scale(Transform):
         return self.low + x_scaled * (self.high - self.low)
 
 
+class Normalize(Transform):
+    def __init__(self, mean: Union[float, torch.Tensor], std: Union[float, torch.Tensor]):
+        super().__init__()
+        self.mean = mean
+        self.std = std
+
+    def forward(self, x):
+        return (x - self.mean) / self.std
+
+
 class MuLawEncode(Transform):
     def __init__(self, bits: int = 8):
         """Encode PCM audio in [-1, 1] via µ-law companding to some number of bits (8 by default)"""
@@ -155,7 +183,7 @@ class MuLawEncode(Transform):
 
 class MuLawDecode(Transform):
     def __init__(self, bits: int = 8):
-        """Decode PCM audio via µ-law companding from some number of bits (8 by default)"""
+        """Decode PCM (µ-law encoded) audio in [-1, 1] via µ-law companding from some number of bits (8 by default)"""
         super().__init__()
         self.bits = bits
         self.mu = 2 ** bits - 1
@@ -168,6 +196,20 @@ class MuLawDecode(Transform):
         return f"{self.__class__.__name__}(bits={self.bits})"
 
 
+class Binarize(Transform):
+    def __init__(self, resample: bool = False, threshold: float = None):
+        super().__init__()
+        assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
+        self.resample = resample
+        self.threshold = threshold
+
+    def forward(self, x):
+        if self.resample:
+            return torch.bernoulli(x)
+
+        return x > self.threshold
+
+
 class Quantize(Transform):
     def __init__(
         self,
@@ -176,10 +218,12 @@ class Quantize(Transform):
         bits: int = 8,
         bins: Optional[int] = None,
         force_out_int64: bool = True,
+        rescale: bool = False,
     ):
         """Quantize a tensor of values between `low` and `high` using a number of `bits`.
 
-        The return value is an integer tensor with values in [0, 2**bits - 1].
+        The return value is an integer tensor with integer values in [0, 2**bits - 1], if rescale == False.
+        The return values is rescaled to floats in [low, high] if rescale == True.
 
         If `bits` is 32 or smaller, the integer tensor is of type `IntTensor` (32 bits).
         If `bits` is 33 or larger, the integer tensor is of type `LongTensor` (64 bits).
@@ -191,6 +235,8 @@ class Quantize(Transform):
             high (float, optional): [description]. Defaults to 1.0.
             bits (int, optional): [description]. Defaults to 8.
             bins (Optional[int], optional): [description]. Defaults to None.
+            force_out_int64 (bool): If False and bits <= 32, will output int32. Otherwise output is int64.
+            rescale (bool): If True, rescale quantized integer values back to floats in [low, high].
         """
         super().__init__()
         assert (bits is None) != (
@@ -207,32 +253,17 @@ class Quantize(Transform):
         self.high = high
         self.bits = bins // 8 if bits is None else bits
         self.bins = 2 ** bits if bins is None else bins
-        self.boundaries = torch.linspace(start=-1, end=1, steps=bins)
+        self.boundaries = torch.linspace(start=-1, end=1, steps=self.bins)
         self.out_int32 = (self.bits <= 32) and (not force_out_int64)
+        if rescale:
+            self.rescale = Scale(low=low, high=high, min_val=0, max_val=self.bins -1)
+        else:
+            self.rescale = None
 
     def forward(self, x: torch.Tensor):
-        return torch.bucketize(
-            x, self.boundaries, out_int32=self.out_int32, right=False
-        )
-
-    def __repr__(self):
-        return self._str
-
-
-class Binarize(Transform):
-    def __init__(self, resample: bool = False, threshold: float = None):
-        super().__init__()
-        assert bool(threshold) != bool(
-            resample
-        ), "Must set exactly one of threshold and resample"
-        self.resample = resample
-        self.threshold = threshold
-
-    def forward(self, x):
-        if self.resample:
-            return torch.bernoulli(x)
-
-        return x > self.threshold
+        x_quantized = torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
+        x_quantized = self.rescale(x_quantized) if self.rescale is not None else x_quantized
+        return x_quantized
 
 
 class Dequantize(Transform):

@@ -13,6 +13,16 @@ def get_modulo_length(length: int, module: int):
     return length + get_modulo_padding(length, module)
 
 
+def get_padded_length_1d(length: int, padding: int = None, padding_module: int = None, min_length: int = None):
+    if padding:
+        length = length + padding
+    if min_length:
+        length = max(min_length, length)
+    if padding_module:
+        length = get_modulo_length(length, padding_module)
+    return length
+
+
 class Batcher:
     """Base class for Batchers. These must define `collate` and optionally `sort` methods."""
 
@@ -44,6 +54,19 @@ class Batcher:
         """
         raise NotImplementedError()
 
+    def __repr__(self):
+        return self.__class__.__name__ + "()"
+
+
+class ListBatcher(Batcher):
+    def __init__(self) -> None:
+        """Generic batcher that simply returns a list of tensors (of potentially different shapes) and their .numel()"""
+        super().__init__()
+
+    def collate(self, batch: List[torch.Tensor]):
+        sequence_lengths = [tensor.numel() for tensor in batch]
+        return batch, torch.LongTensor(sequence_lengths)
+
 
 class TensorBatcher(Batcher):
     def __init__(self):
@@ -51,7 +74,7 @@ class TensorBatcher(Batcher):
         super().__init__()
 
     def collate(self, batch: List[torch.Tensor]):
-        """Concatenate a number of equally sized tensors (B, D1, D2, D3, ...)"""
+        """Concatenate a number of equally sized tensors (B, D1, D2, D3, ...). Sequence length is `tensor.numel()`"""
         sequence_lengths = [tensor.numel() for tensor in batch]
         shapes = [tensor.shape for tensor in batch]
 
@@ -64,18 +87,19 @@ class TensorBatcher(Batcher):
 
 
 class AudioBatcher(Batcher):
-    def __init__(self, min_length:int = None) -> None:
-        self.min_length = min_length
+    def __init__(self, padding: int = None, padding_module: int = None, min_length: int = None) -> None:
         super().__init__()
+        self.padding = padding
+        self.padding_module = padding_module
+        self.min_length = min_length
 
     def collate(self, batch: List[torch.Tensor]):
-        """Zero pad batch of audio waveforms to maximum temporal length and concatenate"""
+        """Zero pad batch of audio waveforms (T,) to maximum temporal length and concatenate"""
         sequence_lengths = [audio.shape[0] for audio in batch]
 
-        T = max(sequence_lengths)
-        # if self.min_length is not None:
-        #     T = max(self.min_length, T)
         N = len(batch)
+        T = max(sequence_lengths)
+        T = get_padded_length_1d(T, self.padding, self.padding_module, self.min_length)
 
         collated_batch = torch.zeros((N, T), dtype=batch[0].dtype)
         for i, seq_len in enumerate(sequence_lengths):
@@ -89,6 +113,12 @@ class AudioBatcher(Batcher):
             sort_key = lambda x: len(x[0])
         return sorted(batch, key=sort_key, reverse=True)
 
+    def __repr__(self):
+        padding = self.padding
+        padding_module = self.padding_module
+        min_length = self.min_length
+        return f"AudioBatcher({padding=}, {padding_module=}, {min_length=})"
+
 
 class SpectrogramBatcher(Batcher):
     def __init__(self, min_length: int = None) -> None:
@@ -97,7 +127,7 @@ class SpectrogramBatcher(Batcher):
 
     def collate(self, batch: List[torch.Tensor]):
         """Zero pad batch of spectrograms (T, F) to maximum temporal length and concatenate"""
-        sequence_lengths = [sample.shape[0] for sample in batch]
+        sequence_lengths = [spectrogram.shape[0] for spectrogram in batch]
 
         T = max(sequence_lengths)
         if self.min_length is not None:
@@ -111,8 +141,15 @@ class SpectrogramBatcher(Batcher):
             # if self.min_length is not None and self.min_length > seq_len: # this is clearly wrong and bad
             #     sequence_lengths[i] = self.min_length 
         
-
         return collated_batch, torch.LongTensor(sequence_lengths)
+
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
+        if sort_modality_idx is not None:
+            sort_key = lambda x: len(x[0][sort_modality_idx])
+        else:
+            sort_key = lambda x: len(x[0])
+
+        return sorted(batch, key=sort_key, reverse=True)
 
 
 class TextBatcher(Batcher):

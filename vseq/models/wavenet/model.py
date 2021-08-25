@@ -58,7 +58,7 @@ class WaveNet(BaseModel):
                  -> *skip* ---------------------------------------- + ----------------> *skip*
 
         Args:
-            num_embeddings (int): Number of embeddings to (optionally) use for input. If `None`, work on raw pcm.
+            in_channels (int): Number of embeddings to (optionally) use for input. If `None`, work on raw pcm.
             out_classes (int): Number of classes for output (i.e. number of quantized values in target audio values)
             n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
@@ -74,7 +74,7 @@ class WaveNet(BaseModel):
 
         self.n_layers = n_layers
         self.n_stacks = n_stacks
-        self.num_embeddings = num_embeddings
+        self.in_channels = in_channels
         self.res_channels = res_channels
         self.out_classes = out_classes
 
@@ -163,7 +163,7 @@ class WaveNet(BaseModel):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
-        if self.num_embeddings is None:
+        if self.in_channels is None:
             x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
             target = self._get_target(x)
         else:

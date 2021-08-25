@@ -26,7 +26,7 @@ class BernoulliSTEFunction(STEFunction):
 
 
 class BernoulliSTE(torch.jit.ScriptModule):
-    def __init__(self, threshold: float = 0.5) -> None:
+    def __init__(self) -> None:
         super().__init__()
 
     @torch.jit.script_method

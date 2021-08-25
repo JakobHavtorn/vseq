@@ -47,7 +47,7 @@ class HMLM(BaseModel):
         self.hmlstm = HMLSTM(input_size=embedding_dim, sizes=self.sizes, num_layers=num_layers, layer_norm=layer_norm)
         self.dropout_h = nn.Dropout(p=self.dropout_rate_h)
 
-        self.weight = nn.Linear(sum(self.sizes), self.num_layers)
+        self.weight = nn.Sequential(nn.Linear(sum(self.sizes), self.num_layers), nn.Sigmoid())
 
         self.embedding_out = nn.Linear(sum(self.sizes), sum(self.sizes))
         self.relu = nn.ReLU()
@@ -64,14 +64,14 @@ class HMLM(BaseModel):
         seq_mask: TensorType["B", "T", torch.bool] = None,
     ):
         if seq_mask is None:
-            seq_mask = sequence_mask(x_sl - 1, dtype=float, device=logits.device)
+            seq_mask = sequence_mask(x_sl, dtype=float, device=logits.device)
 
         p_x = D.Categorical(logits=logits)
 
         log_prob_twise = p_x.log_prob(targets) if seq_mask is None else p_x.log_prob(targets) * seq_mask
         log_prob = log_prob_twise.sum(1)
 
-        loss = -log_prob.sum() / (x_sl - 1).sum()  # nats per dim
+        loss = -log_prob.sum() / x_sl.sum()  # nats per dim
         return loss, log_prob, p_x
 
     def forward(
@@ -83,16 +83,17 @@ class HMLM(BaseModel):
         z_init: Optional[List[TensorType["B", "T", 1]]] = None,
         **kwargs,
     ):
-        target = x[:, 1:].clone().detach()
+        y = x[:, 1:].clone().detach()
+        x, x_sl = x[:, :-1], x_sl - 1
 
-        emb = self.embedding_in(x[:, :-1])  # B * T * embedding_dim
+        emb = self.embedding_in(x)  # B * T * embedding_dim
         emb = self.dropout_e(emb)
         h, c, z, (h_out, c_out, z_out) = self.hmlstm(emb, h_init, c_init, z_init, **kwargs)  # B * T * hidden_size
 
         h = torch.cat(h, dim=2)  # B * T * sum(hidden_sizes)
         h = self.dropout_h(h)
 
-        g = torch.sigmoid(self.weight(h))
+        g = self.weight(h)
 
         g = [g[..., i : i + 1].expand(*g.shape[:2], self.sizes[i]) for i in range(self.num_layers)]  # Expand to size h
         g = torch.cat(g, dim=2)
@@ -101,25 +102,25 @@ class HMLM(BaseModel):
 
         p_logits = self.output(h_e)
 
-        seq_mask = sequence_mask(x_sl - 1, dtype=torch.bool, device=p_logits.device)
-        loss, log_prob, p_x = self.compute_loss(p_logits, target, x_sl, seq_mask=seq_mask)
+        seq_mask = sequence_mask(x_sl, dtype=torch.bool, device=p_logits.device)
+        loss, log_prob, p_x = self.compute_loss(p_logits, y, x_sl, seq_mask=seq_mask)
 
-        u_ops, c_ops, f_ops, u_rates, c_rates, f_rates = self.hmlstm.realized_operations(z, x_sl - 1, seq_mask)
+        u_ops, c_ops, f_ops, u_rates, c_rates, f_rates = self.hmlstm.realized_operations(z, x_sl, seq_mask)
 
         rate_metrics = [
             (
-                LossMetric(name=f"u_rate_{l}", values=u_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
-                LossMetric(name=f"c_rate_{l}", values=c_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
-                LossMetric(name=f"f_rate_{l}", values=f_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 2),
+                LossMetric(name=f"u_rate_{l}", values=u_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
+                LossMetric(name=f"c_rate_{l}", values=c_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
+                LossMetric(name=f"f_rate_{l}", values=f_ops[l] * seq_mask[:, 1:], reduce_by=x_sl - 1),
             )
             for l in range(self.num_layers)
-        ]
+        ]  # Rates are based on diffs hence the extra -1 on x_sl
 
         metrics = [
             LossMetric(loss, weight_by=log_prob.numel()),
             LLMetric(log_prob),
-            BitsPerDimMetric(log_prob, reduce_by=x_sl - 1),
-            PerplexityMetric(log_prob, reduce_by=x_sl - 1),
+            BitsPerDimMetric(log_prob, reduce_by=x_sl),
+            PerplexityMetric(log_prob, reduce_by=x_sl),
             *[m for metrics in rate_metrics for m in metrics],
         ]
 

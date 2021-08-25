@@ -34,16 +34,16 @@ parser.add_argument("--optimizer_json", default='{"optimizer": "Adam"}', type=js
 parser.add_argument("--embedding_dim", default=464, type=int, help="dimensionality of embedding space")
 parser.add_argument("--hidden_size", default=373, type=int, help="dimensionality of hidden state in LSTM")
 parser.add_argument("--num_layers", default=1, type=int, help="number of LSTM layers")
+parser.add_argument("--dropout", default=0.0, type=float, help="inter LSTM layer dropout probability")
 parser.add_argument("--word_dropout", default=0.34, type=float, help="word dropout probability")
 parser.add_argument("--layer_norm", default=False, type=str2bool, help="use layer normalization")
 parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word- or character-level modelling")
-parser.add_argument("--epochs", default=250, type=int, help="number of epochs")
-parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
+parser.add_argument("--epochs", default=750, type=int, help="number of epochs")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 
 if args.seed is None:
@@ -124,30 +124,31 @@ model = vseq.models.LSTMLM(
     embedding_dim=args.embedding_dim,
     hidden_size=args.hidden_size,
     layer_norm=args.layer_norm,
+    word_dropout_rate=args.word_dropout,
     delimiter_token_idx=delimiter_token_idx,
+    dropout=args.dropout,
 )
 
-wandb.watch(model, log="all", log_freq=len(train_loader))
 model = model.to(device)
 print(model)
 x, x_sl = next(iter(train_loader))[0]
 x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
+# model.summary(input_data=x[:, :2], x_sl=torch.tensor([2] * x.size(0), dtype=int))
+wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = args.optimizer_json.pop('optimizer')
 optimizer = getattr(torch.optim, optimizer)
 optimizer = optimizer(model.parameters(), lr=args.lr, **args.optimizer_json)
-
 
 tracker = Tracker()
 
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
-    for (x, x_sl), metadata in tracker(train_loader):
+    for (x, x_sl), metadata in tracker.steps(train_loader):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, word_dropout_rate=args.word_dropout)
+        loss, metrics, outputs = model(x, x_sl)
 
         optimizer.zero_grad()
         loss.backward()
@@ -157,20 +158,18 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker(val_loader):
+        for (x, x_sl), metadata in tracker.steps(val_loader):
             x = x.to(device)
 
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
-        for (x, x_sl), metadata in tracker(test_loader):
+        for (x, x_sl), metadata in tracker.steps(test_loader):
             x = x.to(device)
 
             loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
-
-    # Log tracker metrics
     tracker.log()

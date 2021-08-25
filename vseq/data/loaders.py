@@ -5,11 +5,14 @@ import logging
 LOGGER = logging.getLogger(name=__file__)
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Callable, Union
 
+import numpy as np
+import torch
 import torchaudio
 
-def memoize(func):
+
+def memoize(func: Callable):
     cache = dict()
 
     def memoized_func(example_id):
@@ -48,7 +51,7 @@ class TextMetaData(MetaData):
     line_idx: int = None
 
 
-def load_text(file_path):
+def load_text(file_path: str):
     with open(file_path, "r") as text_file:
         text = text_file.read()
 
@@ -61,8 +64,7 @@ def load_text(file_path):
     return text, metadata
 
 
-def load_audio(file_path, sum_channels: bool = False):
-    # LOGGER.debug(f"FILE PATH {file_path}")
+def load_audio(file_path: str, sum_channels: bool = False):
     metadata = torchaudio.info(file_path)
     audio, _ = torchaudio.load(file_path)
 
@@ -80,9 +82,18 @@ def load_audio(file_path, sum_channels: bool = False):
     return audio, metadata
 
 
+def load_numpy(file_path: str, length_dim: int = 0, **kwargs):
+    tensor = torch.from_numpy(np.load(file_path, **kwargs))
+    metadata = MetaData(
+        length=tensor.size(length_dim),
+        file_path=file_path,
+    )
+    return tensor, metadata
+
+
 class Loader():
 
-    def __init__(self, extension: Union[None, str], cache=False):
+    def __init__(self, extension: Union[None, str], cache: bool = False):
         """
         Base Loader for any data type.
 
@@ -112,10 +123,16 @@ class Loader():
     def load(self, example_id):
         raise NotImplementedError
 
+    def __repr__(self):
+        name = self.__class__.__name__
+        extension = self.extension
+        cache = self.cache
+        return f"{name}({extension=}, {cache=}, id={self.id})"
+
 
 class AudioLoader(Loader):
 
-    def __init__(self, extension, cache=False, sum_channels: bool = True):
+    def __init__(self, extension: Union[None, str], cache: bool = False, sum_channels: bool = True):
         """
         Loader for audio data.
 
@@ -129,12 +146,14 @@ class AudioLoader(Loader):
     def load(self, example_id):
         """Load a single audio file."""
         file_path = example_id + self.suffix
-        return load_audio(file_path, self.sum_channels)
+        audio, metadata = load_audio(file_path, self.sum_channels)
+        metadata.example_id = example_id
+        return audio, metadata
 
 
 class TextLoader(Loader):
 
-    def __init__(self, extension, cache=False):
+    def __init__(self, extension: Union[None, str], cache: bool = False):
         """
         Loader for text data.
 
@@ -174,3 +193,25 @@ class TextLoader(Loader):
             batch_data[example_id] = (string, metadata)
 
         self.load.memory.update(batch_data)
+
+
+class NumpyLoader(Loader):
+
+    def __init__(self, extension: Union[None, str], cache: bool = False, length_dim: int = 0, **kwargs):
+        """
+        Loader for numpy data.
+
+        Args:
+            extension (str): Extension of data files (e.g., "wav" or "flac").
+            cache (bool): Whether to enable caching.
+        """
+        super().__init__(extension=extension, cache=cache)
+        self.length_dim = length_dim
+        self.kwargs = kwargs
+
+    def load(self, example_id):
+        """Load a single audio file."""
+        file_path = example_id + self.suffix
+        tensor, metadata = load_numpy(file_path, length_dim=self.length_dim, **self.kwargs)
+        metadata.example_id = example_id
+        return tensor, metadata

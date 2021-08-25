@@ -1,4 +1,5 @@
 import random
+import csv
 
 from typing import Iterator, Union, List
 from torch.utils.data.sampler import Sampler
@@ -8,33 +9,33 @@ import numpy as np
 from ..datapaths import DATAPATHS_MAPPING
 
 
-class FrameSampler(Sampler):
+class LengthTrainSampler(Sampler):
     def __init__(
         self,
         source: str,
-        sample_rate: int,
-        max_seconds: float = 320.0,
-        max_pool_difference: float = 0.3,
+        field: str,
+        max_len: Union[float, str], # 16K * 320
+        max_pool_difference: float, # 16K * 0.3
         min_pool_size: int = 512,
         num_batches: Union[int, None] = None,
     ):
         """
         This batch_sampler groups the source into sample pools of examples with similar length meeting criterias defined
-        by 'max_pool_difference' and 'min_pool_size'. Batches of close to, but never more than, 'max_seconds', are
+        by 'max_pool_difference' and 'min_pool_size'. Batches of close to, but never more than, 'max_len', are
         constructed by first sampling a pool and then sampling each batch from from within that pool.
 
         Args:
             source (object): Dataset for which the sampler will be used.
-            sample_rate (int): Used for converting the length of the PCM file to seconds.
-            max_seconds (float): The maximum size of the batch in seconds.
+            field (str): The field containing the relevant length information.
+            max_len (float): The maximum size of the batch in the unit of lengths. If "max", will be set to length of longest example.
             max_pool_difference (float): The maximum length difference between shortest and longest sample a pool.
             min_pool_size (float): The minimum number of examples in a pool. Overwrites max_pool_difference.
             num_batches (int or None): Samples num_batches (with replacement if necessary) instead of running a standard epoch.
         """
 
         self.source = source
-        self.max_seconds = max_seconds
-        self.sample_rate = sample_rate
+        self.field = field
+        self.max_len = max_len
         self.max_pool_difference = max_pool_difference
         self.min_pool_size = min_pool_size
         self.num_batches = num_batches
@@ -42,19 +43,28 @@ class FrameSampler(Sampler):
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
+
+        if not isinstance(self.max_len, int):
+            assert self.max_len == "max"
+            self.max_len = max(self.lengths)
+
         self.pools = self.create_sample_pools(max_pool_difference, min_pool_size)
         self.batches = self.sample_batches()
 
-        assert self.lengths.max() < self.max_seconds, "One or more examples are longer than the maximum number of seconds per batch."
+        assert self.lengths.max() <= self.max_len, "One or more examples are longer than the maximum length."
 
     def load_lengths(self, source_filepath):
         """
         Loads the example lengths into an array with same order as the examples of the source dataset.
         """
-        with open(source_filepath, "r") as source_file_buffer:
-            lines = source_file_buffer.read().splitlines()
 
-        lengths = [int(l.split(",")[1]) / self.sample_rate for l in lines]
+        with open(source_filepath, newline='') as source_file_buffer:
+            reader = csv.DictReader(source_file_buffer)
+            try:
+                lengths = [int(row[self.field]) for row in reader]
+            except KeyError:
+                raise KeyError(f"`{self.field}` not in columns {list(next(reader).keys())} of file {source_filepath}")
+
         return np.array(lengths)
 
     def create_sample_pools(self, max_diff, min_size):
@@ -86,10 +96,18 @@ class FrameSampler(Sampler):
                 return batches
 
         ordered_idxs = np.concatenate([random.sample(p, k=len(p)) for p in self.pools])  # shuffle each pool internally
-        batch_idxs = (self.lengths[ordered_idxs].cumsum() // self.max_seconds).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(ordered_idxs, split_points)
-        batches = list(map(lambda x: x.tolist(), batches))
+        
+        batch, batches, batch_len = [], [], 0
+        for idx in ordered_idxs:
+            l = self.lengths[idx]
+            if batch_len + l <= self.max_len:
+                batch_len += l
+                batch.append(idx)
+            else:
+                batches.append(batch)
+                batch = [idx]
+                batch_len = l
+        
         random.shuffle(batches)  # shuffle the order of batches
 
         if self.num_batches is not None:
@@ -108,13 +126,23 @@ class FrameSampler(Sampler):
     def __len__(self):
         return len(self.batches)
 
+    def __repr__(self):
+        source = self.source
+        field = self.field
+        max_len = self.max_len
+        max_pool_difference = self.max_pool_difference
+        min_pool_size = self.min_pool_size
+        num_batches = self.num_batches
+        s = f"LengthTrainSampler({source=}, {field=}, {max_len=}, {max_pool_difference=}, {min_pool_size=}, {num_batches=})"
+        return s
 
-class EvalSampler(Sampler):
+
+class LengthEvalSampler(Sampler):
     def __init__(
         self,
         source: str,
-        sample_rate: int,
-        max_seconds: float = 320.0
+        field: str,
+        max_len: float
     ):
         """
         This batch_sampler groups the source into sample pools of examples with similar length meeting criterias defined
@@ -123,38 +151,55 @@ class EvalSampler(Sampler):
 
         Args:
             source (object): Dataset for which the sampler will be used.
-            sample_rate (int): Used for converting the length of the PCM file to seconds.
-            max_seconds (float): The maximum size of the batch in seconds.
+            max_len (float): The maximum size of the batch in seconds.
         """
 
         self.source = source
-        self.max_seconds = max_seconds
-        self.sample_rate = sample_rate
+        self.field = field
+        self.max_len = max_len
 
         self.source_filepath = DATAPATHS_MAPPING[source] if source in DATAPATHS_MAPPING else source
         self.lengths = self.load_lengths(self.source_filepath)
+
+        if not isinstance(self.max_len, int):
+            assert self.max_len == "max"
+            self.max_len = max(self.lengths)
+
         self.batches = self.sample_batches()
 
     def load_lengths(self, source_filepath):
         """Loads the example lengths into an array with same order as the examples of the source dataset."""
-        with open(source_filepath, "r") as source_file_buffer:
-            lines = source_file_buffer.read().splitlines()
+        with open(source_filepath, newline='') as source_file_buffer:
+            reader = csv.DictReader(source_file_buffer)
+            lengths = [int(row[self.field]) for row in reader]
 
-        lengths = [int(l.split(",")[1]) / self.sample_rate for l in lines]
         return np.array(lengths)
 
     def sample_batches(self):
         """Sample batches from the pools."""
         sorted_idxs = np.argsort(self.lengths)
-        batch_idxs = (self.lengths[sorted_idxs].cumsum() // self.max_seconds).astype(int)
-        split_points = np.bincount(batch_idxs).cumsum()[:-1] # the last split is implicit
-        batches = np.array_split(sorted_idxs, split_points)
-        batches = list(map(lambda x: x.tolist(), batches))
+        batch, batches, batch_len = [], [], 0
+        for idx in sorted_idxs:
+            l = self.lengths[idx]
+            if batch_len + l <= self.max_len:
+                batch_len += l
+                batch.append(idx)
+            else:
+                batches.append(batch)
+                batch = [idx]
+                batch_len = l
         return batches
-    
+
     def __iter__(self) -> Iterator[List[int]]:
         for batch in self.batches:
             yield batch
 
     def __len__(self):
         return len(self.batches)
+
+    def __repr__(self):
+        source = self.source
+        field = self.field
+        max_len = self.max_len
+        s = f"LengthEvalSampler({source=}, {field=}, {max_len=})"
+        return s

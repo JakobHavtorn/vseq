@@ -2,15 +2,44 @@
 
 ## Install 
 
+
+### Install primary environment relying on pre-innstalled system CUDA.
+
 ```bash
-# Reinstall
 conda deactivate
 conda env remove -n vseq -y
 conda create -y -n vseq python==3.9
 conda activate vseq
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
+```
+
+### Install primary environment using Conda to get CUDA.
+
+```
+conda deactivate
+conda env remove -n vseq -y
+conda create -y -n vseq python==3.8
+conda activate vseq
+conda install -y pytorch torchvision torchaudio torchtext cudatoolkit=11.1 -c pytorch -c nvidia
+pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
+```
+
+### Install extra requirements
+
+```bash
+pip install -r requirements-extra.txt
 nbstripout --install
 ```
+
+
+## Test
+
+To run tests, execute
+
+```bash
+pytest -sv --cov --cov-report=term tests
+```
+
 
 ## Minimal experiment example
 ```python
@@ -64,9 +93,12 @@ See `experiments/sweep_test.yaml`
 
 ## Implementation suggestions
 - [ ] Method or class to define and build `Dataloader`s with proper defaults e.g. `pin_memory == True`.
+- [ ] A class to save and keep track of e.g. the top `k` best models and update based on some metric/score.
 
 
 ## Resources
 
 Examples of how to write fairly fast custom recurrent cells with `TorchScript` can be found here: 
 https://github.com/pytorch/pytorch/blob/master/benchmarks/fastrnns/custom_lstms.py
+
+Linear Gaussian State Space Model (https://github.com/rasmusbergpalm/pytorch-lgssm)

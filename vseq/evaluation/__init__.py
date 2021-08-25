@@ -7,4 +7,5 @@ from vseq.evaluation.metrics import (
     KLMetric,
     PerplexityMetric,
     BitsPerDimMetric,
+    LatestMeanMetric,
 )

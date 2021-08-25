@@ -17,10 +17,10 @@ from vseq.data import BaseDataset
 from vseq.data.batchers import TextBatcher
 from vseq.data.datapaths import PENN_TREEBANK_TEST, PENN_TREEBANK_TRAIN, PENN_TREEBANK_VALID
 from vseq.data.loaders import TextLoader
-from vseq.data.tokens import DELIMITER_TOKEN
-from vseq.data.tokenizers import word_tokenizer
+from vseq.data.tokens import DELIMITER_TOKEN, PENN_TREEBANK_ALPHABET, UNKNOWN_TOKEN
+from vseq.data.tokenizers import char_tokenizer, word_tokenizer
 from vseq.data.token_map import TokenMap
-from vseq.data.transforms import EncodeInteger
+from vseq.data.transforms import Compose, EncodeInteger, TextCleaner
 from vseq.data.vocabulary import load_vocabulary
 from vseq.evaluation import Tracker
 from vseq.utils.argparsing import str2bool
@@ -45,6 +45,7 @@ parser.add_argument("--anneal_steps", default=20000, type=int, help="number of s
 parser.add_argument("--anneal_start_value", default=0, type=float, help="initial beta annealing value")
 parser.add_argument("--prior_samples", default=32, type=int, help="number of prior samples for logging")
 parser.add_argument("--n_interpolations", default=10, type=int, help="number of interpolation samples for logging")
+parser.add_argument("--token_level", default="word", type=str, choices=["word", "char"], help="word or character level")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=True, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
@@ -52,7 +53,7 @@ parser.add_argument("--wandb_group", default=None, type=str, help='custom group 
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-args, _ = parser.parse_known_args()
+args = parser.parse_args()
 
 
 if args.seed is None:
@@ -72,12 +73,18 @@ wandb.config.update(args)
 rich.print(vars(args))
 
 
-vocab = load_vocabulary(PENN_TREEBANK_TRAIN)
-token_map = TokenMap(tokens=vocab, add_start=False, add_end=False, add_delimit=True)
-penn_treebank_transform = EncodeInteger(
-    token_map=token_map,
-    tokenizer=word_tokenizer,
-)
+if args.token_level == "word":
+    tokens = load_vocabulary(PENN_TREEBANK_TRAIN)
+    token_map = TokenMap(tokens=tokens, add_delimit=True)
+    penn_treebank_transform = EncodeInteger(token_map=token_map, tokenizer=word_tokenizer)
+else:
+    tokens = PENN_TREEBANK_ALPHABET
+    token_map = TokenMap(tokens=tokens, add_delimit=True, add_unknown=True)
+    penn_treebank_transform = Compose(
+        TextCleaner(lambda s: s.replace("<unk>", UNKNOWN_TOKEN)),
+        EncodeInteger(token_map=token_map, tokenizer=char_tokenizer),
+    )
+
 batcher = TextBatcher()
 loader = TextLoader('txt', cache=True)
 
@@ -85,18 +92,15 @@ modalities = [(loader, penn_treebank_transform, batcher)]
 
 train_dataset = BaseDataset(
     source=PENN_TREEBANK_TRAIN,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 val_dataset = BaseDataset(
     source=PENN_TREEBANK_VALID,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 test_dataset = BaseDataset(
     source=PENN_TREEBANK_TEST,
-    modalities=modalities,
-    cache=args.cache_dataset,
+    modalities=modalities
 )
 
 train_loader = DataLoader(
@@ -132,82 +136,83 @@ model = vseq.models.Bowman(
     latent_dim=args.latent_dim,
     n_highway_blocks=args.n_highway_blocks,
     delimiter_token_idx=delimiter_token_idx,
+    word_dropout_rate=args.word_dropout,
     random_prior_variance=args.random_prior_variance,
     trainable_prior=args.trainable_prior,
 )
-model = model.to(device)
 print(model)
-wandb.watch(model, log='all', log_freq=len(train_loader))
-
-optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
 x, x_sl = next(iter(train_loader))[0]
-x = x.to(device)
-print(model.summary(input_example=x, x_sl=x_sl))
-
+model.summary(input_data=x[:, :2], x_sl=torch.LongTensor([2] * x.size(0)), device='cpu')
+model = model.to(device)
+wandb.watch(model, log='all', log_freq=len(train_loader))
 
 prior_samples = model.prior().sample(torch.Size([args.prior_samples, 1]))
 
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
 tracker = Tracker()
 
-beta_annealer = CosineAnnealer(n_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
+beta_annealer = CosineAnnealer(anneal_steps=args.anneal_steps, start_value=args.anneal_start_value, end_value=1)
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
     for b, ((x, x_sl), metadata) in enumerate(tracker(train_loader)):
         x = x.to(device)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=args.word_dropout)
+        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step())
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         tracker.update(metrics)
-        beta_annealer.step()
 
     model.eval()
     with torch.no_grad():
         for (x, x_sl), metadata in tracker(val_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
         for (x, x_sl), metadata in tracker(test_loader):
             x = x.to(device)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.value, word_dropout_rate=0.0)
+            loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
     # Get samples from prior
     (x, x_sl), log_prob = model.generate(z=prior_samples)
-    text = token_map.decode_batch(x, x_sl, join_separator=" ")
+    text = token_map.decode_batch(x, x_sl, join_separator=" " if args.token_level == "word" else "")
     data = [(i, t) for i, t in enumerate(text)]
     prior_samples_table = wandb.Table(columns=["Idx", "Samples"], data=data)
+    rich.print(text)
 
     # Perform interpolation in latent space
-    n_interps = args.n_interpolations
-    x = ["she did n't want to be with him", "i want to talk to you"]
+    n_steps = args.n_interpolations
+    x = [
+        "a group of senior executives plans to sell the company",
+        "the company disclosed the expected revenue for next year"
+    ]
     x = [penn_treebank_transform(_x) for _x in x]
+    x = sorted(x, key=lambda _x: len(_x), reverse=True)
     x, x_sl = batcher(x)
-
     _, q_z = model.infer(x.to(device), x_sl)
-    z_samples = q_z.mean.unsqueeze(-1).repeat(1, 1, 1, n_interps)  # Create interpolation axis
-    alpha = torch.linspace(0, 1, n_interps).to(z_samples.device)
-    z_interps = z_samples[0] * (1 - alpha) + z_samples[1] * alpha
-    z_interps = z_interps.permute(2, 0, 1)
-    (x, x_sl), log_prob = model.generate(z=z_interps, use_mode=True)
 
-    text = token_map.decode_batch(x, x_sl, join_separator=" ")
+    z_samples = q_z.mean.unsqueeze(-1).repeat(1, 1, 1, n_steps)  # Create interpolation axis (B, T, D, I)
+    alpha = torch.linspace(0, 1, n_steps).to(z_samples.device)  # (I)
+    z_interps = z_samples[0::2] * (1 - alpha) + z_samples[1::2] * alpha  # (B/2, T, D, I)
+    z_interps = z_interps.view(z_interps.size(0) * z_interps.size(3), z_interps.size(1), z_interps.size(2))  # (B*I, T, D)
+    (x_hat, x_hat_sl), log_prob = model.generate(z=z_interps, use_mode=True)
+
+    text = token_map.decode_batch(x_hat, x_hat_sl, join_separator=" " if args.token_level == "word" else "")
     data = [(i, t) for i, t in enumerate(text)]
     interpolations_table = wandb.Table(columns=["Idx", "Samples"], data=data)
 
     # Log tracker metrics
     tracker.log(
-        beta=beta_annealer.value,
         samples=prior_samples_table,
         interpolations=interpolations_table,
     )

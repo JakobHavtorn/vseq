@@ -1,4 +1,5 @@
-from collections.abc import Iterable
+import math
+
 from typing import Any, Union, List
 
 import torch
@@ -79,16 +80,21 @@ def reverse_sequences(x, x_sl, batch_first: bool = False):
     return out
 
 
+<<<<<<< HEAD
 def sequence_mask(
     seq_lens: Union[list, torch.Tensor],
     max_len=None,
     dtype=torch.bool,
     device: torch.device = None,
 ):
+=======
+def sequence_mask(seq_lens: Union[list, torch.Tensor], stride: int = 1, max_len: int = None, dtype: torch.dtype = torch.bool, device: torch.device = None):
+>>>>>>> clockwork-vae
     """
     Creates a binary sequence mask where all entries up to seq_lens are 1 and the remaining are 0.
     Args:
         seq_lens (Tensor): The sequence lengths from which to construct the mask. Should be shape N with dtype == int64.
+        stride (int): 
         max_len (int): The temporal dimension of the sequence mask. If None, will use max of seq_lens.
         dtype (torch.dtype): The type of the mask. Default is torch.bool.
     Returns:
@@ -104,11 +110,22 @@ def sequence_mask(
     if device != seq_lens.device:
         seq_lens = seq_lens.to(device)
     N = seq_lens.size(0)
-    T = max_len or seq_lens.max()
-    seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat(
-        (N, 1)
-    ) < seq_lens.unsqueeze(1)
+    T = max_len or math.ceil(seq_lens.max() / stride)
+    seq_mask = torch.arange(T, device=device).unsqueeze(0).repeat((N, 1)) < seq_lens.unsqueeze(1)
     return seq_mask.to(dtype)
+
+
+def update_running_variance(avg_a: Union[torch.Tensor, float], avg_b, w_a, w_b, M2_a, M2_b):
+    """Online variance update c.f. parallel variance algorithm at [1].
+
+    [1] https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+    """
+    w = w_a + w_b
+    delta = avg_b - avg_a
+    M2 = M2_a + M2_b + delta ** 2 * w_a * w_b / w
+    var = M2 / (w - 1)
+    avg = (w_a * avg_a + w_b * avg_b) / w
+    return var, avg, w, M2
 
 
 def detach(x: Union[torch.Tensor, Any]):

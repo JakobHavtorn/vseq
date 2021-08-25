@@ -7,16 +7,17 @@ from typing import Optional, Union, List
 
 import torch
 import pandas as pd
+import numpy as np
 
 
 def get_visible_devices_global_ids():
-    """Return the global indices of the visible devices"""
+    """Return the global indices of the visible devices. If `CUDA_VISIBLE_DEVICES` is not set, returns all devices"""
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
         return list(range(torch.cuda.device_count()))
 
     visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
     visible_devices = re.split('; |, ', visible_devices)
-    visible_devices = [int(idx) for idx in visible_devices]
+    visible_devices = sorted([int(idx) for idx in visible_devices])
     return visible_devices
 
 
@@ -30,7 +31,7 @@ def get_gpu_memory_usage() -> pd.DataFrame:
     gpu_df["free"] = gpu_df["free"].map(lambda x: int(x.rstrip(" [MiB]")))
     gpu_df["used"] = gpu_df["used"].map(lambda x: int(x.rstrip(" [MiB]")))
 
-    print("GPU usage:\n{}".format(gpu_df))
+    print("GPU usage (MB):\n{}".format(gpu_df))
     return gpu_df
 
 
@@ -38,18 +39,23 @@ def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.d
     """Return one or more available/visible (and unused) devices giving preference to those with most free memory"""
     gpu_df = get_gpu_memory_usage()
 
-    visible_devices = get_visible_devices_global_ids()
-    invisible_devices = set(range(torch.cuda.device_count())) - set(visible_devices)
-    
-    if invisible_devices:
-        gpu_df = gpu_df.drop(index=invisible_devices)
+    visible_devices_global_ids = get_visible_devices_global_ids()
+
+    gpu_df = gpu_df[gpu_df.index.isin(visible_devices_global_ids)]
 
     if require_unused:
         gpu_df = gpu_df[gpu_df.used < 10]
     
-    gpu_df = gpu_df.sort_values(by="free")
-    device_ids = gpu_df.iloc[:n_gpus].index.to_list()
-    devices = [torch.device(idx) for idx in device_ids]
+    gpu_df = gpu_df.sort_values(by="free", ascending=False)
+
+    global_device_ids = gpu_df.iloc[:n_gpus].index.to_list()
+    local_device_idx = [visible_devices_global_ids.index(device_id) for device_id in global_device_ids]
+    devices = [torch.device(idx) for idx in local_device_idx]
+
+    if len(devices) < n_gpus:
+        raise RuntimeError(f"Found {len(devices)} (free) GPUs but required {n_gpus}")
+
+    print(f"Selected global device(s): {global_device_ids}")
     return devices[0] if len(devices) == 1 else devices
 
 

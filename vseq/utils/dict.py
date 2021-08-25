@@ -1,7 +1,7 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
-def flatten_nested_dict(nested_dict: Dict[Dict[Any]], key_separator="."):
+def flatten_nested_dict(nested_dict: Dict[Any, Dict[Any, Any]], key_separator="."):
     """Return a flattened version of a dict of dicts"""
     stack = list(nested_dict.items())
     flattened_dict = {}
@@ -13,3 +13,8 @@ def flatten_nested_dict(nested_dict: Dict[Dict[Any]], key_separator="."):
         else:
             flattened_dict[key] = val
     return flattened_dict
+
+
+def list_of_dict_to_dict_of_list(ld: List[Dict[Any, Any]]):
+    dl = {key: [item[key] for item in ld] for key in ld[0].keys()}
+    return dl
