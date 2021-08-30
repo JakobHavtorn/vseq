@@ -157,3 +157,5 @@ misc
 
 *.ipynb 
 models/
+# cache files 
+*.pyc

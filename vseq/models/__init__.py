@@ -3,7 +3,7 @@ from vseq.models.bowman import Bowman
 from vseq.models.clockwork_rnn import CWRNNLM
 from vseq.models.clockwork_vae import *
 from vseq.models.hmrnn import HMLM
-from vseq.models.lstm import LSTMLM, LSTM2D
+from vseq.models.lstm import LSTM
 from vseq.models.srnn import SRNN, SRNNLM, SRNNAudioGauss, SRNNAudioDML
 from vseq.models.transformer import TransformerLM
 from vseq.models.vrnn import VRNN, VRNNLM, VRNNAudioDML, VRNNAudioGauss, VRNNAudioSpec, VRNN_MIDI

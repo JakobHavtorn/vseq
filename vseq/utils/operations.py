@@ -80,16 +80,7 @@ def reverse_sequences(x, x_sl, batch_first: bool = False):
     return out
 
 
-<<<<<<< HEAD
-def sequence_mask(
-    seq_lens: Union[list, torch.Tensor],
-    max_len=None,
-    dtype=torch.bool,
-    device: torch.device = None,
-):
-=======
 def sequence_mask(seq_lens: Union[list, torch.Tensor], stride: int = 1, max_len: int = None, dtype: torch.dtype = torch.bool, device: torch.device = None):
->>>>>>> clockwork-vae
     """
     Creates a binary sequence mask where all entries up to seq_lens are 1 and the remaining are 0.
     Args:
