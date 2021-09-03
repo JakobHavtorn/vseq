@@ -15,7 +15,7 @@ from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
 from .dense_coders import DenseAudioEncoder, DenseAudioDecoder
-from .tasnet_coder import TasNetDecoder, TasNetEncoder
+from .tasnet_coder import TasNetCoder, TasNetDecoder, TasNetEncoder
 from .cpc_coders import CPCDecoder, CPCEncoder
 from .conv_coders import AudioEncoderConv1d, AudioDecoderConv1d, ContextDecoderConv1d
 
@@ -172,7 +172,7 @@ class CWVAE(nn.Module):
         self.receptive_field = self.encoder.receptive_field
         self.overall_stride = self.encoder.overall_stride
 
-    def build_metrics(self, x_sl, loss, elbo, log_prob, kld, klds, latents, seq_mask, beta, free_nats):
+    def build_metrics(self, loss, elbo, log_prob, kld, klds, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats):
         kld_metrics_nats = [
             KLMetric(klds[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.num_levels)
         ]
@@ -181,15 +181,12 @@ class CWVAE(nn.Module):
             for l in range(self.num_levels)
         ]
         latent_activity_metrics_percent = [
-            LatentActivityMetric(latents[l][:, :x_sl.min()], name=f"z_{l} (%)", threshold=0.01, reduce_by=latents[l].size(0), weight_by=latents[l].size(0) * x_sl.min())
+            LatentActivityMetric(enc_mus[l][:, :x_sl.min()], name=f"z_{l} (%)", threshold=0.01, reduce_by=enc_mus[l].size(0), weight_by=enc_mus[l].size(0) * x_sl.min())
             for l in range(self.num_levels)
         ]
+        # 
         latent_activity_metrics_variance = [
-            LatentActivityMetric(latents[l][:, :x_sl.min()], name=f"z_{l} (var)", reduce_by=latents[l].size(0), weight_by=latents[l].size(0) * x_sl.min())
-            for l in range(self.num_levels)
-        ]
-        latent_activity_metrics_variance2 = [
-            RunningMeanMetric(latents[l][:, :x_sl.min()].var(0).mean(0), name=f"z_{l} (var2)", weight_by=latents[l].size(0) * x_sl.min())
+            LatentActivityMetric(enc_mus[l][:, :x_sl.min()], name=f"z_{l} (var)", reduce_by=enc_mus[l].size(0), weight_by=enc_mus[l].size(0) * x_sl.min())
             for l in range(self.num_levels)
         ]
 
@@ -205,7 +202,6 @@ class CWVAE(nn.Module):
             *kld_metrics_bpd,
             *latent_activity_metrics_percent,
             *latent_activity_metrics_variance,
-            *latent_activity_metrics_variance2,
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
@@ -263,8 +259,10 @@ class CWVAE(nn.Module):
 
         # initial RSSM state (z, h)
         states = [cell.get_initial_state(batch_size=x.size(0)) for cell in self.cells] if state0 is None else state0
-        kl_divs = [[] for _ in range(self.num_levels)]
+        klds = [[] for _ in range(self.num_levels)]
         latents = [[] for _ in range(self.num_levels)]
+        enc_mus = [[] for _ in range(self.num_levels)]
+        prior_mus = [[] for _ in range(self.num_levels)]
         for l in range(self.num_levels - 1, -1, -1):
             all_states = []
             all_distributions = []
@@ -307,19 +305,22 @@ class CWVAE(nn.Module):
             enc_sd = torch.stack([all_distributions[t].enc_sd for t in range(T_l)], dim=1)
             prior_mu = torch.stack([all_distributions[t].prior_mu for t in range(T_l)], dim=1)
             prior_sd = torch.stack([all_distributions[t].prior_sd for t in range(T_l)], dim=1)
-            latents[l] = torch.stack([all_distributions[t].z for t in range(T_l)], dim=1)
 
-            kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
-            kl_divs[l] = kld
+            latents[l] = torch.stack([all_distributions[t].z for t in range(T_l)], dim=1)
+            enc_mus[l] = enc_mu
+            prior_mus[l] = prior_mu
+
+            kld_l = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
+            klds[l] = kld_l
 
         context_l = torch.stack(context_l, dim=1)
         dec = self.decoder(context_l)
 
         parameters = self.likelihood(dec)
 
-        loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, kl_divs, x_sl, beta, free_nats)
+        loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, klds, x_sl, beta, free_nats)
 
-        metrics = self.build_metrics(x_sl, loss, elbo, log_prob, kld, klds, latents, seq_mask, beta, free_nats)
+        metrics = self.build_metrics(loss, elbo, log_prob, kld, klds, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats)
 
         outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
         outputs.x_hat = self.likelihood.sample(outputs.parameters)
@@ -691,7 +692,8 @@ class CWVAEAudioTasNet(BaseModel):
         self,
         z_size: Union[int, List[int]] = 64,
         h_size: Union[int, List[int]] = 128,
-        time_factors: Union[int, List[int]] = [64, 512, 4096],
+        time_factors: Union[int, List[int]] = [64, 512, 4096],  # Rename strides
+        dilations: Union[int, List[int]] = 1,
         residual_posterior: bool = False,
         num_level_layers: int = 8,
         num_mix: int = 10,
@@ -705,6 +707,7 @@ class CWVAEAudioTasNet(BaseModel):
         self.z_size = z_size
         self.h_size = h_size
         self.time_factors = time_factors
+        self.dilations = dilations
         self.residual_posterior = residual_posterior
         self.num_level_layers = num_level_layers
         self.num_mix = num_mix
@@ -729,25 +732,44 @@ class CWVAEAudioTasNet(BaseModel):
         )
 
         encoder = TasNetEncoder(
+            strides=time_factors,
+            channels_in=1,
             channels_bottleneck=h_size,
             channels_block=4 * h_size,
-            time_factors=time_factors,
             kernel_size=5,
             num_blocks=num_level_layers,
             num_levels=self.num_levels,
             norm_type=norm_type,
+            # stride_per_block=2,
+            # transposed=False,
         )
 
         decoder = TasNetDecoder(
-            time_factor=time_factors[0],
+            strides=time_factors[0],
             channels_in=bot_c_size,
             channels_bottleneck=h_size,
             channels_block=4 * h_size,
-            channels_out=likelihood.out_features,
+            channels_out=likelihood.out_features,  #[None, None, likelihood.out_features],
             kernel_size=5,
             num_blocks=num_level_layers,
             norm_type=norm_type,
+            # stride_per_block=2,
+            # transposed=True,
         )
+
+        # if self.num_levels > 1:
+        #     context_decoder = TasNetContextDecoder(
+        #         time_factor=time_factors[1:],
+        #         channels_in=2 * h_size,
+        #         channels_bottleneck=h_size,
+        #         channels_block=4 * h_size,
+        #         channels_out=likelihood.out_features,
+        #         kernel_size=5,
+        #         num_blocks=num_level_layers,
+        #         norm_type=norm_type,
+        #     )
+        # else:
+        #     context_decoder = None
 
         self.cwvae = CWVAE(
             encoder=encoder,

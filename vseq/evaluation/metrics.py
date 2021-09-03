@@ -117,7 +117,7 @@ class RunningMeanMetric(Metric):
         """Create a running mean metric that maintains the running mean when updated.
 
         Args:
-            values (Union[torch.Tensor, float]): Values of the metric
+            values (Union[torch.Tensor, float]): Values of the metric of shape (B,)
             name (str): Name of the metric
             tags (Set[str]): Tags to use for grouping with other metrics.
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
@@ -175,7 +175,7 @@ class RunningVarianceMetric(Metric):
         """Create a running variance metric that maintains the running variance when updated.
 
         Args:
-            values (Union[torch.Tensor, float]): Values of the metric
+            values (Union[torch.Tensor, float]): Values of the metric of shape (B,)
             name (str): Name of the metric
             tags (Set[str]): Tags to use for grouping with other metrics.
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
@@ -240,6 +240,15 @@ class LatentActivityMetric(Metric):
         log_to_console: bool = True,
         log_to_framework: bool = True,
     ):
+        """Create a latent activity metric that maintains a running variance over batch when updated.
+
+        Args:
+            values (Union[torch.Tensor, float]): Values of the metric of shape (B, D) or (B, T, D)
+            name (str): Name of the metric
+            tags (Set[str]): Tags to use for grouping with other metrics.
+            reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to `values.numel()`.
+            weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
+        """
         assert values.ndim == 2 or values.ndim == 3, "latents must have shape (B, D) or (B, T, D)"
 
         super().__init__(
@@ -255,16 +264,15 @@ class LatentActivityMetric(Metric):
         reduce_by = detach(reduce_by)
         weight_by = detach(weight_by)
 
-        numel = values.numel() if isinstance(values, torch.Tensor) else 1
+        numel = values.size(0) if isinstance(values, torch.Tensor) else 1
+        values = values.cpu() if isinstance(values, torch.Tensor) else values
 
         reduce_by = reduce_by.sum().tolist() if isinstance(reduce_by, torch.Tensor) else (reduce_by or numel)
         weight_by = weight_by.sum().tolist() if isinstance(weight_by, torch.Tensor) else (weight_by or reduce_by)
 
         self.weight_by = weight_by
         self.running_mean = values.mean(0)  # mean over batch (T, D)
-        self.M2 = (
-            ((values - self.running_mean.unsqueeze(0)) ** 2).sum(0) if isinstance(values, torch.Tensor) else 0
-        )  # (T, D)
+        self.M2 = ((values - self.running_mean) ** 2).sum(0) if isinstance(values, torch.Tensor) else 0  # (T, D)
 
         # report average variance if threshold is None, otherwise percentage with variance over threshold
         self.running_variance = self.M2 / (reduce_by - 1) if reduce_by > 1 else float("nan")
@@ -480,7 +488,7 @@ class PerplexityMetric(BitsPerDimMetric):
 
     @property
     def value(self):
-        return 2 ** self._value
+        return 2 ** self.running_mean
 
 
 class HoyerSparsityMetric(RunningMeanMetric):

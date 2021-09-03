@@ -109,7 +109,7 @@ class Tracker:
 
         # continously updated
         self.printed_last = 0
-        self.last_log_line_len = 0
+        self.log_line_len = 0
         self.cpu_utils = defaultdict(lambda: collections.deque(maxlen=cpu_util_window))
         self.iowait = "-"
         self.source = None
@@ -162,7 +162,9 @@ class Tracker:
             for source in best_metrics.keys()
         }
 
-    def steps(self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None, max_steps: Optional[int] = None):
+    def steps(
+        self, steppable: Union[Iterable, DataLoader], source: Optional[str] = None, max_steps: Optional[int] = None
+    ):
         if source is None and not isinstance(steppable, DataLoader):
             raise ValueError("Must provide `source` to .steps() if steppable is not a DataLoader")
 
@@ -205,14 +207,12 @@ class Tracker:
             if self.rank == 0:
                 if self.is_ddp:
                     # print summary of gathered and reduced metrics
-                    rich.print(
-                        f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.last_log_line_len - 18)}\n"
-                    )
+                    rich.print(f"[bold bright_white]Summary:[/bold bright_white] {' ' * (self.log_line_len - 18)}\n")
                     for source in self.best_values.keys():
                         self.print(source=source)
                         print(flush=True)
 
-                print("-" * (self.last_log_line_len or 50), flush=True)
+                print("-" * (self.log_line_len or 50), flush=True)
 
             self.reset()
 
@@ -233,9 +233,7 @@ class Tracker:
 
         if self.is_ddp and self.rank == 0:
             for rank in reversed(range(self.world_size)):
-                rich.print(
-                    rank_string(rank) + " " + source_string(self.source) + " " * self.last_log_line_len, flush=True
-                )
+                rich.print(rank_string(rank) + " " + source_string(self.source) + " " * self.log_line_len, flush=True)
             rich.print(f"Running DDP with world_size={self.world_size}", flush=True, end="\r")
 
         if self.is_ddp:
@@ -310,9 +308,9 @@ class Tracker:
             cpu = int(round(sum([p.cpu_percent(interval=0.0) for p in workers]), 0))  # percent since last call
             self.cpu_utils[self.rank].append(cpu)
             cpu_times = [p.cpu_times() for p in workers]  # accumulated over lifetime of process
-            iowait = sum([ct.iowait for ct in cpu_times]) # / len(workers)
-            cpu = sum([sum(ct[:2]) for ct in cpu_times]) # / len(workers)
-            self.iowait = f"{cpu:.0f}/{iowait:.0f}"
+            time_usr_sys = sum([sum(ct[:2]) for ct in cpu_times]) / len(workers)
+            time_iowait = sum([ct.iowait for ct in cpu_times]) / len(workers)
+            self.iowait = f"{time_usr_sys:.0f}/{time_iowait:.0f}"
         if len(self.cpu_utils[self.rank]):
             cpu = sum(self.cpu_utils[self.rank]) / len(self.cpu_utils[self.rank])
             cpu = f"{cpu:.0f}%"
@@ -338,20 +336,22 @@ class Tracker:
         sep = " [magenta]|[/] "  # " | "
         metrics = [f"{name} = {met.str_value}" for name, met in self.metrics[source].items() if met.log_to_console]
         if len(metrics) > 0:
+            # maybe shorten metrics string to fit terminal
             metrics_len = [3 + len(m) for m in metrics]  # 3 is length of sep without formatting
             metrics_len[0] += 3  # add sep left of first metric
             metrics_len[-1] -= 1  # remove space right of sep right of last metric
             metrics_cumlen = list(itertools.accumulate(metrics_len))
             max_metrics_str_len = self.terminal.width - length_without_formatting(sp)
             if metrics_cumlen[-1] > max_metrics_str_len:
-                idx = next(i for i, v in enumerate(metrics_cumlen) if v > max_metrics_str_len - 3)  # last before too long
+                # last before too long
+                idx = next(i for i, v in enumerate(metrics_cumlen) if v > max_metrics_str_len - 3)
                 metrics = metrics[:idx] + ["..."]
         ms = sep + sep.join(metrics)
 
         # final string
         s = f"{sp:<}{ms}"
 
-        self.last_log_line_len = length_without_formatting(s)
+        self.log_line_len = length_without_formatting(s)
         s = s + " " * 5  # add some whitespace to overwrite any lingering characters
 
         if self.is_ddp:

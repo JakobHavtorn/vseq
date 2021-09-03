@@ -128,9 +128,7 @@ class ContextDecoderConv1d(nn.Module):
         self.levels = nn.ModuleList([level_2, level_3])[:num_levels]
 
     def forward(self, x: TensorType["B", "T", "D"]) -> List[TensorType["B", "T", "D"]]:
-        # import IPython; IPython.embed(using=False)
-        hidden = self.levels(x)
-        return hidden
+        raise NotImplementedError()
 
 
 class AudioDecoderConv1d(nn.Module):
