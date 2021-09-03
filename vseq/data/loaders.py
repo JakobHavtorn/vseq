@@ -1,8 +1,12 @@
+import csv
+import datetime
 import os
+import re
 import uuid
 
 from dataclasses import dataclass
 from typing import Callable, Union
+from vseq.data.datapaths import DATASETS, TIMIT
 
 import numpy as np
 import torch
@@ -41,9 +45,9 @@ class AudioMetaData(MetaData):
 
 @dataclass
 class TextMetaData(MetaData):
-    word_length: int
-    char_length: int
     file_path: str
+    word_length: int = None
+    char_length: int = None
     example_id: str = None
     line_idx: int = None
 
@@ -86,6 +90,23 @@ def load_numpy(file_path: str, length_dim: int = 0, **kwargs):
         file_path=file_path,
     )
     return tensor, metadata
+
+
+def load_timit_alignment(file_path: str):
+    """Method to load alignment metadata for TIMIT from .PHN, .WRD or even .TXT files """
+    with open(file_path, "r") as text_file:
+        reader = csv.reader(text_file, delimiter=" ")
+        source_rows = list(reader)
+
+    start_frame = [int(r[0]) for r in source_rows]
+    end_frame = [int(r[1]) for r in source_rows]
+    token = [r[2] for r in source_rows]
+
+    metadata = TextMetaData(
+        length=len(source_rows),
+        file_path=file_path
+    )
+    return (start_frame, end_frame, token), metadata
 
 
 class Loader():
@@ -212,3 +233,80 @@ class NumpyLoader(Loader):
         tensor, metadata = load_numpy(file_path, length_dim=self.length_dim, **self.kwargs)
         metadata.example_id = example_id
         return tensor, metadata
+
+
+class TIMITAlignmentLoader(Loader):
+    def __init__(self, extension: Union[None, str] = "PHN", cache: bool = True):
+        super().__init__(extension=extension, cache=cache)
+        if extension not in ["PHN", "WRD"]:
+            raise ValueError(f"Invalid extension for TIMIT alignment data {extension}. Should be one of ['PHN', 'WRD']")
+
+    def load(self, example_id):
+        file_path = example_id + self.suffix
+        (start_frame, end_frame, token), metadata = load_timit_alignment(file_path)
+        metadata.example_id = example_id
+        return (start_frame, end_frame, token), metadata
+
+
+@dataclass
+class TIMITSpeakerMetadata:
+    speaker_id: str
+    sex: str
+    dialect: str
+    use: str
+    recorded: datetime.datetime
+    birthday: datetime.datetime
+    height: datetime.datetime
+    race: str
+    education: str
+    comments: str
+
+
+def timit_load_speaker_info(spkrinfo_path: str):
+    # h_inch += h_ft * 12
+    # h_cm = round(h_inch * 2.54, 1)
+
+    dialects = {
+        "1": "New England",
+        "2": "Northern",
+        "3": "North Midland",
+        "4": "South Midland",
+        "5": "Southern",
+        "6": "New York City",
+        "7": "Western",
+        "8": "Army Brat",
+    }
+
+    with open(spkrinfo_path, "r") as buffer:
+        text = buffer.readlines()
+
+    text = [re.sub(r"\s+", " ", t) for t in text if t[0] != ";"]  # Remove comment lines
+    reader = csv.reader(text, delimiter=" ")
+    source_rows = list(reader)
+
+    speaker_metadata = dict()
+    for row in source_rows:
+        speaker_metadata[row[0]] = TIMITSpeakerMetadata(
+            speaker_id=row[0],
+            sex=row[1],
+            dialect=dialects[row[2]],
+            use=row[3],
+            recorded=datetime.datetime.strptime(row[4], '%m/%d/%y') if "?" not in row[4] else None,
+            birthday=datetime.datetime.strptime(row[5], '%m/%d/%y') if "?" not in row[5] else None,
+            height=row[6],
+            race=row[7],
+            education=row[8],
+            comments=row[9],
+        )
+    return speaker_metadata
+
+
+class TIMITSpeakerLoader(Loader):
+    def __init__(self, spkrinfo_path: str = DATASETS[TIMIT].speaker_info):
+        super().__init__(extension=None, cache=False)
+        self.spkrinfo_path = spkrinfo_path
+        self.speaker_info = timit_load_speaker_info(spkrinfo_path)
+
+    def load(self, example_id):
+        speaker_id = example_id.split("/")[-2][1:]  # Remove gender indicator
+        return self.speaker_info[speaker_id], None

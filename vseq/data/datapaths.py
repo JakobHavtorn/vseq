@@ -2,7 +2,7 @@ import os
 
 from types import SimpleNamespace
 
-from vseq.settings import SOURCE_DIRECTORY
+from vseq.settings import DATA_DIRECTORY, SOURCE_DIRECTORY
 
 
 LIBRISPEECH = "librispeech"
@@ -76,8 +76,16 @@ DATAPATHS_MAPPING = {
 
 
 DATASETS = {
-    TIMIT: SimpleNamespace(train=TIMIT_TRAIN, test=TIMIT_TEST),
-    MIDI_PIANO: SimpleNamespace(train=MIDI_PIANO_TRAIN, valid=MIDI_PIANO_VALID, test=MIDI_PIANO_TEST),
+    TIMIT: SimpleNamespace(
+        train=TIMIT_TRAIN,
+        test=TIMIT_TEST,
+        speaker_info=os.path.join(DATA_DIRECTORY, TIMIT, "DOC", "SPKRINFO.TXT")
+    ),
+    MIDI_PIANO: SimpleNamespace(
+        train=MIDI_PIANO_TRAIN,
+        valid=MIDI_PIANO_VALID,
+        test=MIDI_PIANO_TEST
+    ),
     LIBRISPEECH: SimpleNamespace(
         train=LIBRISPEECH_TRAIN,
         valid=LIBRISPEECH_DEV_CLEAN,

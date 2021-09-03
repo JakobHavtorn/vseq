@@ -21,7 +21,7 @@ def get_visible_devices_global_ids():
     return visible_devices
 
 
-def get_gpu_memory_usage() -> pd.DataFrame:
+def get_gpu_memory_usage(do_print: bool = False) -> pd.DataFrame:
     """Return the free and used memory per GPU device on the node"""
     gpu_stats = subprocess.check_output(["nvidia-smi", "--format=csv", "--query-gpu=memory.used,memory.free"])
 
@@ -31,7 +31,8 @@ def get_gpu_memory_usage() -> pd.DataFrame:
     gpu_df["free"] = gpu_df["free"].map(lambda x: int(x.rstrip(" [MiB]")))
     gpu_df["used"] = gpu_df["used"].map(lambda x: int(x.rstrip(" [MiB]")))
 
-    print("GPU usage (MB):\n{}".format(gpu_df))
+    if do_print:
+        print("GPU usage (MB):\n{}".format(gpu_df))
     return gpu_df
 
 

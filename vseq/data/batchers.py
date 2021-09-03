@@ -61,8 +61,13 @@ class ListBatcher(Batcher):
         """Generic batcher that simply returns a list of tensors (of potentially different shapes) and their .numel()"""
         super().__init__()
 
-    def collate(self, batch: List[torch.Tensor]):
-        sequence_lengths = [tensor.numel() for tensor in batch]
+    def collate(self, batch: List[Any]):
+        if isinstance(batch[0], torch.Tensor):
+            sequence_lengths = [tensor.numel() for tensor in batch]
+        elif hasattr(batch[0], "__len__"):
+            sequence_lengths = [len(element) for element in batch]
+        else:
+            sequence_lengths = [0 for element in batch]
         return batch, torch.LongTensor(sequence_lengths)
 
 
