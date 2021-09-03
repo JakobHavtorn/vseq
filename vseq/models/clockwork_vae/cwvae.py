@@ -189,11 +189,6 @@ class CWVAE(nn.Module):
             LatentActivityMetric(enc_mus[l][:, :x_sl.min()], name=f"z_{l} (var)", reduce_by=enc_mus[l].size(0), weight_by=enc_mus[l].size(0) * x_sl.min())
             for l in range(self.num_levels)
         ]
-        # # Average over time of variance over batch (running over dim)
-        # latent_activity_metrics_variance2 = [
-        #     RunningMeanMetric(enc_mus[l][:, :x_sl.min()].var(0).mean(0), name=f"z_{l} (var2)", weight_by=enc_mus[l].size(0) * x_sl.min())
-        #     for l in range(self.num_levels)
-        # ]
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -207,7 +202,6 @@ class CWVAE(nn.Module):
             *kld_metrics_bpd,
             *latent_activity_metrics_percent,
             *latent_activity_metrics_variance,
-            # *latent_activity_metrics_variance2,
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
