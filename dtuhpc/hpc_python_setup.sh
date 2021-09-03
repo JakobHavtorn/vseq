@@ -1,5 +1,7 @@
 # !/bin/bash
 
+# Script that installs a python virtual environment
+
 # stop on error
 set -e
 
@@ -32,7 +34,6 @@ then
 
     cd $REPO_PATH/vseq
     pip install -f https://download.pytorch.org/whl/torch_stable.html -r requirements.txt
-    #python3 -m pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade torch==1.8.1+cu111 torchvision torchaudio torchtext
     echo "Finished installing vseq"
 else
     echo "Using existing virtual environment vseq"

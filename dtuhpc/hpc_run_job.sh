@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Script that takes a command to execute as argument but sets up a python install and loads relevant modules before executing it.
+
 # exit if error
 set -e
 
