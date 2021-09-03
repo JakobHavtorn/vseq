@@ -5,6 +5,7 @@ from vseq.evaluation.metrics import (
     ErrorRateMetric,
     RunningMeanMetric,
     SeqAccuracyMetric,
+    AccuracyMetric,
     LossMetric,
     LLMetric,
     KLMetric,

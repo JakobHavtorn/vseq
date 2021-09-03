@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Union
 
 import torchaudio
+import textgrid
 
 
 def memoize(func):
@@ -58,6 +59,16 @@ def load_text(file_path):
         file_path=file_path
     )
     return text, metadata
+
+def load_alignment(file_path, index):
+    tg = textgrid.TextGrid.fromFile(file_path)
+    alignments = tg[index]
+
+    metadata = MetaData(
+        length=len(alignments),
+        file_path=file_path
+    )
+    return alignments, metadata
 
 
 def load_audio(file_path, sum_channels: bool = False):
@@ -174,3 +185,23 @@ class TextLoader(Loader):
             batch_data[example_id] = (string, metadata)
 
         self.load.memory.update(batch_data)
+
+class AlignmentLoader(Loader):
+
+    def __init__(self, extension="TextGrid", index=0, cache=False):
+        """
+        Loader for text data.
+
+        Args:
+            extension (str): Extension of data files (e.g., "txt").
+            cache (bool): Whether to enable caching.
+        """
+        super().__init__(extension=extension, cache=cache)
+        self.index = index
+        
+    def load(self, example_id):
+        """Load a single text file"""
+        file_path = example_id + self.suffix
+        alignments, metadata = load_alignment(file_path, index=self.index)
+        metadata.example_id = example_id
+        return alignments, metadata

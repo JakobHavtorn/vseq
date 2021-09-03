@@ -159,3 +159,35 @@ class LengthEvalSampler(Sampler):
 
     def __len__(self):
         return len(self.batches)
+
+class SubsetSampler(Sampler):
+    def __init__(
+        self,
+        num_examples: int,
+        total_examples: int
+    ):
+        self.num_examples = num_examples
+        self.total_examples = total_examples
+        self.example_idxs = list(range(self.total_examples))
+        self.epoch = 0
+
+        random.shuffle(self.example_idxs)
+    
+    def __iter__(self) -> Iterator[List[int]]:
+        
+
+        examples = self.example_idxs[:self.num_examples] # get from buffer
+        self.example_idxs = self.example_idxs[self.num_examples:] # update buffer
+
+        if len(examples) < self.num_examples:
+            N = self.num_examples - len(examples)
+            self.example_idxs = list(range(self.total_examples))
+            random.shuffle(self.example_idxs)
+            examples = self.example_idxs[:N]
+        
+        assert len(examples) == self.num_examples
+        return iter(examples)
+
+    def __len__(self):
+        return self.num_examples
+

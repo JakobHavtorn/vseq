@@ -58,6 +58,61 @@ class EncodeInteger(Transform):
         x = self.token_map.encode(x)
         return x
 
+class EncodeIntegerAlignment(Transform):
+    def __init__(self, token_map, strip_accent=True, receptive_field=400, stride=320, sample_rate=16000):
+        super().__init__()
+        self.token_map = token_map
+        self.strip_accent = strip_accent
+        self.receptive_field = receptive_field
+        self.stride = stride
+        self.sample_rate = sample_rate
+
+    def forward(self, x: str):
+        N = len(x)
+        r, s = self.receptive_field, self.stride
+        label, mask, new_align, total, new_end = [], [], [], 0, 0
+        for idx, interval in enumerate(x):
+            end = round(interval.maxTime * self.sample_rate)
+            if idx + 1 == N:
+                steps = int((end - r) // s + 1) - total
+            else:
+                steps = round((end - r) / s + 1) - total
+            total += steps
+            mark = interval.mark.strip("012") if self.strip_accent else interval.mark
+            if mark in self.token_map.token2index:
+                label += [self.token_map.token2index[mark]] * steps
+                mask += [True] * steps
+                new_end += steps
+                new_align.append((new_end, self.token_map.token2index[mark]))
+            else:
+                mask += [False] * steps
+        
+        return (torch.LongTensor(label), torch.BoolTensor(mask), new_align)
+
+def align_labels(alignments, r=400, s=320, sr=16000):
+    """
+    r = receptive field
+    s = overall stride
+    sr = sample rate
+    
+    We assume all alignments are non-overlapping and cover the entire sequence.
+    At boundaries, we assign the label that makes up the largest portion of the receptive field.
+    """
+
+    
+    total = 0
+    
+    for idx, interval in enumerate(alignments):
+        end = interval.maxTime * sr
+        if idx + 1 == N:
+            steps = int((end - r) // s + 1) - total
+        else:
+            steps = round((end - r) / s + 1) - total
+        total += steps
+        labels += [interval.mark] * steps
+
+    return labels
+
 
 class DecodeInteger(Transform):
     def __init__(self):

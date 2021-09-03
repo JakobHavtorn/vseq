@@ -58,6 +58,37 @@ class AudioBatcher(Batcher):
 
         return sorted(batch, key=sort_key, reverse=True)
 
+class AlignmentBatcher(Batcher):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def collate(self, batch: List[torch.Tensor]):
+        """Zero pad batch of audio waveforms to maximum temporal length and concatenate"""
+        align, mask, new_align = zip(*batch)
+        
+        align_sl= [a.shape[0] for a in align]
+        mask_sl = [m.shape[0] for m in mask]
+
+        T_align = max(align_sl)
+        T_mask = max(mask_sl)
+        N = len(batch)
+
+        padded_batch_align = torch.zeros((N, T_align), dtype=align[0].dtype)
+        padded_batch_mask = torch.zeros((N, T_mask), dtype=mask[0].dtype)
+        for i, (a_sl, m_sl) in enumerate(list(zip(align_sl, mask_sl))):
+            padded_batch_align[i, :a_sl] = align[i]
+            padded_batch_mask[i, :m_sl] = mask[i]
+
+        return (padded_batch_align, padded_batch_mask, new_align), torch.LongTensor(align_sl)
+
+    def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
+        if sort_modality_idx is not None:
+            sort_key = lambda x: len(x[0][sort_modality_idx])
+        else:
+            sort_key = lambda x: len(x[0])
+
+        return sorted(batch, key=sort_key, reverse=True)
+
 
 class SpectrogramBatcher(Batcher):
     def __init__(self) -> None:
