@@ -310,7 +310,7 @@ class Tracker:
             cpu_times = [p.cpu_times() for p in workers]  # accumulated over lifetime of process
             time_usr_sys = sum([sum(ct[:2]) for ct in cpu_times]) / len(workers)
             time_iowait = sum([ct.iowait for ct in cpu_times]) / len(workers)
-            self.iowait = f"{time_usr_sys:.0f}/{time_iowait:.0f}"
+            self.iowait = f"{time_usr_sys:.1f}/{time_iowait:.1f}"
         if len(self.cpu_utils[self.rank]):
             cpu = sum(self.cpu_utils[self.rank]) / len(self.cpu_utils[self.rank])
             cpu = f"{cpu:.0f}%"

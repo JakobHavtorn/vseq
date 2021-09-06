@@ -8,7 +8,16 @@ import torch.nn as nn
 
 from torchtyping import TensorType
 
-from vseq.evaluation.metrics import BitsPerDimMetric, KLMetric, LLMetric, LatentActivityMetric, LatestMeanMetric, LossMetric, RunningMeanMetric, RunningVarianceMetric
+from vseq.evaluation.metrics import (
+    BitsPerDimMetric,
+    KLMetric,
+    LLMetric,
+    LatentActivityMetric,
+    LatestMeanMetric,
+    LossMetric,
+    RunningMeanMetric,
+    RunningVarianceMetric,
+)
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, DiscretizedLogisticMixtureDense, GaussianDense
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
@@ -181,12 +190,23 @@ class CWVAE(nn.Module):
             for l in range(self.num_levels)
         ]
         latent_activity_metrics_percent = [
-            LatentActivityMetric(enc_mus[l][:, :x_sl.min()], name=f"z_{l} (%)", threshold=0.01, reduce_by=enc_mus[l].size(0), weight_by=enc_mus[l].size(0) * x_sl.min())
+            LatentActivityMetric(
+                enc_mus[l][:, : x_sl.min()],
+                name=f"z_{l} (%)",
+                threshold=0.01,
+                reduce_by=enc_mus[l].size(0),
+                weight_by=enc_mus[l].size(0) * x_sl.min(),
+            )
             for l in range(self.num_levels)
         ]
-        # 
+        #
         latent_activity_metrics_variance = [
-            LatentActivityMetric(enc_mus[l][:, :x_sl.min()], name=f"z_{l} (var)", reduce_by=enc_mus[l].size(0), weight_by=enc_mus[l].size(0) * x_sl.min())
+            LatentActivityMetric(
+                enc_mus[l][:, : x_sl.min()],
+                name=f"z_{l} (var)",
+                reduce_by=enc_mus[l].size(0),
+                weight_by=enc_mus[l].size(0) * x_sl.min(),
+            )
             for l in range(self.num_levels)
         ]
 
@@ -318,12 +338,26 @@ class CWVAE(nn.Module):
 
         parameters = self.likelihood(dec)
 
+        reconstruction = self.likelihood.sample(parameters)
+
         loss, elbo, log_prob, kld, klds, seq_mask = self.compute_elbo(y, parameters, klds, x_sl, beta, free_nats)
 
-        metrics = self.build_metrics(loss, elbo, log_prob, kld, klds, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats)
+        metrics = self.build_metrics(
+            loss, elbo, log_prob, kld, klds, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats
+        )
 
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kld=kld, y=y, parameters=parameters, seq_mask=seq_mask)
-        outputs.x_hat = self.likelihood.sample(outputs.parameters)
+        outputs = SimpleNamespace(
+            elbo=elbo,
+            log_prob=log_prob,
+            kld=kld,
+            y=y,
+            seq_mask=seq_mask,
+            latents=latents,
+            enc_mus=enc_mus,
+            prior_mus=prior_mus,
+            reconstruction=reconstruction,
+            reconstruction_parameters=parameters,
+        )
 
         return loss, metrics, outputs
 
@@ -749,7 +783,7 @@ class CWVAEAudioTasNet(BaseModel):
             channels_in=bot_c_size,
             channels_bottleneck=h_size,
             channels_block=4 * h_size,
-            channels_out=likelihood.out_features,  #[None, None, likelihood.out_features],
+            channels_out=likelihood.out_features,  # [None, None, likelihood.out_features],
             kernel_size=5,
             num_blocks=num_level_layers,
             norm_type=norm_type,

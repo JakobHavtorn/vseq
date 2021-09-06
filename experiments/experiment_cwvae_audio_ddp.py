@@ -282,12 +282,12 @@ def run(gpu_idx, args):
 
             extra = dict()
             if rank == 0 and epoch % 10 == 0:
-                outputs.x_hat = decode_transform(outputs.x_hat)
+                outputs.reconstructions = decode_transform(outputs.reconstructions)
                 reconstructions = [
                     wandb.Audio(
-                        outputs.x_hat[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000
+                        outputs.reconstructions[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000
                     )
-                    for i in range(min(2, outputs.x_hat.size(0)))
+                    for i in range(min(2, outputs.reconstructions.size(0)))
                 ]
 
                 (x, x_sl), outputs = model.module.generate(n_samples=2, max_timesteps=128000)
