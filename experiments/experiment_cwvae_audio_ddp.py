@@ -42,8 +42,10 @@ def main():
     parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
     parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
     parser.add_argument("--latent_size", default=128, type=int, nargs="+", help="dimensionality of latent state in CWVAE")
+    parser.add_argument("--global_size", default=128, type=int, help="dimensionality of global latent state in CWVAE")
     parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
     parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
+    parser.add_argument("--num_rssm_gru_cells", default=3, type=int, help="number of stacked GRU cells in an RSSM cell")
     parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
     parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
     parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
@@ -102,11 +104,13 @@ def run(gpu_idx, args):
     model = vseq.models.CWVAEAudioTasNet(
         z_size=args.latent_size,
         h_size=args.hidden_size,
+        g_size=args.global_size,
         time_factors=args.time_factors,
         num_level_layers=args.num_level_layers,
         num_mix=args.num_mix,
         num_bins=2 ** args.num_bits,
         residual_posterior=args.residual_posterior,
+        num_rssm_gru_cells=args.num_rssm_gru_cells,
     )
     # model = vseq.models.CWVAEAudioDense(
     # # model = vseq.models.CWVAEAudioConv1D(
@@ -125,12 +129,10 @@ def run(gpu_idx, args):
         encode_transform.append(MuLawEncode(bits=args.mu_law_bits or args.num_bits))
         decode_transform.append(MuLawDecode(bits=args.mu_law_bits or args.num_bits))
 
-    # encode_transform.extend([Quantize(bits=8, rescale=True)])
     encode_transform = Compose(*encode_transform)
     decode_transform = Compose(*decode_transform)
 
     batcher = AudioBatcher(min_length=model.receptive_field, padding_module=model.overall_stride)
-    # batcher = AudioBatcher(padding_module=model.overall_stride)
     loader = AudioLoader("wav", cache=False)
     modalities = [(loader, encode_transform, batcher)]
 

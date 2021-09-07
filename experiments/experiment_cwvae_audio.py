@@ -31,8 +31,10 @@ parser.add_argument("--length_sampler", default=True, type=str2bool, help="use l
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--hidden_size", default=512, type=int, nargs="+", help="dimensionality of hidden state in CWVAE")
 parser.add_argument("--latent_size", default=128, type=int, nargs="+", help="dimensionality of latent state in CWVAE")
+parser.add_argument("--global_size", default=None, type=int, help="dimensionality of global latent state in CWVAE")
 parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs="+", help="temporal abstraction factor")
 parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
+parser.add_argument("--num_rssm_gru_cells", default=3, type=int, help="number of stacked GRU cells in an RSSM cell")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
 parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
@@ -92,11 +94,13 @@ rich.print(vars(args))
 model = vseq.models.CWVAEAudioTasNet(
     z_size=args.latent_size,
     h_size=args.hidden_size,
+    g_size=args.global_size,
     time_factors=args.time_factors,
     num_level_layers=args.num_level_layers,
     num_mix=args.num_mix,
     num_bins=2 ** args.num_bits,
-    residual_posterior=args.residual_posterior
+    residual_posterior=args.residual_posterior,
+    num_rssm_gru_cells=args.num_rssm_gru_cells,
 )
 # model = vseq.models.CWVAEAudioDense(
 # # model = vseq.models.CWVAEAudioConv1D(
@@ -184,9 +188,8 @@ else:
     )
 
 
-
 print(model)
-model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride]), device="cpu")
+model.summary(input_size=(4, 10 * model.overall_stride), x_sl=torch.tensor([10 * model.overall_stride] * 4), device="cpu")
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
