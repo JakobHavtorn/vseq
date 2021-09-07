@@ -64,7 +64,7 @@ class AlignmentBatcher(Batcher):
 
     def collate(self, batch: List[torch.Tensor]):
         """Zero pad batch of audio waveforms to maximum temporal length and concatenate"""
-        align, mask, new_align = zip(*batch)
+        align, mask = zip(*batch)
         
         align_sl= [a.shape[0] for a in align]
         mask_sl = [m.shape[0] for m in mask]
@@ -79,7 +79,7 @@ class AlignmentBatcher(Batcher):
             padded_batch_align[i, :a_sl] = align[i]
             padded_batch_mask[i, :m_sl] = mask[i]
 
-        return (padded_batch_align, padded_batch_mask, new_align), torch.LongTensor(align_sl)
+        return (padded_batch_align, padded_batch_mask), torch.LongTensor(align_sl)
 
     def sort(self, batch: List[torch.Tensor], sort_modality_idx: Optional[int] = None):
         if sort_modality_idx is not None:

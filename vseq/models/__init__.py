@@ -12,4 +12,4 @@ from vseq.models.astro_ctc_asr import AstroCTCASR
 from vseq.models.astro_ce_asr import AstroCEASR
 from vseq.models.astro_dae import AstroDAE
 from vseq.models.multi_probe import MultiProbe
-
+from vseq.models.linear_probe import LinearProbe

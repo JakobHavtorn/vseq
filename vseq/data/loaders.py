@@ -8,6 +8,8 @@ from typing import Union
 import torchaudio
 import textgrid
 
+from vseq.settings import DATA_DIRECTORY
+
 
 def memoize(func):
     cache = dict()
@@ -205,3 +207,37 @@ class AlignmentLoader(Loader):
         alignments, metadata = load_alignment(file_path, index=self.index)
         metadata.example_id = example_id
         return alignments, metadata
+
+class LibriGenderLoader(Loader):
+
+    def __init__(self, extension="TextGrid", index=0, cache=False):
+        """
+        Loader for text data.
+
+        Args:
+            extension (str): Extension of data files (e.g., "txt").
+            cache (bool): Whether to enable caching.
+        """
+        super().__init__(extension=extension, cache=cache)
+        self.index = index
+        self.gender_map = self._load_mapping()
+    
+    def _load_mapping(self):
+        spk_path = os.path.join(DATA_DIRECTORY, "librispeech/SPEAKERS.TXT")
+        with open(spk_path, "r") as spk_buffer:
+            lines = spk_buffer.read().split("\n")[12:-1]
+        gender_code_map = {"F": 0, "M": 1}
+        def read_line(l):
+            entries = l.split("|")
+            spk_id = entries[0].strip()
+            gender_code = gender_code_map[entries[1].strip()]
+            return (spk_id, gender_code)
+        mapping = dict([read_line(l) for l in lines]) # "string_id" --> 0 (female) or 1 (male)
+        return mapping
+        
+    def load(self, example_id):
+        """Load a single text file"""
+        spk_id = example_id.split(os.path.sep)[-3]
+        gender_code = self.gender_map[spk_id]
+        metadata = None
+        return gender_code, metadata

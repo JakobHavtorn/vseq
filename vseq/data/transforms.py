@@ -8,6 +8,8 @@ import torch.nn as nn
 import numpy as np
 from torchaudio.transforms import AmplitudeToDB, MelSpectrogram
 
+from vseq.data.tokens import LIBRI_PHONESET_SPECIAL, UNKNOWN_TOKEN
+
 
 class Transform(nn.Module):
     def __init__(self):
@@ -83,36 +85,10 @@ class EncodeIntegerAlignment(Transform):
                 label += [self.token_map.token2index[mark]] * steps
                 mask += [True] * steps
                 new_end += steps
-                new_align.append((new_end, self.token_map.token2index[mark]))
             else:
                 mask += [False] * steps
         
-        return (torch.LongTensor(label), torch.BoolTensor(mask), new_align)
-
-def align_labels(alignments, r=400, s=320, sr=16000):
-    """
-    r = receptive field
-    s = overall stride
-    sr = sample rate
-    
-    We assume all alignments are non-overlapping and cover the entire sequence.
-    At boundaries, we assign the label that makes up the largest portion of the receptive field.
-    """
-
-    
-    total = 0
-    
-    for idx, interval in enumerate(alignments):
-        end = interval.maxTime * sr
-        if idx + 1 == N:
-            steps = int((end - r) // s + 1) - total
-        else:
-            steps = round((end - r) / s + 1) - total
-        total += steps
-        labels += [interval.mark] * steps
-
-    return labels
-
+        return (torch.LongTensor(label), torch.BoolTensor(mask))
 
 class DecodeInteger(Transform):
     def __init__(self):

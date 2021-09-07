@@ -14,6 +14,15 @@ LIBRISPEECH_TEST_OTHER = "libri_test_other"
 
 LIBRISPEECH_LM = "librispeech_lm"
 
+LIBRILIGHT_10H = "librilight_10h"
+LIBRILIGHT_1H = "librilight_1h"
+LIBRILIGHT_1M0 = "librilight_1m0"
+LIBRILIGHT_1M1 = "librilight_1m1"
+LIBRILIGHT_1M2 = "librilight_1m2"
+LIBRILIGHT_1M3 = "librilight_1m3"
+LIBRILIGHT_1M4 = "librilight_1m4"
+LIBRILIGHT_1M5 = "librilight_1m5"
+
 BILLION_TRAINING = "billion_training"
 BILLION_HELDOUT = "billion_heldout"
 
@@ -33,6 +42,15 @@ DATAPATHS_MAPPING = {
     LIBRISPEECH_TEST_OTHER: os.path.join(SOURCE_DIRECTORY, "librispeech", "test-other.txt"),
 
     LIBRISPEECH_LM: os.path.join(SOURCE_DIRECTORY, "librispeech_lm", "librispeech_lm.txt"),
+
+    LIBRILIGHT_10H: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10h.txt"),
+    LIBRILIGHT_1H: os.path.join(SOURCE_DIRECTORY, "librilight", "train-1h.txt"),
+    LIBRILIGHT_1M0: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-0.txt"),
+    LIBRILIGHT_1M1: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-1.txt"),
+    LIBRILIGHT_1M2: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-2.txt"),
+    LIBRILIGHT_1M3: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-3.txt"),
+    LIBRILIGHT_1M4: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-4.txt"),
+    LIBRILIGHT_1M5: os.path.join(SOURCE_DIRECTORY, "librilight", "train-10m-5.txt"),
 
     BILLION_TRAINING: os.path.join(SOURCE_DIRECTORY, "billion", "training.txt"),
     BILLION_HELDOUT: os.path.join(SOURCE_DIRECTORY, "billion", "heldout.txt"),

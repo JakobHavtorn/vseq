@@ -183,7 +183,7 @@ class SubsetSampler(Sampler):
             N = self.num_examples - len(examples)
             self.example_idxs = list(range(self.total_examples))
             random.shuffle(self.example_idxs)
-            examples = self.example_idxs[:N]
+            examples += self.example_idxs[:N]
         
         assert len(examples) == self.num_examples
         return iter(examples)

@@ -2,6 +2,7 @@ import math
 
 from copy import deepcopy
 from typing import List, Optional, Set, Union
+from vseq.data.token_map import get
 
 import torch
 import editdistance
@@ -9,45 +10,86 @@ import numpy as np
 
 from vseq.utils.operations import detach, sequence_mask
 
-
 class Metric:
     base_tags = set()
-    _str_value_fmt = "<10.3"
+    _str_value_fmt = "<.3"
 
-    def __init__(self, name: str, tags: set):
+    def __init__(
+        self,
+        name: str,
+        tags: Set[str] = None,
+        get_best: str = None,
+        log_to_console: bool = True,
+        log_to_framework: bool = True,
+    ):
         self.name = name
         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
+        self.get_best = GET_BEST[get_best] if get_best is not None else GET_BEST["none"]
+        self.log_to_console = log_to_console
+        self.log_to_framework = log_to_framework
 
     @property
     def value(self):
         """Primary value of the metric to be used for logging"""
         raise NotImplementedError()
 
-    def update(self, metric):
-        """Update the metric (e.g. running mean)"""
-        raise NotImplementedError()
-
     @property
     def str_value(self):
         return f"{self.value:{self._str_value_fmt}f}"
 
-    @staticmethod
-    def get_best(metrics):
-        """Return the best from list of metrics"""
-        return None
+    def update(self, metric):
+        """Update the metric (e.g. running mean)"""
+        raise NotImplementedError()
 
     def copy(self):
         return deepcopy(self)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(name={self.name}, value={self.str_value})"
 
-@staticmethod
+# class Metric:
+#     base_tags = set()
+#     _str_value_fmt = "<10.3"
+
+#     def __init__(self, name: str, tags: set):
+#         self.name = name
+#         self.tags = self.base_tags if tags is None else (tags | self.base_tags)
+
+#     @property
+#     def value(self):
+#         """Primary value of the metric to be used for logging"""
+#         raise NotImplementedError()
+
+#     def update(self, metric):
+#         """Update the metric (e.g. running mean)"""
+#         raise NotImplementedError()
+
+#     @property
+#     def str_value(self):
+#         return f"{self.value:{self._str_value_fmt}f}"
+
+#     @staticmethod
+#     def get_best(metrics):
+#         """Return the best from list of metrics"""
+#         return None
+
+#     def copy(self):
+#         return deepcopy(self)
+
+
 def min_value(metrics: List[Metric]):
     return min(metrics, key=lambda m: m.value)
 
 
-@staticmethod
 def max_value(metrics: List[Metric]):
     return max(metrics, key=lambda m: m.value)
+
+
+def no_value(metrics: List[Metric]):
+    return None
+
+
+GET_BEST = dict(none=no_value, min=min_value, max=max_value)
 
 
 class WindowMeanMetric(Metric):
@@ -94,6 +136,7 @@ class RunningMeanMetric(Metric):
         values: Union[torch.Tensor, float],
         name: str,
         tags: Set[str],
+        get_best: float = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
@@ -106,7 +149,7 @@ class RunningMeanMetric(Metric):
             reduce_by (Optional[Union[torch.Tensor, float]], optional): A single or per example divisor of the values. Defaults to batch size.
             weight_by (Optional[Union[torch.Tensor, float]], optional): A single or per example weights for the running mean. Defaults to `reduce_by`.
         """
-        super().__init__(name=name, tags=tags)
+        super().__init__(name=name, get_best=get_best, tags=tags)
 
         values = detach(values)
         reduce_by = detach(reduce_by)
@@ -179,11 +222,12 @@ class AccuracyMetric(Metric):
         self,
         predictions: Union[torch.Tensor, float],
         labels: Union[torch.Tensor, float],
+        get_best: float = "max",
         name: str = "accuracy",
         tags: Set[str] = None,
     ):
         """Classification accuracy"""
-        super().__init__(name, tags)
+        super().__init__(name=name, tags=tags, get_best=get_best)
         predictions = detach(predictions)
         labels = detach(labels)
         self.correct = (predictions == labels).sum().item()
@@ -205,12 +249,13 @@ class LossMetric(RunningMeanMetric):
     def __init__(
         self,
         values: Union[torch.Tensor, float],
+        get_best: float = "min",
         name: str = "loss",
         tags: Set[str] = None,
         reduce_by: Optional[Union[torch.Tensor, float]] = None,
         weight_by: Optional[Union[torch.Tensor, float]] = None,
     ):
-        super().__init__(values=values, name=name, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
+        super().__init__(values=values, name=name, get_best=get_best, tags=tags, reduce_by=reduce_by, weight_by=weight_by)
 
 
 class LLMetric(RunningMeanMetric):

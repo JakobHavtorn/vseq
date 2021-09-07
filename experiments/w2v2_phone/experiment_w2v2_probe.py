@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 #os.environ["WANDB_MODE"] = "disabled" # equivalent to "wandb disabled"
 
 import argparse
@@ -10,6 +10,7 @@ import csv
 import torch
 import wandb
 import rich
+import numpy as np
 
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -22,8 +23,8 @@ import vseq.utils.device
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AlignmentBatcher, AudioBatcher
-from vseq.data.datapaths import LIBRISPEECH_TRAIN, LIBRISPEECH_DEV_CLEAN
-from vseq.data.tokens import LIBRI_PHONESET_INFER
+from vseq.data.datapaths import LIBRILIGHT_10H, LIBRISPEECH_DEV_CLEAN, LIBRISPEECH_TEST_CLEAN
+from vseq.data.tokens import LIBRI_PHONESET_INFER, PHN_SIL
 from vseq.data.tokenizers import char_tokenizer
 from vseq.data.loaders import AlignmentLoader, AudioLoader
 from vseq.data.token_map import TokenMap
@@ -37,6 +38,7 @@ from vseq.models import MultiProbe
 import fairseq
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--exp_name", default=None, type=str, help="name in W&B dashboard")
 parser.add_argument("--sample_rate", default=16000, type=int, help="sample rate")
 parser.add_argument("--batch_size", default=1, type=int, help="number of mel filterbanks")
 
@@ -47,7 +49,9 @@ parser.add_argument("--optimizer_kwargs", default='{}', type=json.loads, help="e
 
 parser.add_argument("--w2v2_model_path", default='/data/research/users/labo/wav2vec_vox_new.pt', type=str, help="pre-trained model")
 
+parser.add_argument("--examples_per_epoch", default=1000, type=int, help="number of examples per epoch")
 parser.add_argument("--epochs", default=10, type=int, help="number of epochs")
+parser.add_argument("--label_shift", default=0, type=int, help="negative = predict to the left, positive = predict to the right")
 parser.add_argument("--warm_up", default=5, type=int, help="number of epochs before starting annealing")
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
@@ -65,13 +69,16 @@ device = vseq.utils.device.get_device() if args.device == "auto" else torch.devi
 
 wandb.init(
     entity="vseq",
-    project="asr-ctc-libri",
+    project="w2v2-probing-phone-context",
+    name=f"context-({args.label_shift})",
     group=None,
 )
+
 wandb.config.update(args)
 rich.print(vars(args))
 
-token_map = TokenMap(tokens=LIBRI_PHONESET_INFER)
+phoneset = LIBRI_PHONESET_INFER
+token_map = TokenMap(tokens=phoneset) # unknow = sil, sp, spn
 output_size = len(token_map)
 
 align_loader = AlignmentLoader(index=1) # index 0 == words, index 1 == phones
@@ -114,18 +121,26 @@ def filter_examples(dataset, max_secs=24.0):
 
 
 train_dataset = BaseDataset(
-    source=LIBRISPEECH_TRAIN,
+    source=LIBRILIGHT_10H,
     modalities=modalities,
 )
+
 val_dataset = BaseDataset(
     source=LIBRISPEECH_DEV_CLEAN,
     modalities=modalities,
 )
 
+test_dataset = BaseDataset(
+    source=LIBRISPEECH_TEST_CLEAN,
+    modalities=modalities,
+)
+
+
 filter_examples(train_dataset)
 filter_examples(val_dataset)
+filter_examples(test_dataset)
 
-train_sampler = SubsetSampler(num_examples=1000, total_examples=len(train_dataset))
+train_sampler = SubsetSampler(num_examples=args.examples_per_epoch, total_examples=len(train_dataset))
 
 train_loader = DataLoader(
     dataset=train_dataset,
@@ -137,6 +152,13 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     dataset=val_dataset,
+    collate_fn=val_dataset.collate,
+    num_workers=args.num_workers,
+    batch_size=args.batch_size
+)
+
+test_loader = DataLoader(
+    dataset=test_dataset,
     collate_fn=val_dataset.collate,
     num_workers=args.num_workers,
     batch_size=args.batch_size
@@ -164,40 +186,73 @@ tracker = Tracker()
 for epoch in tracker.epochs(args.epochs):
 
     model.train()
-    for ((x, x_sl), ((y, m, a), y_sl)), metadata in tracker.steps(train_loader):
+    for ((x, x_sl), ((y, m), y_sl)), metadata in tracker.steps(train_loader):
         x = x.to(device)
         y = y[0].to(device)
         m = m[0].to(device)
-        a = a[0]
+
+        if args.label_shift != 0:
+            s = args.label_shift
+            x = x[:-s] if s > 0 else x[-s:]
+            y = y[s:] if s > 0 else y[:s]
+
+        if m.sum().item() == 0:
+            tracker.update()
 
         with torch.no_grad():
             result = w2v2.forward(x, padding_mask=None, mask=False, features_only=True, layer=100)
-            features = [l[0][:, 0][m] for l in result["layer_results"]]
+            features = [l[0][:, 0][:m.size(0)][m] for l in result["layer_results"]]
             del result
 
         loss, outputs, metrics = model(features, y)
         tracker.update(metrics)
 
-        optimizer.zero_grad()
+        
+        # (loss / 10).backward()
+        
+        # if tracker.step[LIBRISPEECH_TRAIN] % 10:
+        #     optimizer.step()
+        #     optimizer.zero_grad()
+
         loss.backward()
         optimizer.step()
+        optimizer.zero_grad()
     
     model.eval()
-    for ((x, x_sl), ((y, m, a), y_sl)), metadata in tracker.steps(val_loader):
+    with torch.no_grad():
+        for ((x, x_sl), ((y, m), y_sl)), metadata in tracker.steps(val_loader):
 
-        x = x.to(device)
-        y = y[0].to(device)
-        m = m[0].to(device)
-        a = a[0]
+            x = x.to(device)
+            y = y[0].to(device)
+            m = m[0].to(device)
 
-        with torch.no_grad():
             result = w2v2.forward(x, padding_mask=None, mask=False, features_only=True, layer=100)
-            features = [l[0][:, 0][m] for l in result["layer_results"]]
+            features = [l[0][:, 0][:m.size(0)][m] for l in result["layer_results"]]
             del result
 
             loss, outputs, metrics = model(features, y)
             tracker.update(metrics)
         
+        for ((x, x_sl), ((y, m), y_sl)), metadata in tracker.steps(test_loader):
+
+            x = x.to(device)
+            y = y[0].to(device)
+            m = m[0].to(device)
+
+            result = w2v2.forward(x, padding_mask=None, mask=False, features_only=True, layer=100)
+            features = [l[0][:, 0][:m.size(0)][m] for l in result["layer_results"]]
+            del result
+
+            loss, outputs, metrics = model(features, y)
+            tracker.update(metrics)
+    
+    # log histogram of best acc and learning rate
+    best_values = tracker.best_values
+    values = np.array([best_values[LIBRISPEECH_DEV_CLEAN][f"best_acc_{i}"] for i in range(24)])
+    bins = np.arange(25)
+    hist = (values, bins)
+
+    tracker.log(best_acc_hist=wandb.Histogram(np_histogram=hist), lr=optimizer.param_groups[0]["lr"])
     tracker.reset()
 
     # update hyperparams (post)

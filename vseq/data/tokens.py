@@ -21,4 +21,5 @@ PENN_TREEBANK_ALPHABET = ENGLISH_STANDARD + [".", "-", "&", "$", "N"]
 LIBRI_PHONESET_INFER = ['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'B', 'CH', 'D', 'DH', 'EH', 'ER', 'EY', 'F', 'G', 'HH',
                         'IH', 'IY', 'JH', 'K', 'L', 'M', 'N', 'NG', 'OW', 'OY', 'P', 'R', 'S', 'SH', 'T', 'TH', 'UH',
                         'UW', 'V', 'W', 'Y', 'Z', 'ZH'] 
+PHN_SIL = 'sil'
 LIBRI_PHONESET_SPECIAL = ['', 'sil', 'sp', 'spn']
