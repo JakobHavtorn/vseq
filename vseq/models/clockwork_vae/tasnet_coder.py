@@ -65,7 +65,7 @@ class TasNetEncoder(nn.Module):
 
         assert all(
             2 ** num_blocks >= s for s in self.stride_per_level
-        ), f"Not enough blocks per level to get strides of {self.strides=}"
+        ), f"Not enough blocks per level to get strides of {strides=}"
 
         self.in_transform = nn.Sequential(
             # [B, 1, T] -> [B, channels_block, T]
