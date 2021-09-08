@@ -16,6 +16,8 @@ from torchtyping import TensorType
 from vseq.evaluation.metrics import BitsPerDimMetric, LLMetric, LossMetric
 from vseq.utils.operations import sequence_mask
 from vseq.data.transforms import Reshape
+from vseq.modules.distributions import DiscretizedLogisticMixtureDense
+
 
 from .modules import CausalConv1d, ResidualStack, OutConv1d
 from ..base_model import BaseModel
@@ -40,6 +42,7 @@ class WaveNet(BaseModel):
         n_stacks: int = 5,
         res_channels: int = 512,
         stack_waveform: bool = False,
+        likelihood: str = "dmol",
     ):
         """Stochastic autoregressive modelling of audio waveform frames with conditional dilated causal convolutions.
 
@@ -63,6 +66,8 @@ class WaveNet(BaseModel):
             n_layers (int): Number of stacked residual blocks. Dilations chosen as 2, 4, 8, 16, 32, 64...
             n_stacks (int): Number of stacks of residual blocks with skip connections to the output.
             res_channels (int): Number of channels in residual blocks (and embedding if num_embeddings > 1).
+            stack_waveform (bool): Whether this model has a stacked waveform.
+            likelihood (str): Type of likelihood. Can be DMOL or conv (normal categorical).
 
         Reference:
             [1] WaveNet: A Generative Model for Raw Audio (https://arxiv.org/abs/1609.03499)
@@ -77,6 +82,9 @@ class WaveNet(BaseModel):
         self.in_channels = in_channels
         self.res_channels = res_channels
         self.out_classes = out_classes
+
+        self.likelihood = likelihood
+        self.num_embeddings = num_embeddings
 
         self.receptive_field = self.compute_receptive_field(n_layers, n_stacks)
 
@@ -106,7 +114,12 @@ class WaveNet(BaseModel):
             n_layers=n_layers, n_stacks=n_stacks, res_channels=res_channels
         )
 
-        self.out_convs = OutConv1d(res_channels, out_classes * in_channels)
+        if likelihood.lower() == "conv":
+            self.out_distr = OutConv1d(res_channels, out_classes * in_channels)
+        elif likelihood.lower() == "dmol":
+            self.out_distr = DiscretizedLogisticMixtureDense(
+                res_channels, in_channels, num_bins=out_classes
+            )
 
         self.nll_criterion = torch.nn.NLLLoss(reduction="none")
 
@@ -168,7 +181,8 @@ class WaveNet(BaseModel):
             target = self._get_target(x)
         else:
             target = x.clone()
-            x = self.embedding(x)  # (B, T, C)
+            if self.embedding:
+                x = self.embedding(x)  # (B, T, C)
         x = x.transpose(1, 2)  # (B, C, T)
 
         # Add this to allow for returning x
@@ -178,22 +192,43 @@ class WaveNet(BaseModel):
         self.check_input_size(x)
 
         output = self.causal(x)
-        skip_connections = self.res_stack(output, skip_size=x.size(2))
-        output = torch.sum(skip_connections, dim=0)
-        logits = self.out_convs(output)
+        output = self.res_stack(output, skip_size=x.size(2))
+        output = torch.sum(output, dim=0)
+        if isinstance(self.out_distr, DiscretizedLogisticMixtureDense):
+            logits, means, log_scales = self.out_distr(
+                output.transpose(1, 2)
+            )  # DiscretizedLogisticMixture expects (B, T, D)
+            seq_mask = sequence_mask(x_sl, device=logits.device)
 
-        if self.in_channels > 1:
-            logits = logits.view(
-                logits.size(0),
-                self.out_classes,
-                logits.size(-1),
-                logits.size(1)
-                // self.out_classes,  # this should be self.in_channels if we have a stack
+            print(f"LOGIT PROBS SHAPE: {logits.shape}")
+            print(f"MEMORY: {torch.cuda.memory_allocated()}")
+
+            log_prob_twise = (
+                self.out_distr.log_prob(
+                    target.transpose(1, 2), (logits, means, log_scales)
+                )
+                * seq_mask
             )
-        loss, log_prob = self.compute_loss(target, x_sl, logits)
+            log_prob = log_prob_twise.view(target.size(0), -1).sum(1)  # (B,)
+            loss = log_prob.nansum() / x_sl.nansum()
 
-        x_hat = logits.argmax(1) / (self.out_classes - 1)
-        x_hat = (2 * x_hat) - 1
+            x_hat = self.out_distr.sample((logits, means, log_scales))
+
+        else:
+            logits = self.out_distr(output)
+
+            if self.in_channels > 1:
+                logits = logits.view(
+                    logits.size(0),
+                    self.out_classes,
+                    logits.size(-1),
+                    logits.size(1)
+                    // self.out_classes,  # this should be self.in_channels if we have a stack
+                )
+            loss, log_prob = self.compute_loss(target, x_sl, logits)
+
+            x_hat = logits.argmax(1) / (self.out_classes - 1)
+            x_hat = (2 * x_hat) - 1  # transforming to [-1, 1] space
 
         metrics = [
             LossMetric(loss, weight_by=log_prob.numel()),
@@ -238,7 +273,7 @@ class WaveNet(BaseModel):
             output = self.causal(x, pad=False)
             skip_connections = self.res_stack(output, skip_size=1)
             output = torch.sum(skip_connections, dim=0)
-            logits = self.out_convs(output)
+            logits = self.out_distr(output)
 
             if self.in_channels > 1:
                 logits = logits.view(
@@ -257,7 +292,9 @@ class WaveNet(BaseModel):
 
             # prepare prediction as next input
             if self.stack_waveform:  # Already in shape (B, T, C)
-                if len(x_new.shape) < 3: # (B, T) in case of single channel stack_waveform
+                if (
+                    len(x_new.shape) < 3
+                ):  # (B, T) in case of single channel stack_waveform
                     x_new = x_new.unsqueeze(-1)
                 x_new = x_new / (self.out_classes - 1)  # To [0, 1]
                 x_new = x_new * 2 - 1  # To [-1, 1]

@@ -1,2 +1,5 @@
-models/
+./models/
 data/
+samples/
+wandb/
+wavenet_samples/

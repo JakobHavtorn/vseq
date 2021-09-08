@@ -383,7 +383,9 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
             return log_prob.sum(self.reduce_dim)
         return log_prob
 
-    def forward(self, x):
+    def forward(self, x: TensorType["B", "T", "D"]):
+        print(x.shape)
+        print(self.params)
         parameters = self.params(x)  # (*, D x 3 x self.num_mix)
         parameters = parameters.view(parameters.shape[:-1] + (self.y_dim, self.num_mix * 3))  # (*, D, 3 x self.num_mix)
         logit_probs, means, log_scales = parameters.chunk(3, dim=-1)  # (*, D, self.num_mix)

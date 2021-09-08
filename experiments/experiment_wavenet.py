@@ -4,7 +4,6 @@ import argparse
 import logging
 from types import SimpleNamespace
 
-
 import torch
 import wandb
 import rich
@@ -90,13 +89,15 @@ wavenet_args = SimpleNamespace(
     n_stacks=args.n_stacks,
     res_channels=args.res_channels,
     out_classes=256,
+    num_embeddings=None,
+    likelihood="dmol",
 )
 
 
 # If the input embedding is frames or a spectrogram, don't use embeddings.
 # If we use a quantized input we instantiate an embedding of res_channels
 
-_transforms = [RandomSegment(args.input_length)]
+_transforms = [RandomSegment(args.input_length), Scale()]
 transform_decode = None
 if args.input_encoding == "mu_law":
     _transforms.append(MuLawEncode(args.num_bits))
@@ -136,6 +137,7 @@ rich.print(wavenet_transform)
 #######################
 ### MODEL INSTANTIATION
 #######################
+rich.print(wavenet_args)
 
 if args.model_load is not None:
     # TODO: Add parsing here
@@ -200,8 +202,12 @@ val_loader = DataLoader(
 
 # exit()
 (x, x_sl), metadata = next(iter(train_loader))
-model.summary(input_data=x, x_sl=x_sl)
+rich.print(x.shape)
+
 model = model.to(device)
+model.summary(input_data=x, x_sl=x_sl)
+
+exit()
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
@@ -269,7 +275,11 @@ for epoch in tracker.epochs(args.epochs):
 
         rich.print("X HAT SHAPE")
         rich.print(output.x_hat.shape)
-        output.x_hat = transform_decode(output.x_hat) if transform_decode is not None else output.x_hat
+        output.x_hat = (
+            transform_decode(output.x_hat)
+            if transform_decode is not None
+            else output.x_hat
+        )
         x = transform_decode(x) if transform_decode is not None else x
         for i in range(min(args.batch_size, N_SAMPLES_SAVE)):
             # save reference (true) samples
@@ -306,4 +316,3 @@ for epoch in tracker.epochs(args.epochs):
                 channels_first=False,
                 encoding="ULAW",
             )
-
