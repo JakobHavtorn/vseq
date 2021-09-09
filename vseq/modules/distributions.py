@@ -367,7 +367,10 @@ class DiscretizedLogisticMixtureDense(ConditionalDistribution):
         return rsample_discretized_logistic_mixture(params[0], params[1], params[2], num_mix=self.num_mix)
 
     def mode(self, params):
-        raise NotImplementedError()
+        """Return the mode as the mode (i.e. mean) of the most probably component"""
+        mode_component = params[0].argmax(-1, keepdim=True)
+        mode = torch.gather(params[1], index=mode_component, dim=-1).squeeze(-1)
+        return mode
 
     def log_prob(self, y, params):
         """Compute log-likelihood. Inputs are assumed to be [-1, 1]"""

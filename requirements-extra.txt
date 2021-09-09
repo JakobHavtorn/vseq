@@ -1,11 +1,12 @@
 datasets
-transformers
 gpustat
 ipdb
+ipykernel
 ipython
 jupyter
 jupyterlab
 jupyterlab-git
 nbstripout
 pandas
+transformers
 uniplot

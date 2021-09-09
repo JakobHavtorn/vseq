@@ -262,20 +262,25 @@ class TIMITSpeakerMetadata:
     comments: str
 
 
+TIMIT_DIALECTS = {
+    "1": "New England",
+    "2": "Northern",
+    "3": "North Midland",
+    "4": "South Midland",
+    "5": "Southern",
+    "6": "New York City",
+    "7": "Western",
+    "8": "Army Brat",
+}
+
+TIMIT_PHONES = ["bcl", "dcl", "gcl", "pcl", "tck", "kcl", "tcl", "b", "d", "g", "p", "t", "k", "dx", "q", "jh", "ch", "s", "sh", "z", "zh", "f", "th", "v", "dh", "m", "n", "ng", "em", "en", "eng", "nx", "l", "r", "w", "y", "hh", "hv", "el", "iy", "ih", "eh", "ey", "ae", "aa", "aw", "ay", "ah", "ao", "oy", "ow", "uh", "uw", "ux", "er", "ax", "ix", "axr", "ax-h", "pau", "epi", "h#", "1", "2"]
+TIMIT_PHONE2INT = dict([(p, i) for i, p in enumerate(TIMIT_PHONES)])
+TIMIT_INT2PHONE = dict([(i, p) for i, p in enumerate(TIMIT_PHONES)])
+
+
 def timit_load_speaker_info(spkrinfo_path: str):
     # h_inch += h_ft * 12
     # h_cm = round(h_inch * 2.54, 1)
-
-    dialects = {
-        "1": "New England",
-        "2": "Northern",
-        "3": "North Midland",
-        "4": "South Midland",
-        "5": "Southern",
-        "6": "New York City",
-        "7": "Western",
-        "8": "Army Brat",
-    }
 
     with open(spkrinfo_path, "r") as buffer:
         text = buffer.readlines()
@@ -289,7 +294,7 @@ def timit_load_speaker_info(spkrinfo_path: str):
         speaker_metadata[row[0]] = TIMITSpeakerMetadata(
             speaker_id=row[0],
             sex=row[1],
-            dialect=dialects[row[2]],
+            dialect=TIMIT_DIALECTS[row[2]],
             use=row[3],
             recorded=datetime.datetime.strptime(row[4], '%m/%d/%y') if "?" not in row[4] else None,
             birthday=datetime.datetime.strptime(row[5], '%m/%d/%y') if "?" not in row[5] else None,
@@ -308,5 +313,7 @@ class TIMITSpeakerLoader(Loader):
         self.speaker_info = timit_load_speaker_info(spkrinfo_path)
 
     def load(self, example_id):
-        speaker_id = example_id.split("/")[-2][1:]  # Remove gender indicator
+        # get speaker id as directory name before files.
+        # remove gender indicator which is the first character in directory name.
+        speaker_id = example_id.split("/")[-2][1:]
         return self.speaker_info[speaker_id], None

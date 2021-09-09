@@ -298,6 +298,7 @@ class CWVAE(nn.Module):
         parameters = self.likelihood(dec)
 
         reconstruction = self.likelihood.sample(parameters)
+        reconstruction_mode = self.likelihood.mode(parameters)
 
         loss, elbo, log_prob, kld, kld_l, kld_g = self.compute_elbo(y, seq_mask, x_sl, parameters, kld_l, kld_g, beta, free_nats)
 
@@ -315,6 +316,7 @@ class CWVAE(nn.Module):
             enc_mus=enc_mus,
             prior_mus=prior_mus,
             reconstructions=reconstruction,
+            reconstructions_mode=reconstruction_mode,
             reconstructions_parameters=parameters,
         )
 
