@@ -154,7 +154,7 @@ def ornstein_uhlenbeck_samples_from_guassian_sample(
 
 
 @torch.jit.script
-def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor, num_samples: int = 1):
+def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor):
     """Return a reparameterized sample from a given Gaussian distribution.
 
     Args:
@@ -164,10 +164,7 @@ def rsample_gaussian(mu: torch.Tensor, sd: torch.Tensor, num_samples: int = 1):
     Returns:
         torch.Tensor: Reparameterized sample of shape (*)
     """
-    if num_samples == 1:
-        return torch.randn_like(sd).mul(sd).add(mu)
-    raise ValueError("Not implemented for multiple samples")
-    # return torch.randn((num_samples,) + sd.shape, device=sd.device, dtype=sd.dtype).view(-1, *sd.shape[1:])
+    return torch.randn_like(sd).mul(sd).add(mu)
 
 
 def rsample_gumbel(

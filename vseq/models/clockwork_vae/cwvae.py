@@ -20,7 +20,7 @@ from vseq.evaluation.metrics import (
 )
 from vseq.models.base_model import BaseModel
 from vseq.modules.distributions import DiscretizedLaplaceMixtureDense, DiscretizedLogisticMixtureDense, GaussianDense
-from vseq.modules.rssm import RSSMCell, RSSMCellSingleGRU
+from vseq.modules.rssm import RSSMCell, RSSMCellMultiGRU
 from vseq.utils.variational import discount_free_nats, kl_divergence_gaussian
 from vseq.utils.operations import sequence_mask
 
@@ -98,13 +98,14 @@ class CWVAE(nn.Module):
         ), f"Must have equal lengths: {self.z_size=}, {self.h_size=}, {self.c_size=}"
 
         cells = []
+        rssm_cell = RSSMCell if num_rssm_gru_cells == 1 else RSSMCellMultiGRU
         for h_dim, z_dim, c_dim, e_dim in zip(self.h_size, self.z_size, self.c_size, encoder.e_size):
             cells.append(
-                RSSMCell(  # RSSMCellSingleGRU
+                rssm_cell(
                     h_dim=h_dim,
                     z_dim=z_dim,
-                    e_dim=e_dim,
                     c_dim=c_dim,
+                    e_dim=e_dim,
                     residual_posterior=residual_posterior,
                     n_gru_cells=num_rssm_gru_cells,
                 )
@@ -227,7 +228,7 @@ class CWVAE(nn.Module):
 
         # global latent
         if self.g_size > 0:
-            g, g_distributions = self.global_coder(encodings_list, seq_mask, self.time_factors)
+            g, g_distributions = self.global_coder(encodings_list, x_sl, self.time_factors, seq_mask=seq_mask)
             kld_g = kl_divergence_gaussian(g_distributions.enc_mu, g_distributions.enc_sd, g_distributions.prior_mu, g_distributions.prior_sd)
         else:
             g = torch.empty(x.size(0), 0, device=y.device)
@@ -313,8 +314,8 @@ class CWVAE(nn.Module):
             latents=latents,
             enc_mus=enc_mus,
             prior_mus=prior_mus,
-            reconstruction=reconstruction,
-            reconstruction_parameters=parameters,
+            reconstructions=reconstruction,
+            reconstructions_parameters=parameters,
         )
 
         return loss, metrics, outputs
@@ -389,7 +390,7 @@ class CWVAE(nn.Module):
             x = self.likelihood.sample(parameters)
 
         x_sl = torch.ones(x.shape[1], dtype=torch.int) * max_timesteps
-        outputs = SimpleNamespace()  # SimpleNamespace(context_l=context_l, all_distributions=all_distributions)
+        outputs = SimpleNamespace(context_l=context_l, all_distributions=all_distributions)
         return (x, x_sl), outputs
 
 

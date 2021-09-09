@@ -234,7 +234,7 @@ def discretized_logistic_ll(x: torch.Tensor, loc: torch.Tensor, log_scale: torch
 def discretized_logistic_mixture_ll(
     x: torch.Tensor,
     logit_probs: torch.Tensor,
-    means: torch.Tensor,
+    loc: torch.Tensor,
     log_scales: torch.Tensor,
     num_mix: int,
     num_bins: int = 256,
@@ -250,7 +250,7 @@ def discretized_logistic_mixture_ll(
     Args:
         x (torch.Tensor): (*, D)
         logit_probs (torch.Tensor): (*, D, num_mix)
-        means (torch.Tensor): (*, D, num_mix)
+        loc (torch.Tensor): (*, D, num_mix)
         log_scales (torch.Tensor): (*, D, num_mix)
         num_mix (int): Number of mixture components
         num_bins (int): Quantization level
@@ -262,7 +262,7 @@ def discretized_logistic_mixture_ll(
     x = x.unsqueeze(-1).expand(*[-1] * x.ndim, num_mix)  # (*, D, 3 x num_mix)
 
     # compute x-µ and 1/s
-    centered_x = x - means
+    centered_x = x - loc
     inv_stdv = torch.exp(-log_scales)
 
     # compute CDF at left and right "bin edge" (floating) to compute total mass in between (cdf_delta)
@@ -321,7 +321,7 @@ def discretized_logistic_mixture_rgb_ll(x, parameters, num_bins: int = 256):
 
     num_mix = int(ps[-1] / 10)
     logit_probs = parameters[:, :, :, :num_mix]
-    parameters = parameters[:, :, :, num_mix:].contiguous().view(xs + [num_mix * 3])  # 3 for loc, scale, coef
+    parameters = parameters[:, :, :, num_mix:].contiguous().view(xs + [num_mix * 3])  # 3 for means, scale, coef
     means = parameters[:, :, :, :, :num_mix]
     log_scales = torch.clamp(parameters[:, :, :, :, num_mix : 2 * num_mix], min=-7.0)
     coeffs = torch.tanh(parameters[:, :, :, :, 2 * num_mix : 3 * num_mix])
