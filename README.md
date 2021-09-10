@@ -20,7 +20,7 @@ conda deactivate
 conda env remove -n vseq -y
 conda create -y -n vseq python==3.8
 conda activate vseq
-conda install -c pytorch -c nvidia -y pytorch==1.8.1 torchvision torchaudio torchtext cudatoolkit=11.1
+conda install -c conda-forge -c pytorch -c nvidia -y pytorch==1.8.1 torchvision torchaudio torchtext cudatoolkit=11.1 libsndfile
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
 ```
 

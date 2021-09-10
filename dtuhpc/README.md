@@ -33,6 +33,11 @@ bstat -C  # Check efficiency
 bstat -M  # Check memory
 ```
 
+## Scratch directory
+Data older than 45 days will be deleted automatically, unless they are modified (e.g. using the touch command) if users need to work on it longer than that. To touch all files in a directory, use this command:
+
+`find /scratch/mydir -type f -exec touch {} +`
+
 ## References
 https://www.hpc.dtu.dk/?page_id=2759
 https://www.hpc.dtu.dk/?page_id=1519
