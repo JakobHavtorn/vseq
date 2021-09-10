@@ -47,6 +47,7 @@ class LengthTrainSampler(Sampler):
         if not isinstance(self.max_len, int):
             assert self.max_len == "max"
             self.max_len = max(self.lengths)
+            print(f"LengthTrainSampler running with {max_len=} which for '{source}' is {self.max_len}")
 
         self.pools = self.create_sample_pools(max_pool_difference, min_pool_size)
         self.batches = self.sample_batches()
@@ -164,6 +165,7 @@ class LengthEvalSampler(Sampler):
         if not isinstance(self.max_len, int):
             assert self.max_len == "max"
             self.max_len = max(self.lengths)
+            print(f"LengthEvalSampler running with {max_len=} which for '{source}' is {self.max_len}")
 
         self.batches = self.sample_batches()
 

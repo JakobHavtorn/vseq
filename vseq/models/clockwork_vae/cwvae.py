@@ -296,7 +296,6 @@ class CWVAE(nn.Module):
         dec = self.decoder(context_l)
 
         parameters = self.likelihood(dec)
-
         reconstruction = self.likelihood.sample(parameters)
         reconstruction_mode = self.likelihood.mode(parameters)
 
@@ -535,13 +534,6 @@ class CWVAEAudioCPCPretrained(BaseModel):
             num_bins=num_bins,
             reduce_dim=-1,
         )
-        # likelihood = DiscretizedLaplaceMixtureDense(
-        #     x_dim=3 * num_mix,
-        #     y_dim=1,
-        #     num_mix=num_mix,
-        #     num_bins=num_bins,
-        #     reduce_dim=-1,
-        # )
 
         encoder = CPCEncoder(
             num_levels=len(time_factors),

@@ -7,7 +7,6 @@ import torch.nn.init as init
 import torch.jit as jit
 
 from torchtyping import TensorType
-from tqdm import tqdm
 
 from vseq.evaluation import LossMetric, LLMetric, KLMetric, PerplexityMetric, BitsPerDimMetric, LatestMeanMetric
 from vseq.models import BaseModel
@@ -223,7 +222,7 @@ class VRNN(nn.Module):
     def compute_elbo(
         self,
         y: TensorType["B", "T"],
-        logits: TensorType["B", "T", "D"],
+        parameters: TensorType["B", "T", "D"],
         kld_twise: TensorType["B", "T", "latent_size"],
         x_sl: TensorType["B", int],
         beta: float = 1,
@@ -233,7 +232,7 @@ class VRNN(nn.Module):
 
         seq_mask = sequence_mask(x_sl, dtype=float, device=y.device)
 
-        log_prob_twise = self.likelihood.log_prob(y, logits) * seq_mask
+        log_prob_twise = self.likelihood.log_prob(y, parameters) * seq_mask
         log_prob = log_prob_twise.view(y.size(0), -1).sum(1)  # (B,)
 
         kld = (kld_twise * seq_mask.unsqueeze(-1)).sum((1, 2))  # (B,)
@@ -300,7 +299,9 @@ class VRNN(nn.Module):
 
         dec = self.dropout(dec) if self.dropout is not None else dec
 
-        logits = self.likelihood(dec)  # (B, T, D)
+        parameters = self.likelihood(dec)  # (B, T, D)
+        reconstruction = self.likelihood.sample(parameters)
+        reconstruction_mode = self.likelihood.mode(parameters)
 
         # kl divergence, elbo and loss
         enc_mu = torch.stack(all_enc_mu, dim=1)
@@ -308,9 +309,8 @@ class VRNN(nn.Module):
         prior_mu = torch.stack(all_prior_mu, dim=1)
         prior_sd = torch.stack(all_prior_sd, dim=1)
         kld = kl_divergence_gaussian(enc_mu, enc_sd, prior_mu, prior_sd)
-        # kld = (kld * 0).detach()
 
-        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, logits, kld, x_sl, beta, free_nats)
+        loss, elbo, log_prob, kl, seq_mask = self.compute_elbo(y, parameters, kld, x_sl, beta, free_nats)
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -321,7 +321,16 @@ class VRNN(nn.Module):
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-        outputs = SimpleNamespace(elbo=elbo, log_prob=log_prob, kl=kl, y=y, logits=logits, seq_mask=seq_mask)
+        outputs = SimpleNamespace(
+            elbo=elbo,
+            log_prob=log_prob,
+            kl=kl,
+            y=y,
+            seq_mask=seq_mask,
+            reconstructions=reconstruction,
+            reconstructions_mode=reconstruction_mode,
+            reconstructions_parameters=parameters,
+        )
         return loss, metrics, outputs
 
     def generate(
@@ -351,7 +360,6 @@ class VRNN(nn.Module):
         seq_active = torch.ones(n_samples, dtype=torch.int)
         all_ended, t = False, 0  # Used to condition while loop
 
-        pbar = tqdm(total=max_timesteps)
         while not all_ended and t < max_timesteps:
             phi_x = self.phi_x(x)
 
@@ -361,12 +369,12 @@ class VRNN(nn.Module):
                 dec = self.decoder(torch.cat([phi_z, h], -1))
             else:
                 dec = self.decoder(phi_z)
-            logits = self.likelihood(dec)  # (B, T, D)
+            parameters = self.likelihood(dec)  # (B, T, D)
 
             if use_mode:
-                x = self.likelihood.mode(logits)
+                x = self.likelihood.mode(parameters)
             else:
-                x = self.likelihood.sample(logits)
+                x = self.likelihood.sample(parameters)
 
             all_x.append(x)
             all_outputs.append(outputs)
@@ -384,9 +392,7 @@ class VRNN(nn.Module):
             # Update loop conditions
             t += 1
             all_ended = torch.all(1 - seq_active).item()
-            pbar.update(1)
 
-        pbar.close()
         x = torch.stack(all_x, dim=1)
 
         outputs = SimpleNamespace(**list_of_dict_to_dict_of_list([vars(ns) for ns in all_outputs]))
@@ -579,12 +585,6 @@ class VRNNAudioDML(BaseModel):
             num_bins=num_bins,
             reduce_dim=-1,
         )
-        # likelihood = DiscretizedLogisticDense(
-        #     x_dim=hidden_size,
-        #     y_dim=input_size,
-        #     num_bins=num_bins,
-        #     reduce_dim=-1,
-        # )
         self.vrnn = VRNN(
             phi_x=embedding,
             likelihood=likelihood,
@@ -606,7 +606,6 @@ class VRNNAudioDML(BaseModel):
         h0: TensorType["B", "h_dim"] = None,
     ):
         loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h0)
-        outputs.x_hat = self.vrnn.likelihood.sample(outputs.logits)
         return loss, metrics, outputs
 
     def generate(
@@ -684,8 +683,8 @@ class VRNNAudioGauss(BaseModel):
             del metrics[bpd_metric_idx]
 
         seq_mask = outputs.seq_mask.to(bool)
-        mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
-        std = outputs.logits[1][seq_mask, :].mean().item()
+        mse = ((outputs.y[seq_mask, :] - outputs.parameters[0][seq_mask, :]) ** 2).mean().sqrt().item()
+        std = outputs.parameters[1][seq_mask, :].mean().item()
 
         metrics.extend(
             [
@@ -705,126 +704,6 @@ class VRNNAudioGauss(BaseModel):
         h0: TensorType["B", "h_dim"] = None,
     ):
         x = torch.zeros(n_samples, self.input_size, device=self.device) if x is None else x
-        return self.vrnn.generate(
-            n_samples=n_samples,
-            max_timesteps=max_timesteps,
-            stop_value=None,
-            use_mode=use_mode,
-            x=x,
-            h0=h0,
-        )
-
-
-class VRNNAudioSpec(BaseModel):
-    def __init__(
-        self,
-        n_fft: int = 320,
-        hop_length: int = 320,
-        win_length: int = 320,
-        window: Optional[torch.Tensor] = None,
-        hidden_size: int = 256,
-        latent_size: int = 64,
-        residual_posterior: bool = False,
-        condition_h_on_x: bool = True,
-        condition_x_on_h: bool = True,
-    ):
-        """A VRNN for modelling audio waveforms."""
-        super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.win_length = win_length
-        self.window = window
-        self.hidden_size = hidden_size
-        self.latent_size = latent_size
-        self.condition_h_on_x = condition_h_on_x
-        self.condition_x_on_h = condition_x_on_h
-
-        self.stft = STFT(
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            window=window,
-        )
-        self.istft = ISTFT(
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            window=window,
-        )
-
-        embedding = nn.Sequential(
-            Permute(3, 1, 2),
-            View(-1, 2 * self.stft.out_features),
-            nn.Linear(2 * self.stft.out_features, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-        )
-        likelihood = PolarCoordinatesSpectrogram(hidden_size, self.stft.out_features, num_mix=10, num_bins=256)
-
-        self.vrnn = VRNN(
-            phi_x=embedding,
-            likelihood=likelihood,
-            x_dim=hidden_size,
-            h_dim=hidden_size,
-            z_dim=latent_size,
-            o_dim=n_fft,
-            condition_h_on_x=condition_h_on_x,
-            condition_x_on_h=condition_x_on_h,
-        )
-
-    def forward(
-        self,
-        x: TensorType["B", "T", float],
-        x_sl: TensorType["B", int],
-        beta: float = 1,
-        free_nats: float = 0,
-        h0: TensorType["B", "h_dim"] = None,
-        return_audio: bool = False,
-    ):
-        x = self.stft(x)
-        # TODO Rescale stft r part to [-1, 1]
-        # TODO Recompute sequence lengths
-        loss, metrics, outputs = self.vrnn(x, x_sl, beta, free_nats, h0)
-
-        import IPython
-
-        IPython.embed(using=False)
-
-        if return_audio:
-            audio = self.istft(outputs.x_hat)
-            outputs.audio = audio
-
-        for metric_name in ["BitsPerDimMetric", "PerplexityMetric"]:
-            bpd_metric_idx = [i for i, metric in enumerate(metrics) if metric.__class__.__name__ == metric_name][0]
-            del metrics[bpd_metric_idx]
-
-        # seq_mask = outputs.seq_mask.to(bool)
-        # mse = ((outputs.y[seq_mask, :] - outputs.logits[0][seq_mask, :]) ** 2).mean().sqrt().item()
-        # std = outputs.logits[1][seq_mask, :].mean().item()
-        # bpd = outputs.elbo.cpu() - x_sl * self.n_fft * math.log(2 ** 8)
-
-        # metrics.extend(
-        #     [
-        #         BitsPerDimMetric(bpd, reduce_by=x_sl),
-        #         LatestMeanMetric(mse, name="mse"),
-        #         LatestMeanMetric(std, name="stddev"),
-        #     ]
-        # )
-
-        return loss, metrics, outputs
-
-    def generate(
-        self,
-        n_samples: int = 1,
-        max_timesteps: int = 100,
-        use_mode: bool = False,
-        x: TensorType["B", "x_dim"] = None,
-        h0: TensorType["B", "h_dim"] = None,
-    ):
-        x = torch.zeros(n_samples, self.stft.out_features, device=self.device) if x is None else x
         return self.vrnn.generate(
             n_samples=n_samples,
             max_timesteps=max_timesteps,

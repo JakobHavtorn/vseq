@@ -201,6 +201,8 @@ class SRNN(nn.Module):
         dec = self.dropout(dec) if self.dropout is not None else dec
 
         parameters = self.likelihood(dec)  # (B, T, D)
+        reconstruction = self.likelihood.sample(parameters)
+        reconstruction_mode = self.likelihood.mode(parameters)
 
         enc_mu = torch.stack(all_enc_mu, dim=1)
         enc_sd = torch.stack(all_enc_sd, dim=1)
@@ -229,6 +231,9 @@ class SRNN(nn.Module):
             d=d_n,
             a=a_n,
             z=z_t_sampled[-1],
+            reconstructions=reconstruction,
+            reconstructions_mode=reconstruction_mode,
+            reconstructions_parameters=parameters,
         )
         return loss, metrics, outputs
 
@@ -438,12 +443,6 @@ class SRNNAudioDML(BaseModel):
             num_bins=num_bins,
             reduce_dim=-1,
         )
-        # likelihood = DiscretizedLogisticDense(
-        #     x_dim=hidden_size,
-        #     y_dim=input_size,
-        #     num_bins=num_bins,
-        #     reduce_dim=-1,
-        # )
         self.srnn = SRNN(
             x_embedding=embedding,
             likelihood=likelihood,
