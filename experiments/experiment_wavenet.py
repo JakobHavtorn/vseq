@@ -203,7 +203,7 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker.steps(val_loader):
+        for (x, x_sl), metadata in tracker.steps(valid_loader):
             x = x.to(device)
 
             loss, metrics, output = model(x, x_sl)
@@ -211,8 +211,8 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
 
-        output.reconstruction = decode_transform(output.reconstruction) if decode_transform is not None else output.reconstruction
-        reconstructions = [wandb.Audio(output.reconstruction[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
+        reconstructions = decode_transform(output.reconstruction) if decode_transform is not None else output.reconstruction
+        reconstructions = [wandb.Audio(reconstructions[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(reconstructions.shape[0], 2))]
 
         x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
         x = decode_transform(x) if decode_transform is not None else x
