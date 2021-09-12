@@ -1,4 +1,10 @@
+import sys
+
 from setuptools import find_packages, setup
+
+
+# TODO Check sys argv for "notorch" and "extra"
+# TODO Select requirements to install depending on this
 
 
 # Get requirements file depending availability of CUDA enabled GPU on the system and whether to use slim requirements

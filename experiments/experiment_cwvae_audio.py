@@ -55,10 +55,8 @@ parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
 parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
 parser.add_argument("--wandb_notes", default=None, type=str, help="custom notes for this experiment (optional)")
-parser.add_argument(
-    "--wandb_tags", default=None, type=str, nargs="+", help="custom tags for this experiment (optional)"
-)
-parser.add_argument("--wandb_mode", default=None, type=str, help="tracking mode for this experiment (optional)")
+parser.add_argument("--wandb_tags", default=None, type=str, nargs="+", help="custom tags for this experiment")
+parser.add_argument("--wandb_mode", default=None, type=str, help="tracking mode for this experiment")
 
 args = parser.parse_args()
 
@@ -84,15 +82,6 @@ wandb.init(
 rich.print(vars(args))
 
 
-# model = vseq.models.CWVAEAudioConv1d(
-#     z_size=args.latent_size,
-#     h_size=args.hidden_size,
-#     time_factors=args.time_factors,
-#     num_level_layers=args.num_level_layers,
-#     num_mix=args.num_mix,
-#     num_bins=2 ** args.num_bits,
-#     residual_posterior=args.residual_posterior
-# )
 model = vseq.models.CWVAEAudioTasNet(
     z_size=args.latent_size,
     h_size=args.hidden_size,
@@ -104,16 +93,6 @@ model = vseq.models.CWVAEAudioTasNet(
     residual_posterior=args.residual_posterior,
     num_rssm_gru_cells=args.num_rssm_gru_cells,
 )
-# model = vseq.models.CWVAEAudioDense(
-# # model = vseq.models.CWVAEAudioConv1D(
-#     z_size=args.latent_size,
-#     h_size=args.hidden_size,
-#     time_factors=args.time_factors,
-#     num_level_layers=args.num_level_layers,
-#     num_mix=args.num_mix,
-#     num_bins=2 ** args.num_bits,
-#     residual_posterior=args.residual_posterior
-# )
 
 
 decode_transform = []
@@ -122,7 +101,6 @@ if args.input_coding == "mu_law":
     encode_transform.append(MuLawEncode(bits=args.mu_law_bits or args.num_bits))
     decode_transform.append(MuLawDecode(bits=args.mu_law_bits or args.num_bits))
 
-# encode_transform.extend([Quantize(bits=8, rescale=True)])
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
@@ -138,8 +116,6 @@ valid_dataset = BaseDataset(
     source=dataset.test,
     modalities=modalities,
 )
-# train_dataset.examples = train_dataset.examples[:3]
-# valid_dataset.examples = valid_dataset.examples[:3]
 rich.print(train_dataset)
 
 
@@ -157,7 +133,6 @@ if args.length_sampler:
         field="length.wav.samples",
         max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
     )
-    # valid_sampler.batches =valid_sampler.batches[:70]
     train_loader = DataLoader(
         dataset=train_dataset,
         collate_fn=train_dataset.collate,
