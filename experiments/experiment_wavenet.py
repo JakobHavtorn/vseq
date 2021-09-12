@@ -177,11 +177,11 @@ for epoch in tracker.epochs(args.epochs):
 
         extra = dict()
         if epoch % 25 == 0:
-            predictions = decode_transform(output.predictions) if decode_transform is not None else output.predictions
+            predictions = decode_transform(output.predictions)
             predictions = [wandb.Audio(predictions[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(predictions.shape[0], 2))]
 
             x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
-            x = decode_transform(x) if decode_transform is not None else x
+            x = decode_transform(x)
             samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
 
             extra = dict(samples=samples, predictions=predictions)
