@@ -1,6 +1,5 @@
 from typing import List, Optional, Tuple, Union
 
-from torch.tensor import Tensor
 from vseq.utils.convolutions import get_same_padding
 
 import torch

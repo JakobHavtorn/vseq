@@ -1,3 +1,5 @@
+import math
+
 from types import SimpleNamespace
 from typing import Optional
 
@@ -317,6 +319,7 @@ class VRNN(nn.Module):
             LLMetric(elbo, name="elbo"),
             LLMetric(log_prob, name="rec"),
             KLMetric(kl),
+            KLMetric(kl / math.log(2), name="kl (bpt)", reduce_by=x_sl),
             BitsPerDimMetric(elbo, reduce_by=x_sl),
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),

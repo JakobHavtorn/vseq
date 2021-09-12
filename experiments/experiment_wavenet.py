@@ -11,10 +11,12 @@ import vseq.models
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
-from vseq.data.datapaths import TIMIT_TRAIN, TIMIT_TEST
+from vseq.data.datapaths import DATASETS, TIMIT_TRAIN, TIMIT_TEST
 from vseq.data.loaders import AudioLoader
+from vseq.data.samplers.batch_samplers import LengthEvalSampler, LengthTrainSampler
 from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, MuLawEncode, StackWaveform
 from vseq.evaluation.tracker import Tracker
+from vseq.modules.distributions import CategoricalDense, DiscretizedLogisticMixtureDense
 from vseq.utils.argparsing import str2bool
 from vseq.utils.device import get_device
 from vseq.utils.rand import set_seed, get_random_seed
@@ -23,17 +25,20 @@ from vseq.utils.rand import set_seed, get_random_seed
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--batch_size", default=4, type=int, help="batch size")
+parser.add_argument("--batch_size", default=0, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--n_layers", default=10, type=int, help="number of layers per stack")
 parser.add_argument("--n_stacks", default=4, type=int, help="number of stacks")
 parser.add_argument("--res_channels", default=64, type=int, help="number of channels in residual connections")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--num_bits", default=8, type=int, help="number of bits for mu_law encoding (note the data bits depth)")
+parser.add_argument("--input_embedding_dim", default=1, type=int, help="if not 1, embed frames (after potential mu-law) as vector of this dimension")
+parser.add_argument("--num_bits", default=16, type=int, help="number of bits for mu_law encoding (note the data bits depth)")
+parser.add_argument("--distribution", default="dmol", type=str, help="distribution for the output p(x_t|x_t-1)")
 parser.add_argument("--stack_frames", default=1, type=int, help="Number of audio frames to stack in feature vector if input_coding is frames")
 parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
+parser.add_argument("--dataset", default="timit", type=str, help="dataset to train on")
 parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
@@ -46,13 +51,7 @@ set_seed(args.seed)
 
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
-
-if args.input_coding == "frames":
-    args.in_channels = None
-elif args.input_coding == "mu_law":
-    args.in_channels = 2 ** args.num_bits
-else:
-    raise ValueError()
+dataset = DATASETS[args.dataset]
 
 
 wandb.init(
@@ -63,56 +62,122 @@ wandb.init(
 wandb.config.update(args)
 rich.print(vars(args))
 
+# TODO
+# Mu law encoded raw audio as input
+# DMoL as output distribution
+# Length-based sampler for efficiency
 
+if args.distribution == "dmol":
+    likelihood = DiscretizedLogisticMixtureDense(args.res_channels, 1, num_mix=10, num_bins=2**args.num_bits)
+elif args.distribution == "categorical":
+    likelihood = CategoricalDense(args.res_chanels, 2**args.num_bits)
+else:
+    raise ValueError(f"Unknown distribution: {args.distribution}")
+
+encode_transform = []
+decode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform = Compose(RandomSegment(length=16000), MuLawEncode(bits=args.num_bits), Quantize(bits=args.num_bits))
-    decode_transform = MuLawDecode(bits=args.num_bits)
-elif args.input_coding == "frames":
-    decode_transform = None
-    if args.stack_frames == 1:
-        encode_transform = Compose(RandomSegment(length=16000))
-    else:
-        encode_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
+    encode_transform.append(MuLawEncode(bits=args.num_bits))
+    decode_transform.append(MuLawDecode(bits=args.num_bits))
+
+if args.input_embedding_dim > 1:
+    encode_transform.append(Quantize(bits=args.num_bits))
+
+if args.stack_frames > 1:
+    encode_transform.append(StackWaveform(n_frames=args.stack_frames))
+
+if args.distribution == "categorical":
+    decode_transform.append()  # Opposite of Quantize operation (Scale?)
+
+encode_transform = Compose(*encode_transform)
+decode_transform = Compose(*decode_transform)
+
+# if args.input_coding == "mu_law":
+#     encode_transform = Compose(RandomSegment(length=16000), MuLawEncode(bits=args.num_bits), Quantize(bits=args.num_bits))
+#     decode_transform = MuLawDecode(bits=args.num_bits)
+# elif args.input_coding == "frames":
+#     decode_transform = None
+#     if args.stack_frames == 1:
+#         encode_transform = None  # Compose(RandomSegment(length=16000))
+#     else:
+#         encode_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
 
 modalities = [(AudioLoader("wav"), encode_transform, AudioBatcher())]
 
-train_dataset = BaseDataset(
-    source=TIMIT_TRAIN,
-    modalities=modalities,
-)
-val_dataset = BaseDataset(
-    source=TIMIT_TEST,
-    modalities=modalities,
-)
 
+train_sampler = LengthTrainSampler(
+    source=dataset.train,
+    field="length.wav.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+    max_pool_difference=16000 * 0.3,
+    min_pool_size=512,
+    # num_batches=784
+)
+valid_sampler = LengthEvalSampler(
+    source=dataset.test,
+    field="length.wav.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+)
+train_dataset = BaseDataset(
+    source=dataset.train,
+    modalities=modalities,
+)
+valid_dataset = BaseDataset(
+    source=dataset.test,
+    modalities=modalities,
+)
 train_loader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
     num_workers=args.num_workers,
-    shuffle=True,
-    batch_size=args.batch_size,
+    batch_sampler=train_sampler,
     pin_memory=True,
 )
-val_loader = DataLoader(
-    dataset=val_dataset,
-    collate_fn=val_dataset.collate,
+valid_loader = DataLoader(
+    dataset=valid_dataset,
+    collate_fn=valid_dataset.collate,
     num_workers=args.num_workers,
-    shuffle=False,
-    batch_size=args.batch_size,
+    batch_sampler=valid_sampler,
     pin_memory=True,
 )
+# train_dataset = BaseDataset(
+#     source=TIMIT_TRAIN,
+#     modalities=modalities,
+# )
+# val_dataset = BaseDataset(
+#     source=TIMIT_TEST,
+#     modalities=modalities,
+# )
+# train_loader = DataLoader(
+#     dataset=train_dataset,
+#     collate_fn=train_dataset.collate,
+#     num_workers=args.num_workers,
+#     shuffle=True,
+#     batch_size=args.batch_size,
+#     pin_memory=True,
+# )
+# val_loader = DataLoader(
+#     dataset=val_dataset,
+#     collate_fn=val_dataset.collate,
+#     num_workers=args.num_workers,
+#     shuffle=False,
+#     batch_size=args.batch_size,
+#     pin_memory=True,
+# )
 
 model = vseq.models.WaveNet(
+    likelihood=likelihood,
     n_layers=args.n_layers,
     n_stacks=args.n_stacks,
-    in_channels=args.in_channels,
+    in_channels=args.input_embedding_dim,
     res_channels=args.res_channels,
-    out_classes=256,
+    num_bins=2 ** args.num_bits,
 )
+
 (x, x_sl), metadata = next(iter(train_loader))
 model.summary(input_data=x, x_sl=x_sl)
 model = model.to(device)
-print(model)
+# print(model)
 rich.print(model.receptive_field)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
@@ -125,6 +190,8 @@ for epoch in tracker.epochs(args.epochs):
     model.train()
     for (x, x_sl), metadata in tracker.steps(train_loader):
         x = x.to(device)
+
+        # TODO If categorical target is different from x (i.e. quantized)
 
         loss, metrics, output = model(x, x_sl)
 
@@ -144,12 +211,12 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
 
-        output.x_hat = decode_transform(output.x_hat) if decode_transform is not None else output.x_hat
-        reconstructions = [wandb.Audio(output.x_hat[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+        output.reconstruction = decode_transform(output.reconstruction) if decode_transform is not None else output.reconstruction
+        reconstructions = [wandb.Audio(output.reconstruction[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
 
         x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
         x = decode_transform(x) if decode_transform is not None else x
-        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
 
         tracker.log(samples=samples, reconstructions=reconstructions)
 

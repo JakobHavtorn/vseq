@@ -1,10 +1,9 @@
+from collections.abc import Iterable
 from itertools import repeat
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch.nn as nn
-
-from torch._six import container_abcs
 
 
 def _ntuple(n):
@@ -12,7 +11,7 @@ def _ntuple(n):
 
     def parse(x):
         """Given an integer, return that integer in an n-tuple. Given an Iterable, return that directly instead"""
-        if isinstance(x, container_abcs.Iterable):
+        if isinstance(x, Iterable):
             return x
         return tuple(repeat(x, n))
 

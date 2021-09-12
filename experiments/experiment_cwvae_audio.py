@@ -53,10 +53,12 @@ parser.add_argument("--num_workers", default=4, type=int, help="number of datalo
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
-parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
-parser.add_argument("--wandb_notes", default=None, type=str, help='custom notes for this experiment (optional)')
-parser.add_argument("--wandb_tags", default=None, type=str, nargs="+", help='custom tags for this experiment (optional)')
-parser.add_argument("--wandb_mode", default=None, type=str, help='tracking mode for this experiment (optional)')
+parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
+parser.add_argument("--wandb_notes", default=None, type=str, help="custom notes for this experiment (optional)")
+parser.add_argument(
+    "--wandb_tags", default=None, type=str, nargs="+", help="custom tags for this experiment (optional)"
+)
+parser.add_argument("--wandb_mode", default=None, type=str, help="tracking mode for this experiment (optional)")
 
 args = parser.parse_args()
 
@@ -136,6 +138,8 @@ valid_dataset = BaseDataset(
     source=dataset.test,
     modalities=modalities,
 )
+# train_dataset.examples = train_dataset.examples[:3]
+# valid_dataset.examples = valid_dataset.examples[:3]
 rich.print(train_dataset)
 
 
@@ -189,7 +193,9 @@ else:
 
 
 print(model)
-model.summary(input_size=(4, 10 * model.overall_stride), x_sl=torch.tensor([10 * model.overall_stride] * 4), device="cpu")
+model.summary(
+    input_size=(4, 10 * model.overall_stride), x_sl=torch.tensor([10 * model.overall_stride] * 4), device="cpu"
+)
 model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
@@ -215,8 +221,6 @@ for epoch in tracker.epochs(args.epochs):
 
         optimizer.zero_grad()
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 10)
-        # torch.nn.utils.clip_grad_value_(model.parameters(), 1)
         optimizer.step()
 
         tracker.update(metrics)
@@ -232,26 +236,42 @@ for epoch in tracker.epochs(args.epochs):
 
         extra = dict()
         if epoch % 25 == 0:
-            outputs.reconstructions = decode_transform(outputs.reconstructions)
-            reconstructions = [wandb.Audio(outputs.reconstructions[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(2)]
+            reconstructions = decode_transform(outputs.reconstructions)
+            reconstructions = [
+                wandb.Audio(
+                    reconstructions[i].flatten().cpu().numpy(), caption=f"Reconstruction {i}", sample_rate=16000
+                )
+                for i in range(min(2, reconstructions.shape[0]))
+            ]
 
             (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000)
             x = decode_transform(x)
-            samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
+            samples = [
+                wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)
+            ]
 
             (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, temperature=0.75)
             x = decode_transform(x)
-            samples_t75 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.75)", sample_rate=16000) for i in range(2)]
+            samples_t75 = [
+                wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.75)", sample_rate=16000)
+                for i in range(2)
+            ]
 
             (x, x_sl), outputs = model.generate(n_samples=2, max_timesteps=128000, temperature=0.1)
             x = decode_transform(x)
-            samples_t10 = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.10)", sample_rate=16000) for i in range(2)]
+            samples_t10 = [
+                wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i} (T=0.10)", sample_rate=16000)
+                for i in range(2)
+            ]
 
-            extra = dict(samples=samples, samples_t75=samples_t75, samples_t10=samples_t10, reconstructions=reconstructions)
+            extra = dict(
+                samples=samples, samples_t75=samples_t75, samples_t10=samples_t10, reconstructions=reconstructions
+            )
 
         if (
             args.save_checkpoints
-            and wandb.run is not None and wandb.run.dir != "/"
+            and wandb.run is not None
+            and wandb.run.dir != "/"
             and epoch > 1
             and min(tracker.accumulated_values[dataset.test]["loss"][:-1])
             > tracker.accumulated_values[dataset.test]["loss"][-1]

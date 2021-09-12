@@ -1,6 +1,6 @@
 from typing import List, Optional, Tuple, Union
 
-from torch.tensor import Tensor
+from torch import Tensor
 
 import torch.nn as nn
 import torch.nn.functional as F
