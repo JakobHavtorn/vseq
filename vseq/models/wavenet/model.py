@@ -2,7 +2,6 @@
 
 from types import SimpleNamespace
 from typing import Optional
-from vseq.modules.convenience import Permute
 
 import tqdm
 import numpy as np
@@ -21,6 +20,7 @@ from ..base_model import BaseModel
 
 
 # TODO Seperate Wavenet for Categorical and DMoL
+# TODO For Categorical we need "from_quantized": [-1, 1] -> int and "to_quantized": int -> [-1, 1]
 
 
 class InputSizeError(Exception):
@@ -150,7 +150,7 @@ class WaveNet(BaseModel):
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
         if self.in_channels == 1:
-            x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
+            x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T) -> (B, T, 1)
             target = x.clone() if target is None else target
         else:
             target = x.clone() if target is None else target
@@ -167,8 +167,8 @@ class WaveNet(BaseModel):
         pre_logits = self.out_transform(output)
 
         parameters = self.likelihood(pre_logits)
-        reconstruction = self.likelihood.sample(parameters)
-        reconstruction_mode = self.likelihood.mode(parameters)
+        predictions = self.likelihood.sample(parameters)
+        predictions_mode = self.likelihood.mode(parameters)
 
         loss, log_prob = self.compute_loss(target, x_sl, parameters)
 
@@ -177,55 +177,50 @@ class WaveNet(BaseModel):
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl),
         ]
-        output = SimpleNamespace(loss=loss, log_prob=log_prob, parameters=parameters, target=target, reconstruction=reconstruction, reconstruction_mode=reconstruction_mode)
+        output = SimpleNamespace(loss=loss, log_prob=log_prob, parameters=parameters, target=target, predictions=predictions, predictions_mode=predictions_mode)
         return loss, metrics, output
 
-    def generate(self, n_samples: int, n_frames: int = 48000):
+    def generate(self, n_samples: int, n_frames: int = 48000, x: Optional[TensorType["B", "T", "C"]] = None):
         """Generate samples from the WaveNet starting from a zero vector"""
-        # TODO Fix generation for DMoL
-        import IPython; IPython.embed()
-
-        if self.in_channels is None:
-            # start with floats of zeros
-            x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
-        else:
-            # start with embeddings of the zeros
-            x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
-            x = self.embedding(x)  # (B, T, C)
+        if x is None:
+            if self.in_channels == 1:
+                # start with floats of zeros
+                x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
+            else:
+                # start with embeddings of the zeros
+                x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
+                x = self.embedding(x)  # (B, T, C)
 
         x = x.transpose(1, 2)  # (B, C, T)
 
         x_hat = []
         for _ in tqdm.tqdm(range(n_frames)):
 
-            output = self.causal(x, pad=False)
+            output = self.causal(x)
             skip_connections = self.res_stack(output, skip_size=1)
             output = torch.sum(skip_connections, dim=0)
-            output = self.out_convs(output)
+            output = output.transpose(1, 2)
+            pre_logits = self.out_transform(output)
+                
+            parameters = self.likelihood(pre_logits)
+            predictions = self.likelihood.sample(parameters)
 
-            categorical = D.Categorical(logits=output.transpose(1, 2))
-            x_new = categorical.sample()  # Value in {0, ..., 255}
-            x_hat.append(x_new)
+            x_hat.append(predictions)
 
-            # prepare prediction as next input
-            if self.in_channels is None:
-                x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
-                x_new = x_new / (self.out_classes - 1)  # To [0, 1]
-                x_new = x_new * 2 - 1  # To [-1, 1]
-            else:
-                x_new = self.embedding(x_new)  # (B, T, C) (1, 1, C)
+            # prepare predictions as next input
+            if self.in_channels > 1:
+                predictions = self.embedding(predictions)  # (B, T, C) (1, 1, C)
 
-            x_new = x_new.transpose(1, 2)  # (B, C, T)
+            predictions = predictions.transpose(1, 2)  # (B, C, T)
 
-            x = torch.cat([x[:, :, 1:], x_new], dim=2)  # FIFO along T
+            # FIFO along T since we don't need to consider inputs beyond the receptive field
+            x = torch.cat([x[:, :, 1:], predictions], dim=2)
 
-        x_hat = torch.hstack(x_hat)
-        x_hat = x_hat / (self.out_classes - 1)  # To [0, 1]
-        x_hat = x_hat * 2 - 1  # To [-1, 1]
+        x_hat = torch.hstack(x_hat)  # (B, T, C)
         return x_hat
 
 
-class BasicWaveNet(BaseModel):
+class WaveNetCategorical(BaseModel):
     def __init__(
         self,
         in_channels: Optional[int] = None,
@@ -317,7 +312,7 @@ class BasicWaveNet(BaseModel):
         Args:
             target (torch.LongTensor): Input audio waveform, i.e. the target (B, T) of quantized integers.
             x_sl (torch.LongTensor): Sequence lengths of examples in the batch.
-            logits (torch.FloatTensor): Model reconstruction with log softmax scores per possible frame value (B, C, T).
+            logits (torch.FloatTensor): Model predictions with log softmax scores per possible frame value (B, C, T).
         """
         nll = self.nll_criterion(logits, target)
         mask = sequence_mask(x_sl, device=nll.device)
@@ -352,15 +347,15 @@ class BasicWaveNet(BaseModel):
 
         loss, log_prob = self.compute_loss(target, x_sl, logits)
 
-        x_hat = logits.argmax(1) / (self.out_classes - 1)
-        x_hat = (2 * x_hat) - 1
+        prediction = logits.argmax(1) / (self.out_classes - 1)
+        prediction = (2 * prediction) - 1
 
         metrics = [
             LossMetric(loss, weight_by=log_prob.numel()),
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl),
         ]
-        output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, x_hat=x_hat)
+        output = SimpleNamespace(loss=loss, log_prob=log_prob, logits=logits, target=target, prediction=prediction)
         return loss, metrics, output
 
     def generate(self, n_samples: int, n_frames: int = 48000):
@@ -387,7 +382,7 @@ class BasicWaveNet(BaseModel):
             x_new = categorical.sample()  # Value in {0, ..., 255}
             x_hat.append(x_new)
 
-            # prepare prediction as next input
+            # prepare predictions as next input
             if self.in_channels is None:
                 x_new = x_new.unsqueeze(-1)  # (B, T, C) (1, 1, 1)
                 x_new = x_new / (self.out_classes - 1)  # To [0, 1]

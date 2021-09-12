@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 
 import torch
 import wandb
@@ -40,6 +41,7 @@ parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if Tr
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
 parser.add_argument("--dataset", default="timit", type=str, help="dataset to train on")
 parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
+parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
 
@@ -62,10 +64,6 @@ wandb.init(
 wandb.config.update(args)
 rich.print(vars(args))
 
-# TODO
-# Mu law encoded raw audio as input
-# DMoL as output distribution
-# Length-based sampler for efficiency
 
 if args.distribution == "dmol":
     likelihood = DiscretizedLogisticMixtureDense(args.res_channels, 1, num_mix=10, num_bins=2**args.num_bits)
@@ -92,16 +90,6 @@ if args.distribution == "categorical":
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
-# if args.input_coding == "mu_law":
-#     encode_transform = Compose(RandomSegment(length=16000), MuLawEncode(bits=args.num_bits), Quantize(bits=args.num_bits))
-#     decode_transform = MuLawDecode(bits=args.num_bits)
-# elif args.input_coding == "frames":
-#     decode_transform = None
-#     if args.stack_frames == 1:
-#         encode_transform = None  # Compose(RandomSegment(length=16000))
-#     else:
-#         encode_transform = Compose(RandomSegment(length=16000), StackWaveform(n_frames=args.stack_frames))
-
 modalities = [(AudioLoader("wav"), encode_transform, AudioBatcher())]
 
 
@@ -118,6 +106,8 @@ valid_sampler = LengthEvalSampler(
     field="length.wav.samples",
     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
 )
+# train_sampler.batches = train_sampler.batches[:3]
+# valid_sampler.batches = valid_sampler.batches[:3]
 train_dataset = BaseDataset(
     source=dataset.train,
     modalities=modalities,
@@ -140,30 +130,6 @@ valid_loader = DataLoader(
     batch_sampler=valid_sampler,
     pin_memory=True,
 )
-# train_dataset = BaseDataset(
-#     source=TIMIT_TRAIN,
-#     modalities=modalities,
-# )
-# val_dataset = BaseDataset(
-#     source=TIMIT_TEST,
-#     modalities=modalities,
-# )
-# train_loader = DataLoader(
-#     dataset=train_dataset,
-#     collate_fn=train_dataset.collate,
-#     num_workers=args.num_workers,
-#     shuffle=True,
-#     batch_size=args.batch_size,
-#     pin_memory=True,
-# )
-# val_loader = DataLoader(
-#     dataset=val_dataset,
-#     collate_fn=val_dataset.collate,
-#     num_workers=args.num_workers,
-#     shuffle=False,
-#     batch_size=args.batch_size,
-#     pin_memory=True,
-# )
 
 model = vseq.models.WaveNet(
     likelihood=likelihood,
@@ -191,8 +157,7 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker.steps(train_loader):
         x = x.to(device)
 
-        # TODO If categorical target is different from x (i.e. quantized)
-
+        # TODO If categorical target is different from x (i.e. quantized, ints)
         loss, metrics, output = model(x, x_sl)
 
         optimizer.zero_grad()
@@ -203,28 +168,38 @@ for epoch in tracker.epochs(args.epochs):
 
     model.eval()
     with torch.no_grad():
-        for (x, x_sl), metadata in tracker.steps(val_loader):
+        for (x, x_sl), metadata in tracker.steps(valid_loader):
             x = x.to(device)
 
             loss, metrics, output = model(x, x_sl)
 
             tracker.update(metrics)
 
+        extra = dict()
+        if epoch % 25 == 0:
+            predictions = decode_transform(output.predictions) if decode_transform is not None else output.predictions
+            predictions = [wandb.Audio(predictions[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(predictions.shape[0], 2))]
 
-        output.reconstruction = decode_transform(output.reconstruction) if decode_transform is not None else output.reconstruction
-        reconstructions = [wandb.Audio(output.reconstruction[i].cpu().flatten().numpy(), caption=f"Reconstruction {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
+            x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
+            x = decode_transform(x) if decode_transform is not None else x
+            samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
 
-        x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
-        x = decode_transform(x) if decode_transform is not None else x
-        samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
+            extra = dict(samples=samples, predictions=predictions)
 
-        tracker.log(samples=samples, reconstructions=reconstructions)
+        if (
+            args.save_checkpoints
+            and wandb.run is not None and wandb.run.dir != "/"
+            and epoch > 1
+            and min(tracker.accumulated_values[dataset.test]["loss"][:-1])
+            > tracker.accumulated_values[dataset.test]["loss"][-1]
+        ):
+            model.save(wandb.run.dir)
+            checkpoint = dict(
+                epoch=epoch,
+                best_loss=tracker.accumulated_values[dataset.test]["loss"][-1],
+                optimizer_state_dict=optimizer.state_dict(),
+            )
+            torch.save(checkpoint, os.path.join(wandb.run.dir, "checkpoint.pt"))
+            print(f"Saved model checkpoint at {wandb.run.dir}")
 
-        # for i in range(len(x)):
-        #     torchaudio.save(
-        #         f"./wavenet_samples/model-{args.n_layers}-{args.n_stacks}-{args.res_channels}-epoch-{epoch}-sample_{i}.wav",
-        #         x[i],
-        #         sample_rate=16000,
-        #         channels_first=False,
-        #         encoding="ULAW",
-        #     )
+        tracker.log(**extra)
