@@ -271,12 +271,14 @@ class Tracker:
 
     def do_print(self) -> bool:
         """Print at first and last step and according to `print_every`"""
+        if self.print_every is None:
+            return False
+
         t = time()
-        if self.print_every is not None:
-            if isinstance(self.print_every, float):
-                do_print = (t - self.printed_last) > self.print_every
-            else:
-                do_print = (self.step[self.source] % self.print_every) == 0 or self.step[self.source] == 1
+        if isinstance(self.print_every, float):
+            do_print = (t - self.printed_last) > self.print_every  # seconds
+        else:
+            do_print = (self.step[self.source] % self.print_every) == 0 or self.step[self.source] == 1  # iterations
 
         if do_print:
             self.printed_last = t
