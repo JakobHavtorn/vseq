@@ -118,7 +118,7 @@ class CWVAE(nn.Module):
         self.receptive_field = self.encoder.receptive_field
         self.overall_stride = self.encoder.overall_stride
 
-    def build_metrics(self, loss, elbo, log_prob, kld, kld_l, kld_g, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats):
+    def build_metrics(self, loss, elbo, log_prob, kld, kld_l, kld_g, enc_l_mus, enc_g_mu, x_sl, beta, free_nats):
         kld_layers_metrics_nats = [
             KLMetric(kld_l[l], name=f"kl_{l} (nats)", log_to_console=False) for l in range(self.num_levels)
         ]
@@ -126,25 +126,32 @@ class CWVAE(nn.Module):
             KLMetric(kld_l[l] / math.log(2), name=f"kl_{l} (bpt)", reduce_by=(x_sl / self.time_factors[l]))
             for l in range(self.num_levels)
         ]
+
         latent_activity_metrics_percent = [
             LatentActivityMetric(
-                enc_mus[l][:, : x_sl.min()],
+                enc_l_mus[l][:, : x_sl.min()],
                 name=f"z_{l} (%)",
                 threshold=0.01,
-                reduce_by=enc_mus[l].size(0),
-                weight_by=enc_mus[l].size(0) * x_sl.min(),
+                reduce_by=enc_l_mus[l].size(0),
+                weight_by=enc_l_mus[l].size(0) * x_sl.min(),
             )
             for l in range(self.num_levels)
         ]
         latent_activity_metrics_variance = [
             LatentActivityMetric(
-                enc_mus[l][:, : x_sl.min()],
+                enc_l_mus[l][:, : x_sl.min()],
                 name=f"z_{l} (var)",
-                reduce_by=enc_mus[l].size(0),
-                weight_by=enc_mus[l].size(0) * x_sl.min(),
+                reduce_by=enc_l_mus[l].size(0),
+                weight_by=enc_l_mus[l].size(0) * x_sl.min(),
             )
             for l in range(self.num_levels)
         ]
+
+        if kld_g is not None:
+            kld_layers_metrics_nats.append(KLMetric(kld_g, name="kl_g (nats)", log_to_console=False))
+            kld_layers_metrics_bpd.append(KLMetric(kld_g / math.log(2), name="kl_g (bits)"))
+            latent_activity_metrics_percent.append(LatentActivityMetric(enc_g_mu, name=f"z_g (%)", threshold=0.01))
+            latent_activity_metrics_variance.append(LatentActivityMetric(enc_g_mu, name=f"z_g (var)",))
 
         metrics = [
             LossMetric(loss, weight_by=elbo.numel()),
@@ -153,7 +160,7 @@ class CWVAE(nn.Module):
             BitsPerDimMetric(elbo, name="elbo (bpt)", reduce_by=x_sl),
             LLMetric(log_prob, name="rec (nats)", log_to_console=False),
             BitsPerDimMetric(log_prob, name="rec (bpt)", reduce_by=x_sl),
-            KLMetric(kld, name="kl (nats)"),
+            KLMetric(kld, name="kl (nats)", log_to_console=False),
             KLMetric(kld / math.log(2), name="kl (bpt)", reduce_by=x_sl / self.time_factors[0]),
             *kld_layers_metrics_nats,
             *kld_layers_metrics_bpd,
@@ -162,12 +169,6 @@ class CWVAE(nn.Module):
             LatestMeanMetric(beta, name="beta"),
             LatestMeanMetric(free_nats, name="free_nats"),
         ]
-
-        if kld_g is not None:
-            metrics.extend([
-                KLMetric(kld_g, name="kl_g (nats)"),
-                KLMetric(kld_g / math.log(2), name="kl_g (bits)"),
-            ])
 
         return metrics
 
@@ -216,10 +217,12 @@ class CWVAE(nn.Module):
         free_nats: float = 0,
         y: Optional[TensorType["B", "T", "D"]] = None,
     ):
+
         # target
         if y is None:
             y = x.clone().detach()
 
+        x_sl = x_sl.cpu()  # no-op if already on CPU
         seq_mask = sequence_mask(x_sl, max_len=y.shape[1], dtype=bool, device=y.device)
 
         # compute encodings
@@ -230,9 +233,10 @@ class CWVAE(nn.Module):
         if self.g_size > 0:
             g, g_distributions = self.global_coder(encodings_list, x_sl, self.time_factors, seq_mask=seq_mask)
             kld_g = kl_divergence_gaussian(g_distributions.enc_mu, g_distributions.enc_sd, g_distributions.prior_mu, g_distributions.prior_sd)
+            enc_g_mu = g_distributions.enc_mu
         else:
             g = torch.empty(x.size(0), 0, device=y.device)
-            kld_g = None
+            kld_g, enc_g_mu = None, None
 
         # initial context for top layer
         context_l = [g] * len(encodings[-1])
@@ -302,7 +306,7 @@ class CWVAE(nn.Module):
         loss, elbo, log_prob, kld, kld_l, kld_g = self.compute_elbo(y, seq_mask, x_sl, parameters, kld_l, kld_g, beta, free_nats)
 
         metrics = self.build_metrics(
-            loss, elbo, log_prob, kld, kld_l, kld_g, enc_mus, prior_mus, x_sl, seq_mask, beta, free_nats
+            loss, elbo, log_prob, kld, kld_l, kld_g, enc_mus, enc_g_mu, x_sl, beta, free_nats
         )
 
         outputs = SimpleNamespace(

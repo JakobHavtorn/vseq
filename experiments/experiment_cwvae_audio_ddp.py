@@ -238,7 +238,7 @@ def run(gpu_idx, args):
             rich.print(train_sampler)
             rich.print(valid_sampler)
         print(model)
-        model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride]), device="cpu")
+        model.summary(input_size=(4, model.overall_stride), x_sl=torch.tensor([model.overall_stride] * 4), device="cpu")
 
         wandb.watch(model, log="all", log_freq=len(train_loader))
 

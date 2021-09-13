@@ -1,14 +1,14 @@
 from types import SimpleNamespace
 from typing import List, Tuple
-from vseq.utils.operations import sequence_mask
-from vseq.utils.variational import rsample_gaussian
 
 import torch
+from torch.functional import Tensor
 import torch.nn as nn
 
 from torchtyping import TensorType
 
 from vseq.modules import GaussianDense
+from vseq.utils.operations import sequence_mask
 
 
 class GRUAttention(nn.Module):
@@ -39,11 +39,12 @@ class GRUAttention(nn.Module):
         seq_mask: TensorType["B", "T", int] = None,
     ) -> TensorType["B", "T", 1]:
 
-        seq_mask = sequence_mask(x_sl, max_len=x.shape[1], device=x.device) if seq_mask is None else seq_mask
+        if seq_mask is None:
+            seq_mask = sequence_mask(x_sl, max_len=x.shape[1], device=x.device)
 
         ps = torch.nn.utils.rnn.pack_padded_sequence(x, x_sl, batch_first=self.batch_first)
         h, h_n = self.gru(ps)
-        h, h_sl = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+        h, h_sl = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True, total_length=x.shape[1])
 
         a_logits = self.linear(h)
         a_logits[~seq_mask] = -float("inf")  # set attention on padding to zeros
@@ -59,7 +60,13 @@ class GlobalCoder(nn.Module):
         self.num_embeddings = len(e_size)
 
         self.attentions = nn.ModuleList([GRUAttention(e) for e in e_size])
-        self.posterior = nn.Sequential(nn.Linear(sum(e_size), e_size[-1]), nn.ReLU(), GaussianDense(e_size[-1], z_size))
+        self.posterior = nn.Sequential(
+            nn.Linear(sum(e_size), sum(e_size)),
+            nn.ReLU(),
+            nn.Linear(sum(e_size), e_size[-1]),
+            nn.ReLU(),
+            GaussianDense(e_size[-1], z_size),
+        )
 
         self.register_buffer("mu_p", torch.zeros(z_size))
         self.register_buffer("scale_p", torch.ones(z_size))
@@ -70,15 +77,16 @@ class GlobalCoder(nn.Module):
         x: List[TensorType["B", "T_i", "e_i"]],
         x_sl: TensorType["B", int],
         time_factors: List[int],
-        seq_mask: TensorType["B", "T", int] = None,
+        seq_mask: TensorType["B", "T", bool] = None,
         temperature: float = 1.0,
         use_mode: bool = False,
     ) -> Tuple[TensorType["B", "T", "z_size"], SimpleNamespace]:
         """Encode a list of timeseries into a single global representation via recurrent attention."""
 
-        seq_mask = sequence_mask(x_sl, max_len=x.shape[1], device=x.device) if seq_mask is None else seq_mask
+        if seq_mask is None:
+            seq_mask = sequence_mask(x_sl, max_len=x[0].shape[1] * time_factors[0], device=x[0].device)
 
-        cs = []
+        context_vectors = []
         for i in range(self.num_embeddings):
             mask = seq_mask[:, :: time_factors[i]]
             lens = torch.ceil(x_sl / time_factors[i])
@@ -86,9 +94,9 @@ class GlobalCoder(nn.Module):
             a = self.attentions[i](x[i], x_sl=lens, seq_mask=mask)
             c = self.attentions[i].compute_context_vector(x[i], a)
 
-            cs.append(c)
+            context_vectors.append(c)
 
-        enc_mu, enc_sd = self.posterior(torch.cat(cs, dim=-1))
+        enc_mu, enc_sd = self.posterior(torch.cat(context_vectors, dim=-1))
 
         z = self.posterior[-1].rsample((enc_mu, temperature * enc_sd)) if not use_mode else enc_mu
 
@@ -96,11 +104,10 @@ class GlobalCoder(nn.Module):
         return z, distributions
 
     def generate(self, batch_size: int, temperature: float = 1.0, use_mode: bool = False):
-        z = (
-            self.mu_p + self.scale_p * torch.randn((batch_size, self.z_size))
-            if not use_mode
-            else self.mu_p.repeat((batch_size, self.z_size))
-        )
-        # z = rsample_gaussian(self.mu_p, temperature * self.scale_p) if not use_mode else self.mu_p
+        if use_mode:
+            z = self.mu_p.repeat((batch_size, self.z_size))
+        else:
+            z = self.mu_p + temperature * self.scale_p * torch.randn((batch_size, self.z_size))
+
         distributions = SimpleNamespace(z=z, prior_mu=self.mu_p, prior_sd=self.scale_p)
         return z, distributions
