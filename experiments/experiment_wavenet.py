@@ -26,6 +26,7 @@ from vseq.utils.rand import set_seed, get_random_seed
 LOGGER = logging.getLogger(name=__file__)
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--input_length", default=16000, type=int, help="input length")
 parser.add_argument("--batch_size", default=0, type=int, help="batch size")
 parser.add_argument("--lr", default=3e-4, type=float, help="base learning rate")
 parser.add_argument("--n_layers", default=10, type=int, help="number of layers per stack")
@@ -55,6 +56,8 @@ device = get_device() if args.device == "auto" else torch.device(args.device)
 
 dataset = DATASETS[args.dataset]
 
+dataset_filetype = "flac" if args.dataset in {"librispeech"} else "wav"
+
 
 wandb.init(
     entity="vseq",
@@ -72,7 +75,7 @@ elif args.distribution == "categorical":
 else:
     raise ValueError(f"Unknown distribution: {args.distribution}")
 
-encode_transform = []
+encode_transform = [RandomSegment(args.input_length)]
 decode_transform = []
 if args.input_coding == "mu_law":
     encode_transform.append(MuLawEncode(bits=args.num_bits))
@@ -90,22 +93,24 @@ if args.distribution == "categorical":
 encode_transform = Compose(*encode_transform)
 decode_transform = Compose(*decode_transform)
 
-modalities = [(AudioLoader("wav"), encode_transform, AudioBatcher())]
+modalities = [(AudioLoader(dataset_filetype), encode_transform, AudioBatcher())]
 
 
-train_sampler = LengthTrainSampler(
-    source=dataset.train,
-    field="length.wav.samples",
-    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-    max_pool_difference=16000 * 0.3,
-    min_pool_size=512,
-    # num_batches=784
-)
-valid_sampler = LengthEvalSampler(
-    source=dataset.test,
-    field="length.wav.samples",
-    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-)
+train_sampler = None
+valid_sampler = None
+# train_sampler = LengthTrainSampler(
+#     source=dataset.train,
+#     field=f"length.{dataset_filetype}.samples",
+#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+#     max_pool_difference=16000 * 0.3,
+#     min_pool_size=512,
+#     # num_batches=784
+# )
+# valid_sampler = LengthEvalSampler(
+#     source=dataset.test,
+#     field=f"length.{dataset_filetype}.samples",
+#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+# )
 # train_sampler.batches = train_sampler.batches[:3]
 # valid_sampler.batches = valid_sampler.batches[:3]
 train_dataset = BaseDataset(
