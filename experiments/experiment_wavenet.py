@@ -70,6 +70,7 @@ parser.add_argument("--save_freq", default=10, type=int, help="number of epochs 
 parser.add_argument("--delete_last_model", default=False, type=str2bool, help="if True, delete the last model saved")
 parser.add_argument("--dataset", default="timit", choices=['librispeech','timit'], help="which dataset to use", type=str)
 parser.add_argument("--model_load", default=None, type=str, help="model to load")
+parser.add_argument("--likelihood", default="dmol", type=str, choices=["conv", "dmol"], help="likelihood type")
 
 
 
@@ -82,6 +83,9 @@ set_seed(args.seed)
 device = get_device() if args.device == "auto" else torch.device(args.device)
 
 
+# if args.likelihood == "conv" and args.input_embedding != 'quantized':
+#     raise # ??? 
+
 ### COPY ARGS TO MODEL ARGS
 wavenet_args = SimpleNamespace(
     in_channels=1,
@@ -90,14 +94,14 @@ wavenet_args = SimpleNamespace(
     res_channels=args.res_channels,
     out_classes=256,
     num_embeddings=None,
-    likelihood="dmol",
+    likelihood=args.likelihood,
 )
 
 
 # If the input embedding is frames or a spectrogram, don't use embeddings.
 # If we use a quantized input we instantiate an embedding of res_channels
 
-_transforms = [RandomSegment(args.input_length), Scale()]
+_transforms = [RandomSegment(args.input_length)]
 transform_decode = None
 if args.input_encoding == "mu_law":
     _transforms.append(MuLawEncode(args.num_bits))
@@ -127,6 +131,7 @@ elif args.input_embedding == "spectrogram":
     dataset_sort = False
     wavenet_args.in_channels = args.spectrogram_size
 else:  # frames
+    embedding_str = args.input_embedding
     _Batcher = AudioBatcher
     dataset_sort = True
 
@@ -202,12 +207,12 @@ val_loader = DataLoader(
 
 # exit()
 (x, x_sl), metadata = next(iter(train_loader))
-rich.print(x.shape)
+# rich.print(x.shape)
 
 model = model.to(device)
 model.summary(input_data=x, x_sl=x_sl)
 
-exit()
+# exit()
 
 wandb.watch(model, log="all", log_freq=len(train_loader))
 

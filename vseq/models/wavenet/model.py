@@ -117,8 +117,23 @@ class WaveNet(BaseModel):
         if likelihood.lower() == "conv":
             self.out_distr = OutConv1d(res_channels, out_classes * in_channels)
         elif likelihood.lower() == "dmol":
+            self.num_mix = 3
+            self.out_transform = nn.Sequential(
+                # [B, channels_in, T] -> [B, channels_block, T]
+                nn.Conv1d(
+                    res_channels,
+                    self.num_mix,
+                    kernel_size=3,
+                    stride=1,
+                    padding=3 // 2,
+                    bias=True,
+                ),
+                nn.PReLU(),
+                # nn.GroupNorm(num_channels=self.num_mix, num_groups=self.num_mix),
+            )
+
             self.out_distr = DiscretizedLogisticMixtureDense(
-                res_channels, in_channels, num_bins=out_classes
+                self.num_mix, in_channels, num_mix=self.num_mix, num_bins=out_classes
             )
 
         self.nll_criterion = torch.nn.NLLLoss(reduction="none")
@@ -176,14 +191,17 @@ class WaveNet(BaseModel):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
+        x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
         if self.in_channels is None:
-            x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T, C)
             target = self._get_target(x)
         else:
             target = x.clone()
             if self.embedding:
                 x = self.embedding(x)  # (B, T, C)
         x = x.transpose(1, 2)  # (B, C, T)
+
+        # print(f"X shape      {x.shape}")
+        # print(f"Target shape {target.shape}")
 
         # Add this to allow for returning x
         x.requires_grad_(True)
@@ -194,14 +212,18 @@ class WaveNet(BaseModel):
         output = self.causal(x)
         output = self.res_stack(output, skip_size=x.size(2))
         output = torch.sum(output, dim=0)
+        
+        # print(target.shape)
         if isinstance(self.out_distr, DiscretizedLogisticMixtureDense):
+            output = self.out_transform(output)
             logits, means, log_scales = self.out_distr(
                 output.transpose(1, 2)
             )  # DiscretizedLogisticMixture expects (B, T, D)
             seq_mask = sequence_mask(x_sl, device=logits.device)
-
-            print(f"LOGIT PROBS SHAPE: {logits.shape}")
-            print(f"MEMORY: {torch.cuda.memory_allocated()}")
+            # print(f"TARGET: {target.shape}")
+            # print(f"OUTPUT: {output.shape}")
+            # print(f"LOGITS: {logits.shape}")
+            # print(f"MEMORY: {torch.cuda.memory_allocated()}")
 
             log_prob_twise = (
                 self.out_distr.log_prob(
@@ -214,10 +236,20 @@ class WaveNet(BaseModel):
 
             x_hat = self.out_distr.sample((logits, means, log_scales))
 
+            # print(x_hat[:, :10])
+            # print(target[:,:10])
+            # print(x_hat.shape)
+            # print(x)
+            # print(x_hat)
+
+            # import IPython
+            # IPython.embed()
+
         else:
             logits = self.out_distr(output)
-
-            if self.in_channels > 1:
+            
+            if self.in_channels > 1 or self.stack_waveform:
+                # Transposing the logits to be the right shape here
                 logits = logits.view(
                     logits.size(0),
                     self.out_classes,
@@ -225,6 +257,7 @@ class WaveNet(BaseModel):
                     logits.size(1)
                     // self.out_classes,  # this should be self.in_channels if we have a stack
                 )
+            # print(logits.shape)
             loss, log_prob = self.compute_loss(target, x_sl, logits)
 
             x_hat = logits.argmax(1) / (self.out_classes - 1)
