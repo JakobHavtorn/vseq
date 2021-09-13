@@ -182,7 +182,7 @@ for epoch in tracker.epochs(args.epochs):
 
             x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
             x = decode_transform(x)
-            samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(min(args.batch_size, 2))]
+            samples = [wandb.Audio(x[i].flatten().cpu().numpy(), caption=f"Sample {i}", sample_rate=16000) for i in range(2)]
 
             extra = dict(samples=samples, predictions=predictions)
 
