@@ -8,7 +8,7 @@
 ```bash
 conda deactivate
 conda env remove -n vseq -y
-conda create -y -n vseq python==3.9
+conda create -y -n vseq python==3.8
 conda activate vseq
 pip install -f https://download.pytorch.org/whl/torch_stable.html --upgrade --editable . 
 ```
