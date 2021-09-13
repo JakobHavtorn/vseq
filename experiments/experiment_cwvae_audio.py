@@ -36,7 +36,7 @@ parser.add_argument("--time_factors", default=[200, 800, 3200], type=int, nargs=
 parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
 parser.add_argument("--num_rssm_gru_cells", default=1, type=int, help="number of stacked GRU cells in an RSSM cell")
 parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
+parser.add_argument("--num_bits", default=16, type=int, help="number of bits for DML and input")
 parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
 parser.add_argument("--mu_law_bits", default=None, type=int, help="number of bits for mu law if different from DML")
 parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
@@ -118,7 +118,6 @@ valid_dataset = BaseDataset(
 )
 rich.print(train_dataset)
 
-
 if args.length_sampler:
     train_sampler = LengthTrainSampler(
         source=dataset.train,
@@ -133,6 +132,7 @@ if args.length_sampler:
         field="length.wav.samples",
         max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
     )
+
     train_loader = DataLoader(
         dataset=train_dataset,
         collate_fn=train_dataset.collate,

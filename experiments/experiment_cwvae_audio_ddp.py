@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--num_level_layers", default=8, type=int, help="dense layers for embedding per level")
     parser.add_argument("--num_rssm_gru_cells", default=1, type=int, help="number of stacked GRU cells in an RSSM cell")
     parser.add_argument("--input_coding", default="mu_law", type=str, choices=["mu_law", "frames"], help="input encoding")
-    parser.add_argument("--num_bits", default=8, type=int, help="number of bits for DML and input")
+    parser.add_argument("--num_bits", default=16, type=int, help="number of bits for DML and input")
     parser.add_argument("--num_mix", default=10, type=int, help="number of logistic mixture components")
     parser.add_argument("--mu_law_bits", default=None, type=int, help="number of bits for mu law if different from DML")
     parser.add_argument("--residual_posterior", default=False, type=str2bool, help="residual parameterization of posterior")
@@ -92,15 +92,6 @@ def run(gpu_idx, args):
     
     dataset = DATASETS[args.dataset]
 
-    # model = vseq.models.CWVAEAudioConv1d(
-    #     z_size=args.latent_size,
-    #     h_size=args.hidden_size,
-    #     time_factors=args.time_factors,
-    #     num_level_layers=args.num_level_layers,
-    #     num_mix=args.num_mix,
-    #     num_bins=2 ** args.num_bits,
-    #     residual_posterior=args.residual_posterior
-    # )
     model = vseq.models.CWVAEAudioTasNet(
         z_size=args.latent_size,
         h_size=args.hidden_size,
@@ -112,16 +103,6 @@ def run(gpu_idx, args):
         residual_posterior=args.residual_posterior,
         num_rssm_gru_cells=args.num_rssm_gru_cells,
     )
-    # model = vseq.models.CWVAEAudioDense(
-    # # model = vseq.models.CWVAEAudioConv1D(
-    #     z_size=args.latent_size,
-    #     h_size=args.hidden_size,
-    #     time_factors=args.time_factors,
-    #     num_level_layers=args.num_level_layers,
-    #     num_mix=args.num_mix,
-    #     num_bins=2 ** args.num_bits,
-    #     residual_posterior=args.residual_posterior
-    # )
 
     decode_transform = []
     encode_transform = []
@@ -152,7 +133,6 @@ def run(gpu_idx, args):
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
             max_pool_difference=16000 * 0.3,
             min_pool_size=512,
-            # num_batches=10,
         )
         train_sampler = DistributedSamplerWrapper(
             sampler=train_sampler,
@@ -161,18 +141,19 @@ def run(gpu_idx, args):
             seed=args.seed,
             drop_last=True,
         )
+
         valid_sampler = LengthEvalSampler(
             source=dataset.test,
             field="length.wav.samples",
             max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
         )
-        # valid_sampler.batches = valid_sampler.batches[:10]
         valid_sampler = DistributedSamplerWrapper(
             sampler=valid_sampler,
             num_replicas=args.world_size,
             rank=rank,
             seed=args.seed,
         )
+
         train_loader = DataLoader(
             dataset=train_dataset,
             collate_fn=train_dataset.collate,
@@ -203,6 +184,7 @@ def run(gpu_idx, args):
             num_replicas=args.world_size,
             rank=rank,
         )
+
         train_loader = DataLoader(
             dataset=train_dataset,
             collate_fn=train_dataset.collate,
