@@ -15,7 +15,7 @@ from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import DATASETS, TIMIT_TRAIN, TIMIT_TEST
 from vseq.data.loaders import AudioLoader
 from vseq.data.samplers.batch_samplers import LengthEvalSampler, LengthTrainSampler
-from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, MuLawEncode, StackWaveform
+from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, MuLawEncode, StackWaveform, MaskLast
 from vseq.evaluation.tracker import Tracker
 from vseq.modules.distributions import CategoricalDense, DiscretizedLogisticMixtureDense
 from vseq.utils.argparsing import str2bool
@@ -45,6 +45,7 @@ parser.add_argument("--wandb_group", default=None, type=str, help="custom group 
 parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+parser.add_argument("--val_extras", default=False, type=bool, help="Use extended validation")
 args = parser.parse_args()
 
 if args.seed is None:
@@ -74,42 +75,47 @@ elif args.distribution == "categorical":
 else:
     raise ValueError(f"Unknown distribution: {args.distribution}")
 
-encode_transform = [RandomSegment(args.input_length)]
+encode_transforms = []
 decode_transform = []
 if args.input_coding == "mu_law":
-    encode_transform.append(MuLawEncode(bits=args.num_bits))
+    encode_transforms.append(MuLawEncode(bits=args.num_bits))
     decode_transform.append(MuLawDecode(bits=args.num_bits))
 
 if args.input_embedding_dim > 1:
-    encode_transform.append(Quantize(bits=args.num_bits))
+    encode_transforms.append(Quantize(bits=args.num_bits))
 
 if args.stack_frames > 1:
-    encode_transform.append(StackWaveform(n_frames=args.stack_frames))
+    encode_transforms.append(StackWaveform(n_frames=args.stack_frames))
 
 if args.distribution == "categorical":
     decode_transform.append()  # Opposite of Quantize operation (Scale?)
 
-encode_transform = Compose(*encode_transform)
+encode_transform = Compose(*encode_transforms)
 decode_transform = Compose(*decode_transform)
 
+encode_transform_m1 = Compose(*(encode_transforms + [MaskLast(n=1)])) # Mask last 1
+encode_transform_m2 = Compose(*(encode_transforms + [MaskLast(n=2)])) # Mask last 2
+encode_transform_m10 = Compose(*(encode_transforms + [MaskLast(n=10)])) # Mask last 5
+
+
 modalities = [(AudioLoader(dataset_filetype), encode_transform, AudioBatcher())]
+modalities_m1 = [(AudioLoader(dataset_filetype), encode_transform_m1, AudioBatcher())]
+modalities_m2 = [(AudioLoader(dataset_filetype), encode_transform_m2, AudioBatcher())]
+modalities_m10 = [(AudioLoader(dataset_filetype), encode_transform_m10, AudioBatcher())]
 
-
-train_sampler = None
-valid_sampler = None
-# train_sampler = LengthTrainSampler(
-#     source=dataset.train,
-#     field=f"length.{dataset_filetype}.samples",
-#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-#     max_pool_difference=16000 * 0.3,
-#     min_pool_size=512,
-#     # num_batches=784
-# )
-# valid_sampler = LengthEvalSampler(
-#     source=dataset.test,
-#     field=f"length.{dataset_filetype}.samples",
-#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-# )
+train_sampler = LengthTrainSampler(
+    source=dataset.train,
+    field=f"length.{dataset_filetype}.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+    max_pool_difference=16000 * 0.3,
+    min_pool_size=512,
+    # num_batches=784
+)
+valid_sampler = LengthEvalSampler(
+    source=dataset.test,
+    field=f"length.{dataset_filetype}.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+)
 # train_sampler.batches = train_sampler.batches[:3]
 # valid_sampler.batches = valid_sampler.batches[:3]
 train_dataset = BaseDataset(
@@ -120,6 +126,22 @@ valid_dataset = BaseDataset(
     source=dataset.test,
     modalities=modalities,
 )
+
+valid_dataset_m1 = BaseDataset(
+    source=dataset.test,
+    modalities=modalities_m1,
+)
+
+valid_dataset_m2 = BaseDataset(
+    source=dataset.test,
+    modalities=modalities_m2,
+)
+
+valid_dataset_m10 = BaseDataset(
+    source=dataset.test,
+    modalities=modalities_m10,
+)
+
 train_loader = DataLoader(
     dataset=train_dataset,
     collate_fn=train_dataset.collate,
@@ -130,6 +152,30 @@ train_loader = DataLoader(
 valid_loader = DataLoader(
     dataset=valid_dataset,
     collate_fn=valid_dataset.collate,
+    num_workers=args.num_workers,
+    batch_sampler=valid_sampler,
+    pin_memory=True,
+)
+
+valid_loader_m1 = DataLoader(
+    dataset=valid_dataset_m1,
+    collate_fn=valid_dataset_m1.collate,
+    num_workers=args.num_workers,
+    batch_sampler=valid_sampler,
+    pin_memory=True,
+)
+
+valid_loader_m2 = DataLoader(
+    dataset=valid_dataset_m2,
+    collate_fn=valid_dataset_m2.collate,
+    num_workers=args.num_workers,
+    batch_sampler=valid_sampler,
+    pin_memory=True,
+)
+
+valid_loader_m10 = DataLoader(
+    dataset=valid_dataset_m10,
+    collate_fn=valid_dataset_m10.collate,
     num_workers=args.num_workers,
     batch_sampler=valid_sampler,
     pin_memory=True,
@@ -180,6 +226,29 @@ for epoch in tracker.epochs(args.epochs):
             loss, metrics, output = model(x, x_sl)
 
             tracker.update(metrics)
+
+        for (x, x_sl), metadata in tracker.steps(valid_loader_m1, source=dataset.test  + "_m1", max_steps=len(valid_loader_m1)):
+            x = x.to(device)
+
+            loss, metrics, output = model(x, x_sl)
+
+            tracker.update(metrics)
+
+        for (x, x_sl), metadata in tracker.steps(valid_loader_m2, source=dataset.test  + "_m2", max_steps=len(valid_loader_m2)):
+            x = x.to(device)
+
+            loss, metrics, output = model(x, x_sl)
+
+            tracker.update(metrics)
+
+        for (x, x_sl), metadata in tracker.steps(valid_loader_m10, source=dataset.test  + "_m10", max_steps=len(valid_loader_m10)):
+            x = x.to(device)
+
+            loss, metrics, output = model(x, x_sl)
+
+            tracker.update(metrics)
+
+
 
         extra = dict()
         if epoch % 25 == 0:

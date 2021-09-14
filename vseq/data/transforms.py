@@ -252,3 +252,18 @@ class Dequantize(Transform):
 
     def forward(self, x):
         return x + torch.rand_like(x)
+
+
+class MaskLast(Transform):
+    """Mask last n indexes of x
+    """
+    def __init__(self, n=1):
+        super().__init__()
+        self.n = n 
+    
+    def forward(self, x):
+        # print("BEFORE" + str(x.shape))
+        x = nn.functional.pad(x, (self.n, -self.n))
+        x = nn.functional.pad(x, (-self.n, self.n))
+        # print("AFTER " + str(x.shape))
+        return x
