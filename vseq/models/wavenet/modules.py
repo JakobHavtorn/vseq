@@ -110,7 +110,7 @@ class ResidualStack(nn.Module):
         # 5 = stack[layer1, layer2, layer3, layer4, layer5]
         dilations = []
         for s in range(0, self.n_stacks):
-            # 10 = layer[dilation=1, dilation=2, 4, 8, 16, 32, 64, 128, 256, 512]
+            # 10 = layer[dilation=1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
             for l in range(0, self.n_layers):
                 dilations.append(2 ** l)
 

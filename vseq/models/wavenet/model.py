@@ -195,7 +195,6 @@ class WaveNet(BaseModel):
 
         x_hat = []
         for _ in tqdm.tqdm(range(n_frames)):
-
             output = self.causal(x)
             skip_connections = self.res_stack(output, skip_size=1)
             output = torch.sum(skip_connections, dim=0)

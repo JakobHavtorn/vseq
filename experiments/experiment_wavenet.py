@@ -36,7 +36,7 @@ parser.add_argument("--input_embedding_dim", default=1, type=int, help="if not 1
 parser.add_argument("--num_bits", default=16, type=int, help="number of bits for mu_law encoding (note the data bits depth)")
 parser.add_argument("--distribution", default="dmol", type=str, help="distribution for the output p(x_t|x_t-1)")
 parser.add_argument("--stack_frames", default=1, type=int, help="Number of audio frames to stack in feature vector if input_coding is frames")
-parser.add_argument("--epochs", default=200, type=int, help="number of epochs")
+parser.add_argument("--epochs", default=3000, type=int, help="number of epochs")
 parser.add_argument("--cache_dataset", default=False, type=str2bool, help="if True, cache the dataset in RAM")
 parser.add_argument("--num_workers", default=8, type=int, help="number of dataloader workers")
 parser.add_argument("--dataset", default="timit", type=str, help="dataset to train on")
