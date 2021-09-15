@@ -11,12 +11,19 @@ import numpy as np
 
 
 def get_visible_devices_global_ids():
-    """Return the global indices of the visible devices. If `CUDA_VISIBLE_DEVICES` is not set, returns all devices"""
+    """Return the global indices of the visible devices.
+
+    If `CUDA_VISIBLE_DEVICES` is not set, returns all devices.
+    If it is set to the empty string, return no devices.
+    """
     if "CUDA_VISIBLE_DEVICES" not in os.environ:
         return list(range(torch.cuda.device_count()))
 
+    if os.environ["CUDA_VISIBLE_DEVICES"] == "":
+        return []
+
     visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
-    visible_devices = re.split('; |, ', visible_devices)
+    visible_devices = re.split("; |, ", visible_devices)
     visible_devices = sorted([int(idx) for idx in visible_devices])
     return visible_devices
 
@@ -36,7 +43,9 @@ def get_gpu_memory_usage(do_print: bool = False) -> pd.DataFrame:
     return gpu_df
 
 
-def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.device, List[torch.device]]:
+def get_free_gpus(
+    n_gpus: int = 1, require_unused: bool = True, fallback_to_cpu: bool = True
+) -> Union[torch.device, List[torch.device]]:
     """Return one or more available/visible (and unused) devices giving preference to those with most free memory"""
     gpu_df = get_gpu_memory_usage()
 
@@ -46,7 +55,7 @@ def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.d
 
     if require_unused:
         gpu_df = gpu_df[gpu_df.used < 10]
-    
+
     gpu_df = gpu_df.sort_values(by="free", ascending=False)
 
     global_device_ids = gpu_df.iloc[:n_gpus].index.to_list()
@@ -56,8 +65,14 @@ def get_free_gpus(n_gpus: int = 1, require_unused: bool = True) -> Union[torch.d
     if len(devices) < n_gpus:
         raise RuntimeError(f"Found {len(devices)} (free) GPUs but required {n_gpus}")
 
-    print(f"Selected global device(s): {global_device_ids}")
-    return devices[0] if len(devices) == 1 else devices
+    if len(devices) > 0:
+        print(f"Selected global device(s): {global_device_ids}")
+        return devices[0] if len(devices) == 1 else devices
+
+    if fallback_to_cpu:
+        return torch.device("cpu")
+
+    raise RuntimeError(f"Found {len(devices)} (free) GPUs. If you want to fall back to CPU, set 'fallback_to_cpu=True'")
 
 
 def get_device(idx: Optional[int] = None):

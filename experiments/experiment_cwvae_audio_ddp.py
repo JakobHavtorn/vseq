@@ -18,11 +18,11 @@ import vseq.utils
 import vseq.utils.device
 
 from vseq.data import BaseDataset
-from vseq.data.batchers import AudioBatcher, SpectrogramBatcher
+from vseq.data.batchers import AudioBatcher
 from vseq.data.datapaths import DATASETS
 from vseq.data.loaders import AudioLoader
 from vseq.data.samplers import DistributedSamplerWrapper, LengthEvalSampler, LengthTrainSampler
-from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode, Quantize, StackWaveform
+from vseq.data.transforms import Compose, MuLawDecode, MuLawEncode
 from vseq.evaluation import Tracker
 from vseq.utils.argparsing import str2bool
 from vseq.utils.rand import set_seed, get_random_seed
@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
     parser.add_argument("--seed", default=None, type=int, help="random seed")
     parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+    parser.add_argument("--use_amp", action="store_true", help="if true, use automatic mixed precision")
 
     parser.add_argument("--wandb_group", default=None, type=str, help='custom group for this experiment (optional)')
     parser.add_argument("--wandb_notes", default=None, type=str, help='custom notes for this experiment (optional)')
@@ -228,6 +229,7 @@ def run(gpu_idx, args):
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu_idx], output_device=gpu_idx)
 
     optimizer = ZeroRedundancyOptimizer(model.parameters(), torch.optim.Adam, lr=args.lr)
+    scaler = torch.cuda.amp.GradScaler(enabled=args.use_amp)
 
     beta_annealer = CosineAnnealer(anneal_steps=args.beta_anneal_steps, start_value=args.beta_start_value, end_value=1)
     free_nats_annealer = CosineAnnealer(
@@ -245,11 +247,16 @@ def run(gpu_idx, args):
         for (x, x_sl), metadata in tracker(train_loader):
             x = x.to(gpu_idx, non_blocking=True)
 
-            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step(), free_nats=free_nats_annealer.step())
+            with torch.cuda.amp.autocast(enabled=args.use_amp):
+                loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step(), free_nats=free_nats_annealer.step())
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            # loss.backward()
+            # optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
 
             tracker.update(metrics)
 
@@ -258,7 +265,8 @@ def run(gpu_idx, args):
             for (x, x_sl), metadata in tracker(valid_loader):
                 x = x.to(gpu_idx, non_blocking=True)
 
-                loss, metrics, outputs = model(x, x_sl)
+                with torch.cuda.amp.autocast(enabled=args.use_amp):
+                    loss, metrics, outputs = model(x, x_sl)
 
                 tracker.update(metrics)
 

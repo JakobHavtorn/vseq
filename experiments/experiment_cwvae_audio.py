@@ -52,6 +52,7 @@ parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="wh
 parser.add_argument("--num_workers", default=4, type=int, help="number of dataloader workers")
 parser.add_argument("--seed", default=None, type=int, help="random seed")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+parser.add_argument("--use_amp", action="store_true", help="if true, use automatic mixed precision")
 
 parser.add_argument("--wandb_group", default=None, type=str, help="custom group for this experiment (optional)")
 parser.add_argument("--wandb_notes", default=None, type=str, help="custom notes for this experiment (optional)")
@@ -175,6 +176,7 @@ model = model.to(device)
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+scaler = torch.cuda.amp.GradScaler(enabled=args.use_amp)
 
 tracker = Tracker()
 
@@ -192,7 +194,8 @@ for epoch in tracker.epochs(args.epochs):
     for (x, x_sl), metadata in tracker(train_loader):
         x = x.to(device, non_blocking=True)
 
-        loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step(), free_nats=free_nats_annealer.step())
+        with torch.cuda.amp.autocast(enabled=args.use_amp):
+            loss, metrics, outputs = model(x, x_sl, beta=beta_annealer.step(), free_nats=free_nats_annealer.step())
 
         optimizer.zero_grad()
         loss.backward()
@@ -205,7 +208,8 @@ for epoch in tracker.epochs(args.epochs):
         for (x, x_sl), metadata in tracker(valid_loader):
             x = x.to(device, non_blocking=True)
 
-            loss, metrics, outputs = model(x, x_sl)
+            with torch.cuda.amp.autocast(enabled=args.use_amp):
+                loss, metrics, outputs = model(x, x_sl)
 
             tracker.update(metrics)
 
