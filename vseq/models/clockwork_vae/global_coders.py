@@ -107,7 +107,7 @@ class GlobalCoder(nn.Module):
         if use_mode:
             z = self.mu_p.repeat((batch_size, self.z_size))
         else:
-            z = self.mu_p + temperature * self.scale_p * torch.randn((batch_size, self.z_size))
+            z = self.mu_p + temperature * self.scale_p * torch.randn((batch_size, self.z_size), device=self.mu_p.device)
 
         distributions = SimpleNamespace(z=z, prior_mu=self.mu_p, prior_sd=self.scale_p)
         return z, distributions

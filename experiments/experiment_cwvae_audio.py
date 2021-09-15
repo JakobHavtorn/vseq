@@ -210,7 +210,7 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
         extra = dict()
-        if epoch % 25 == 0:
+        if (epoch - 1) % 25 == 0:
             reconstructions = decode_transform(outputs.reconstructions)
             reconstructions = [
                 wandb.Audio(

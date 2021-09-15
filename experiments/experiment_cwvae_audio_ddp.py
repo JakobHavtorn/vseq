@@ -263,7 +263,7 @@ def run(gpu_idx, args):
                 tracker.update(metrics)
 
             extra = dict()
-            if rank == 0 and epoch % 10 == 0:
+            if rank == 0 and (epoch - 1) % 25 == 0:
                 reconstructions = decode_transform(outputs.reconstructions)
                 reconstructions = [
                     wandb.Audio(
