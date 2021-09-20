@@ -81,7 +81,13 @@ class WaveNet(BaseModel):
             self.embedding = None
             self.causal = CausalConv1d(1, res_channels, receptive_field=self.receptive_field, activation=nn.ReLU)
         else:
-            self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
+            # self.embedding = nn.Embedding(num_embeddings=in_channels, embedding_dim=res_channels)
+            self.embedding = nn.Sequential(
+                nn.Linear(in_channels, in_channels),
+                nn.ReLU(), 
+                nn.Linear(in_channels, res_channels),
+                nn.ReLU(), 
+            ) # transform shape from (B,T)
             self.causal = CausalConv1d(
                 res_channels, res_channels, receptive_field=self.receptive_field, bias=False, groups=res_channels
             )
@@ -94,8 +100,8 @@ class WaveNet(BaseModel):
             nn.ReLU(),
         )
 
-        if likelihood is None:
-            likelihood = CategoricalDense(res_channels, num_bins)
+        # if likelihood is None:
+        #     likelihood = CategoricalDense(res_channels, num_bins)
 
         self.likelihood = likelihood
 
@@ -134,7 +140,12 @@ class WaveNet(BaseModel):
             parameters (torch.FloatTensor): Parameters for output distribution (likelihood).
         """
         seq_mask = sequence_mask(x_sl, device=target.device).unsqueeze(-1)  # (B, T, D)
-        log_prob_twise = self.likelihood.log_prob(target, parameters) * seq_mask  # (B, T, D)
+        # print(seq_mask.shape)
+        log_prob_twise = self.likelihood.log_prob(target, parameters)  # (B, T, D)
+        # print(log_prob_twise.shape)
+        log_prob_twise = log_prob_twise.squeeze(-1)
+        # print(log_prob_twise.shape)
+        log_prob_twise = log_prob_twise * seq_mask.squeeze(-1)
         log_prob = log_prob_twise.view(target.size(0), -1).sum(1)  # (B,)
 
         loss = - log_prob.nansum() / x_sl.nansum()  # sum B, normalize by sequence lengths
@@ -149,13 +160,10 @@ class WaveNet(BaseModel):
             x (torch.Tensor): Audio waveform (batch, timestep, channels) with values in [-1, 1] (optinally dequantized)
             x_sl (torch.LongTensor): Sequence lengths of each example in the batch.
         """
-        if self.in_channels == 1:
-            x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T) -> (B, T, 1)
-            target = x.clone() if target is None else target
-        else:
-            target = x.clone() if target is None else target
+        x = x.unsqueeze(-1) if x.ndim == 2 else x  # (B, T) -> (B, T, 1)
+        target = x.clone() if target is None else target
+        if self.in_channels != 1:
             x = self.embedding(x)  # (B, T, C)
-
         x = x.transpose(1, 2)  # (B, C, T)
 
         self.check_input_size(x)
@@ -169,6 +177,16 @@ class WaveNet(BaseModel):
         parameters = self.likelihood(pre_logits)
         predictions = self.likelihood.sample(parameters)
         predictions_mode = self.likelihood.mode(parameters)
+
+        # print("parameters")
+        # print([par.shape for par in parameters])
+        # print("predictions")
+        # print(predictions.shape)
+        # print("predictions_mode")
+        # print(predictions_mode.shape)
+        
+        # print("target")
+        # print(target.shape)
 
         loss, log_prob = self.compute_loss(target, x_sl, parameters)
 
@@ -220,6 +238,7 @@ class WaveNet(BaseModel):
         return x_hat
 
 
+'''
 class WaveNetCategorical(BaseModel):
     def __init__(
         self,
@@ -283,7 +302,7 @@ class WaveNetCategorical(BaseModel):
     @staticmethod
     def compute_receptive_field(n_layers: int, n_stacks: int):
         """Compute and return the receptive field of a WaveNet model"""
-        layers = [2 ** i for i in range(0, n_layers)] * n_stacks
+        layers = [2 ** i for i in range(n_layers)] * n_stacks
         receptive_field = np.sum(layers)
         receptive_field = receptive_field + 2  # Plus two from causal conv kernel size
         return int(receptive_field)
@@ -335,7 +354,7 @@ class WaveNetCategorical(BaseModel):
         else:
             target = x.clone()
             x = self.embedding(x)  # (B, T, C)
-
+    
         x = x.transpose(1, 2)  # (B, C, T)
 
         self.check_input_size(x)
@@ -398,3 +417,4 @@ class WaveNetCategorical(BaseModel):
         x_hat = x_hat / (self.out_classes - 1)  # To [0, 1]
         x_hat = x_hat * 2 - 1  # To [-1, 1]
         return x_hat
+'''

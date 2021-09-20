@@ -87,8 +87,7 @@ def discretized_laplace_ll(x: torch.Tensor, loc: torch.Tensor, log_scale: torch.
         https://www.music.mcgill.ca/~julian/wp-content/uploads/2021/06/2021_eusipco_vae_bss_neri.pdf
     """
     # check input
-    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
-
+    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0, f"Expected max and min values of x but received max:{torch.max(x):.2f} min:{torch.min(x):.2f}"
     # compute x-µ and 1/s
     centered_x = x - loc
     scale = torch.exp(log_scale)
@@ -196,7 +195,7 @@ def discretized_logistic_ll(x: torch.Tensor, loc: torch.Tensor, log_scale: torch
         num_bins (int): number of bins, equivalent to specifying number of bits = log2(num_bins). Defaults to 256.
     """
     # check input
-    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
+    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0, f"Expected max and min values of x but received max:{torch.max(x):.2f} min:{torch.min(x):.2f}"
 
     # compute x-µ and 1/s
     centered_x = x - loc
@@ -256,7 +255,7 @@ def discretized_logistic_mixture_ll(
         num_bins (int): Quantization level
     """
     # check input
-    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
+    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0, f"Expected max and min values of x but received max:{torch.max(x):.2f} min:{torch.min(x):.2f}"
 
     # repeat x for broadcasting to mixture dim
     x = x.unsqueeze(-1).expand(*[-1] * x.ndim, num_mix)  # (*, D, 3 x num_mix)
@@ -313,7 +312,7 @@ def discretized_logistic_mixture_rgb_ll(x, parameters, num_bins: int = 256):
         num_bins (int): Quantization level
     """
     # TODO Streamline like discretized_logistic_mixture_ll
-    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0
+    assert torch.max(x) <= 1.0 and torch.min(x) >= -1.0, f"Expected max and min values of x but received max:{torch.max(x):.2f} min:{torch.min(x):.2f}"
 
     xs = [int(s) for s in x.size()]  # B, C, H, W
     assert xs[1] == 3, "only RGB images are considered."
