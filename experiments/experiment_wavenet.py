@@ -12,7 +12,7 @@ import vseq.models
 
 from vseq.data import BaseDataset
 from vseq.data.batchers import AudioBatcher
-from vseq.data.datapaths import DATASETS, TIMIT_TRAIN, TIMIT_TEST
+from vseq.data.datapaths import DATASETS
 from vseq.data.loaders import AudioLoader
 from vseq.data.samplers.batch_samplers import LengthEvalSampler, LengthTrainSampler
 from vseq.data.transforms import Compose, MuLawDecode, Quantize, RandomSegment, MuLawEncode, StackWaveform
@@ -74,7 +74,7 @@ elif args.distribution == "categorical":
 else:
     raise ValueError(f"Unknown distribution: {args.distribution}")
 
-encode_transform = [RandomSegment(args.input_length)]
+encode_transform = []
 decode_transform = []
 if args.input_coding == "mu_law":
     encode_transform.append(MuLawEncode(bits=args.num_bits))
@@ -95,23 +95,24 @@ decode_transform = Compose(*decode_transform)
 modalities = [(AudioLoader(dataset_filetype), encode_transform, AudioBatcher())]
 
 
-train_sampler = None
-valid_sampler = None
-# train_sampler = LengthTrainSampler(
-#     source=dataset.train,
-#     field=f"length.{dataset_filetype}.samples",
-#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-#     max_pool_difference=16000 * 0.3,
-#     min_pool_size=512,
-#     # num_batches=784
-# )
-# valid_sampler = LengthEvalSampler(
-#     source=dataset.test,
-#     field=f"length.{dataset_filetype}.samples",
-#     max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
-# )
+# train_sampler = None
+# valid_sampler = None
+train_sampler = LengthTrainSampler(
+    source=dataset.train,
+    field=f"length.{dataset_filetype}.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+    max_pool_difference=16000 * 0.3,
+    min_pool_size=512,
+    # num_batches=784
+)
+valid_sampler = LengthEvalSampler(
+    source=dataset.test,
+    field=f"length.{dataset_filetype}.samples",
+    max_len=16000 * args.batch_size if args.batch_size > 0 else "max",
+)
 # train_sampler.batches = train_sampler.batches[:3]
 # valid_sampler.batches = valid_sampler.batches[:3]
+
 train_dataset = BaseDataset(
     source=dataset.train,
     modalities=modalities,

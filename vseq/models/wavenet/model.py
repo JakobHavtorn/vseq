@@ -200,16 +200,19 @@ class WaveNet(BaseModel):
 
     def generate(self, n_samples: int, n_frames: int = 48000, x: Optional[TensorType["B", "T", "C"]] = None):
         """Generate samples from the WaveNet starting from a zero vector"""
-        if x is None:
-            if self.in_channels == 1:
-                # start with floats of zeros
-                x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
-            else:
-                # start with embeddings of the zeros
-                x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
-                x = self.embedding(x)  # (B, T, C)
+        # if x is None:
+        #     if self.in_channels == 1:
+        #         # start with floats of zeros
+        #         x = torch.zeros(n_samples, self.receptive_field, 1, device=self.device)  # (B, T, C)
+        #     else:
+        #         # start with embeddings of the zeros
+        #         x = torch.zeros(n_samples, self.receptive_field, device=self.device, dtype=torch.int64)  # (B, T)
+        #         x = self.embedding(x)  # (B, T, C)
 
+        x = torch.zeros(n_samples, self.receptive_field+1, self.in_channels, device=self.device)
+        x = self.embedding(x)  # (B, T, C)
         x = x.transpose(1, 2)  # (B, C, T)
+        # self.check_input_size(x)
 
         x_hat = []
         for _ in tqdm.tqdm(range(n_frames)):

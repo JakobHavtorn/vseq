@@ -190,7 +190,7 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
         extra = dict()
-        if epoch % 25 == 0:
+        if epoch % 1 == 0:
             predictions = decode_transform(output.predictions)
             predictions = [
                 wandb.Audio(
@@ -198,7 +198,7 @@ for epoch in tracker.epochs(args.epochs):
                     caption=f"Reconstruction {i}",
                     sample_rate=16000,
                 )
-                for i in range(min(predictions.shape[0], 2))
+                for i in range(min(predictions.shape[0], 4))
             ]
 
             x = model.generate(n_samples=2, n_frames=128000 // args.stack_frames)
