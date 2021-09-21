@@ -22,6 +22,7 @@ from vseq.data.transforms import (
     RandomSegment,
     MuLawEncode,
     StackWaveform,
+    PadUpToN,
 )
 from vseq.evaluation.tracker import Tracker
 from vseq.modules.distributions import CategoricalDense, DiscretizedLogisticMixtureDense
@@ -100,11 +101,12 @@ model = vseq.models.WaveNet(
 )
 total_receptive_field = model.receptive_field * args.stack_frames
 rich.print(
-    f"WaveNet Receptive Field: {model.receptive_field} * {args.stack_frames} = {total_receptive_field}"
+    f"WaveNet Receptive Field: {model.receptive_field} * {args.stack_frames} = {total_receptive_field} [{total_receptive_field / 16000:.1f}s]"
 )
 
 encode_transform = [
     # Quantize(bits=args.num_bits), # not sure if this should be here
+    PadUpToN(total_receptive_field)
     torch.nn.ConstantPad1d((total_receptive_field, 0), 0.0), # FIXME: pads an ENTIRE Receptive field on the left
     StackWaveform(n_frames=args.stack_frames),
 ]
@@ -208,7 +210,7 @@ for epoch in tracker.epochs(args.epochs):
             tracker.update(metrics)
 
         extra = dict()
-        if epoch % 1 == 0:
+        if epoch % 10 == 0:
             predictions = decode_transform(output.predictions)
             predictions = [
                 wandb.Audio(

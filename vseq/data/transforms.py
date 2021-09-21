@@ -16,13 +16,17 @@ class Transform(nn.Module):
     def __repr__(self):
         name = self.__class__.__name__
         attrs = vars(self)
-        var_str = ", ".join([f"{k}={v}" for k, v in attrs.items() if k[0] != "_" and k != "training"])
+        var_str = ", ".join(
+            [f"{k}={v}" for k, v in attrs.items() if k[0] != "_" and k != "training"]
+        )
         return f"{name}({var_str})"
 
 
 class Compose:
     def __init__(self, *transforms):
-        self.transforms = [transform for transform in transforms if transform is not None]
+        self.transforms = [
+            transform for transform in transforms if transform is not None
+        ]
 
     def __call__(self, x):
         return self.forward(x)
@@ -118,7 +122,9 @@ class Scale(Transform):
     def __init__(self, low=-1, high=1, min_val=None, max_val=None):
         """Scale an input to be in [low, high] by normalizing with data min and max values"""
         super().__init__()
-        assert (low is not None) == (high is not None), "must set both low and high or neither"
+        assert (low is not None) == (
+            high is not None
+        ), "must set both low and high or neither"
         self.low = low
         self.high = high
         self.min_val = min_val
@@ -137,7 +143,9 @@ class Scale(Transform):
 
 
 class Normalize(Transform):
-    def __init__(self, mean: Union[float, torch.Tensor], std: Union[float, torch.Tensor]):
+    def __init__(
+        self, mean: Union[float, torch.Tensor], std: Union[float, torch.Tensor]
+    ):
         super().__init__()
         self.mean = mean
         self.std = std
@@ -173,7 +181,9 @@ class MuLawDecode(Transform):
 class Binarize(Transform):
     def __init__(self, resample: bool = False, threshold: float = None):
         super().__init__()
-        assert bool(threshold) != bool(resample), "Must set exactly one of threshold and resample"
+        assert bool(threshold) != bool(
+            resample
+        ), "Must set exactly one of threshold and resample"
         self.resample = resample
         self.threshold = threshold
 
@@ -213,7 +223,9 @@ class Quantize(Transform):
             rescale (bool): If True, rescale quantized integer values back to floats in [low, high].
         """
         super().__init__()
-        assert (bits is None) != (bins is None), "Must set one and only one of `bits` and `bins`"
+        assert (bits is None) != (
+            bins is None
+        ), "Must set one and only one of `bits` and `bins`"
         self.low = low
         self.high = high
         self.bits = bins // 8 if bits is None else bits
@@ -221,13 +233,17 @@ class Quantize(Transform):
         self.boundaries = torch.linspace(start=-1, end=1, steps=self.bins)
         self.out_int32 = (self.bits <= 32) and (not force_out_int64)
         if rescale:
-            self.rescale = Scale(low=low, high=high, min_val=0, max_val=self.bins -1)
+            self.rescale = Scale(low=low, high=high, min_val=0, max_val=self.bins - 1)
         else:
             self.rescale = None
 
     def forward(self, x: torch.Tensor):
-        x_quantized = torch.bucketize(x, self.boundaries, out_int32=self.out_int32, right=False)
-        x_quantized = self.rescale(x_quantized) if self.rescale is not None else x_quantized
+        x_quantized = torch.bucketize(
+            x, self.boundaries, out_int32=self.out_int32, right=False
+        )
+        x_quantized = (
+            self.rescale(x_quantized) if self.rescale is not None else x_quantized
+        )
         return x_quantized
 
 
@@ -255,15 +271,29 @@ class Dequantize(Transform):
 
 
 class MaskLast(Transform):
-    """Mask last n indexes of x
-    """
+    """Mask last n indexes of x"""
+
     def __init__(self, n=1):
         super().__init__()
-        self.n = n 
-    
+        self.n = n
+
     def forward(self, x):
         # print("BEFORE" + str(x.shape))
         x = nn.functional.pad(x, (self.n, -self.n))
         x = nn.functional.pad(x, (-self.n, self.n))
         # print("AFTER " + str(x.shape))
         return x
+
+
+class PadUpToN(Transform):
+    """
+    Pads a sample to be at least N long
+    """
+
+    def __init__(self, n=1):
+        super().__init__()
+        self.n = n
+
+    def forward(self, x: torch.Tensor):
+        # Assume last dim is time dim, so (B, T), (B, C, T) ...
+        return nn.functional.pad(x, (max(self.n - x.shape[-1], 0), 0))

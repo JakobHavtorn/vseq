@@ -1,0 +1,20 @@
+program: experiments/experiment_wavenet_stacked.py
+name: WaveNet stacks (Bayesian)
+description: Bayesian hyperparameter optimization for WaveNet stacks
+entity: vseq
+project: wavenet
+method: bayes
+metric:
+  name: timit_test.best_sbpd
+  goal: minimize
+parameters:  # https://docs.wandb.ai/sweeps/configuration#parameters
+  # lr:
+  #   values: [0.3, 0.1, 0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001, 0.00003, 0.00001]
+  n_stacks: 
+    values: [5, 4, 3, 2, 1]  
+  stack_frames:
+    values: [2, 4, 8, 16, 32, 64] 
+  res_channels:
+    value: 92
+  epochs:
+    value: 100
