@@ -106,8 +106,8 @@ rich.print(
 
 encode_transform = [
     # Quantize(bits=args.num_bits), # not sure if this should be here
-    PadUpToN(total_receptive_field)
-    torch.nn.ConstantPad1d((total_receptive_field, 0), 0.0), # FIXME: pads an ENTIRE Receptive field on the left
+    PadUpToN(total_receptive_field),
+    # torch.nn.ConstantPad1d((total_receptive_field, 0), 0.0), # FIXME: pads an ENTIRE Receptive field on the left
     StackWaveform(n_frames=args.stack_frames),
 ]
 decode_transform = [
