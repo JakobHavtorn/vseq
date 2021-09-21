@@ -194,7 +194,10 @@ class WaveNet(BaseModel):
             LossMetric(loss, weight_by=log_prob.numel()),
             LLMetric(log_prob),
             BitsPerDimMetric(log_prob, reduce_by=x_sl),
-        ]
+            BitsPerDimMetric(
+                    log_prob, name="sbpd", reduce_by=x_sl * float(self.in_channels)
+                )
+            ]
         output = SimpleNamespace(loss=loss, log_prob=log_prob, parameters=parameters, target=target, predictions=predictions, predictions_mode=predictions_mode)
         return loss, metrics, output
 
