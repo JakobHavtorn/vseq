@@ -51,6 +51,8 @@ parser.add_argument("--wandb_group", default=None, type=str, help="custom group 
 parser.add_argument("--save_checkpoints", default=False, type=str2bool, help="whether to store checkpoints or not")
 parser.add_argument("--seed", default=None, type=int, help="seed for random number generators. Random if -1.")
 parser.add_argument("--device", default="auto", choices=["auto", "cuda", "cpu"])
+parser.add_argument("--use_amp", action="store_true", help="if true, use automatic mixed precision")
+
 args = parser.parse_args()
 # fmt: on
 if args.seed is None:
@@ -160,8 +162,8 @@ model = model.to(device)
 rich.print("WaveNet Receptive Field: " + str(model.receptive_field))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
-# exit()
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+scaler = torch.cuda.amp.GradScaler(enabled=args.use_amp)
 
 tracker = Tracker()
 
@@ -169,23 +171,28 @@ for epoch in tracker.epochs(args.epochs):
 
     model.train()
     for (x, x_sl), metadata in tracker.steps(train_loader):
-        x = x.to(device)
+        x = x.to(device, non_blocking=True)
 
         # TODO If categorical target is different from x (i.e. quantized, ints)
-        loss, metrics, output = model(x, x_sl)
+        with torch.cuda.amp.autocast(enabled=args.use_amp):
+            loss, metrics, output = model(x, x_sl)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        # loss.backward()
+        # optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         tracker.update(metrics)
 
     model.eval()
     with torch.no_grad():
         for (x, x_sl), metadata in tracker.steps(valid_loader):
-            x = x.to(device)
+            x = x.to(device, non_blocking=True)
 
-            loss, metrics, output = model(x, x_sl)
+            with torch.cuda.amp.autocast(enabled=args.use_amp):
+                loss, metrics, output = model(x, x_sl)
 
             tracker.update(metrics)
 
