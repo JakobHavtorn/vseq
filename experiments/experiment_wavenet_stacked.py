@@ -82,13 +82,35 @@ rich.print(vars(args))
 # else:
 #     raise ValueError(f"Unknown distribution: {args.distribution}")
 
+# Model first because we need it
+likelihood = DiscretizedLogisticMixtureDense(
+    x_dim=args.res_channels,
+    y_dim=args.stack_frames,
+    num_bins=2 ** args.num_bits,
+    reduce_dim=-1,
+)
+
+model = vseq.models.WaveNet(
+    in_channels=args.stack_frames,
+    likelihood=likelihood,
+    n_layers=args.n_layers,
+    n_stacks=args.n_stacks,
+    res_channels=args.res_channels,
+    num_bins=2 ** args.num_bits,  # TODO: change or remove
+)
+total_receptive_field = model.receptive_field * args.stack_frames
+rich.print(
+    f"WaveNet Receptive Field: {model.receptive_field} * {args.stack_frames} = {total_receptive_field}"
+)
+
 encode_transform = [
     # Quantize(bits=args.num_bits), # not sure if this should be here
+    torch.nn.ConstantPad1d((total_receptive_field, 0), 0.0), # FIXME: pads an ENTIRE Receptive field on the left
     StackWaveform(n_frames=args.stack_frames),
-    ]
+]
 decode_transform = [
     torch.nn.Flatten(start_dim=1),
-    ]
+]
 if args.input_coding == "mu_law":
     encode_transform.insert(0, MuLawEncode(bits=args.num_bits))
     decode_transform.append(MuLawDecode(bits=args.num_bits))
@@ -141,25 +163,14 @@ valid_loader = DataLoader(
     pin_memory=True,
 )
 
-likelihood = DiscretizedLogisticMixtureDense(x_dim=args.res_channels, y_dim = args.stack_frames, num_bins = 2 ** args.num_bits, reduce_dim=-1)
-
-model = vseq.models.WaveNet(
-    in_channels=args.stack_frames,
-    likelihood=likelihood,
-    n_layers=args.n_layers,
-    n_stacks=args.n_stacks,
-    res_channels=args.res_channels,
-    num_bins=2 ** args.num_bits, # TODO: change
-)
-
 # TODO: setup iterative sequence loader tudelido
 
 (x, x_sl), metadata = next(iter(train_loader))
 # rich.print(x.shape)
 # exit()
+# first now can we print the model summary, because we need data to do so. 
 model.summary(input_data=x, x_sl=x_sl)
 model = model.to(device)
-rich.print("WaveNet Receptive Field: " + str(model.receptive_field))
 wandb.watch(model, log="all", log_freq=len(train_loader))
 
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
